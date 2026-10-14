@@ -25,6 +25,7 @@ proof/*.png
 .DS_Store
 *.egg-info/
 .pytest_cache/
+celerybeat-schedule*
 docs/effects_showcase.mp4
 docs/effects_v4_frames/
 assets/effect_previews/
