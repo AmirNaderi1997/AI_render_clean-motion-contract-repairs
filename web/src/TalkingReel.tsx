@@ -36,7 +36,8 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
   }, [jobId, running]);
 
   if (!state || !draft) return null;
-  const split = ["talking_2", "talking_3"].includes(draft.style || "talking_1");
+  const enhanced = ["talking_2", "talking_3", "talking_4"].includes(draft.style || "talking_1");
+  const hasVisuals = ["talking_2", "talking_3"].includes(draft.style || "talking_1");
   const SOURCES: Record<string, string> = { upload: "آپلود خودت", library: "کتابخونه", ai: "هوش مصنوعی", card: "کارت متنی" };
 
   async function addMedia(files: FileList | null) {
@@ -84,7 +85,7 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
           </select>
         </label>
       </div>
-      {split ? (
+      {enhanced ? (
         <>
           <div className="row">
             <label style={{ flex: 1 }}>هوک ۳ ثانیه‌ی اول (۲ تا ۴ کلمه)
@@ -92,22 +93,22 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
                 onChange={e => setDraft({ ...draft, hook2: e.target.value })} style={{ width: "100%" }} />
             </label>
           </div>
-          <div className="row" style={{ alignItems: "flex-start" }}>
-            <label>تصویرهای بی‌رول خودت (اختیاری، هوش مصنوعی هر کدوم رو سر جای مناسبش می‌ذاره)
-              <input type="file" accept="image/*" multiple disabled={running} onChange={e => { void addMedia(e.target.files); e.target.value = ""; }} />
-            </label>
-            {media.length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {media.map(name => (
-                  <span key={name} className="tag">{name}
-                    <button className="btn-secondary" disabled={running} style={{ marginInlineStart: 6, padding: "0 6px" }}
-                      onClick={() => { api.deleteTalkingReelMedia(jobId, name).then(() => setMedia(m => m.filter(x => x !== name))).catch(err => setError(friendlyError(err, "remove the picture"))); }}>×</button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-          {state.slots && state.slots.length > 0 && (
+          {hasVisuals && <div className="row" style={{ alignItems: "flex-start" }}>
+              <label>تصویرهای بی‌رول خودت (اختیاری، هوش مصنوعی هر کدوم رو سر جای مناسبش می‌ذاره)
+                <input type="file" accept="image/*" multiple disabled={running} onChange={e => { void addMedia(e.target.files); e.target.value = ""; }} />
+              </label>
+              {media.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {media.map(name => (
+                    <span key={name} className="tag">{name}
+                      <button className="btn-secondary" disabled={running} style={{ marginInlineStart: 6, padding: "0 6px" }}
+                        onClick={() => { api.deleteTalkingReelMedia(jobId, name).then(() => setMedia(m => m.filter(x => x !== name))).catch(err => setError(friendlyError(err, "remove the picture"))); }}>×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>}
+          {hasVisuals && state.slots && state.slots.length > 0 && (
             <div className="muted" style={{ fontSize: 13 }}>
               بی‌رول‌ها: {state.slots.map(slot => `${slot.label || `جمله‌ی ${slot.i + 1}`} ← ${SOURCES[slot.source] || slot.source}`).join("  •  ")}
             </div>

@@ -141,7 +141,7 @@ def _run(job_dir: Path, video: Path, *, regenerate: bool) -> None:
 
     load_dotenv(PROJECT_ROOT / ".env")
     style = load(job_dir).get("style") or "talking_1"
-    if style in ("talking_2", "talking_3"):
+    if style in SPLIT_STYLES:
         _run_split(job_dir, video, style, regenerate=regenerate)
     else:
         _run_talking_1(job_dir, video, regenerate=regenerate)
@@ -234,7 +234,7 @@ def _library_pictures() -> list[dict]:
             and (PROJECT_ROOT / a["path"]).is_file()]
 
 
-def resolve_pictures(job_dir: Path, decisions: dict) -> tuple[dict[int, str], list[dict]]:
+def resolve_pictures(job_dir: Path, decisions: dict, style: str) -> tuple[dict[int, str], list[dict]]:
     """Picture per B-roll slot: the creator's upload, then a library image, then an AI image.
 
     Returns ({sentence index: path}, slots for the settings card). Slots
@@ -261,19 +261,24 @@ def resolve_pictures(job_dir: Path, decisions: dict) -> tuple[dict[int, str], li
             if match:
                 entry.update(source="library", file=str(PROJECT_ROOT / match["path"]))
             elif slot.get("visual"):
-                key = hashlib.sha256(slot["visual"].encode()).hexdigest()[:16]
+                provider_name = _talking_image_provider()
+                # Include the renderer/prompt revision in the cache key so an
+                # improved visual direction never silently reuses the old,
+                # low-quality AI pictures.
+                cache_material = f"minimal-v2|{style}|{provider_name}|{slot['visual']}"
+                key = hashlib.sha256(cache_material.encode()).hexdigest()[:16]
                 entry.update(source="ai", file=str(job_dir / "talking2_broll" / f"ai_{key}.png"))
-                wanted_ai.append((slot["visual"], Path(entry["file"])))
+                wanted_ai.append((_visual_prompt(slot["visual"], style), Path(entry["file"]), provider_name))
         slots.append(entry)
 
-    def generate(item: tuple[str, Path]) -> None:
-        prompt, dst = item
+    def generate(item: tuple[str, Path, str]) -> None:
+        prompt, dst, provider_name = item
         if dst.is_file():
             return
         from brain.media_provider import get_provider
 
         dst.parent.mkdir(parents=True, exist_ok=True)
-        result = get_provider("sarovi_nano_banana").generate_image(prompt, "1:1", dst.parent)
+        result = get_provider(provider_name).generate_image(prompt, "1:1", dst.parent)
         Path(result.file_path).replace(dst)
 
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -288,6 +293,46 @@ def resolve_pictures(job_dir: Path, decisions: dict) -> tuple[dict[int, str], li
     return pictures, slots
 
 
+def _talking_image_provider() -> str:
+    """Best configured provider for talking-reel visuals.
+
+    The premium Google model is preferred. Deployments can override this with
+    TALKING_IMAGE_PROVIDER without changing the general content-creator model.
+    """
+    import os
+    from brain.media_provider import get_provider
+
+    configured = os.getenv("TALKING_IMAGE_PROVIDER", "").strip()
+    candidates = [configured] if configured else [
+        "sarovi_nano_banana_pro", "jarvis_image", "sarovi_nano_banana",
+    ]
+    for name in candidates:
+        if name and get_provider(name).has_key:
+            return name
+    return candidates[0]
+
+
+def _visual_prompt(subject: str, style: str) -> str:
+    shared = (
+        "Create one premium, restrained visual for a vertical educational reel. "
+        "One clear focal subject, simple composition, generous negative space, crisp edges, "
+        "subtle natural texture, tasteful studio art direction. No people, faces, hands, crowds, "
+        "screens, charts, text, letters, logos, watermarks, surreal anatomy, glossy stock-art look, "
+        "or generic AI aesthetics. Compose safely for a near-square editorial panel. "
+    )
+    if style == "talking_3":
+        direction = (
+            "Use a believable minimalist still-life photograph on charcoal or warm ivory, soft "
+            "directional light, muted colors, premium editorial magazine mood. "
+        )
+    else:
+        direction = (
+            "Use a flat editorial illustration with two or three geometric shapes, off-white "
+            "background, charcoal linework, and one muted teal or amber accent. No gradients or 3D. "
+        )
+    return shared + direction + "Concept to communicate: " + subject.strip()
+
+
 def _try(fn, item) -> Optional[str]:
     try:
         fn(item)
@@ -299,6 +344,7 @@ def _try(fn, item) -> Optional[str]:
 SPLIT_STYLES = {   # style -> (brain module, decisions key, default music)
     "talking_2": ("brain.talking_reel_2", "decisions_2", "assets/music/motivational_piano_beat.mp3"),
     "talking_3": ("brain.talking_reel_3", "decisions_3", "assets/music/cinematic_pulse.mp3"),
+    "talking_4": ("brain.talking_reel_4", "decisions_4", "assets/music/soft_lofi_loop.mp3"),
 }
 
 
@@ -326,7 +372,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
     decisions = {**decisions, "captions": {int(k): v for k, v in decisions["captions"].items()},
                  "hook": load(job_dir).get("hook2") or decisions["hook"]}
     _stage(job_dir, "finding pictures", progress=25)
-    pictures, slots = resolve_pictures(job_dir, decisions)
+    pictures, slots = resolve_pictures(job_dir, decisions, style)
     _stage(job_dir, "tracking the face", progress=35, slots=slots)
     faces = _faces(job_dir, video, media)
     plan = media.plan_reel(transcript, decisions, faces, float(transcript.get("duration") or 0)

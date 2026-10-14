@@ -24,8 +24,9 @@ media files the creator uploaded. Return ONLY a JSON object:
   "drop": [<indices of filler sentences to cut, e.g. an off-topic "yes" at the end>],
   "cold_open": {"i": <index>, "text": "<the most provocative 2-4 second line, word for word>"},
   "broll": [{"i": <sentence index>,
-             "visual": "<English prompt for one still image that illustrates this sentence: concrete
-                        subject, clean modern editorial or 3D style, no text or letters in the image>",
+             "visual": "<English prompt for one restrained visual metaphor: a single object or simple
+                        geometric composition, premium minimalist editorial illustration, flat shapes,
+                        off-white background, no people, faces, hands, 3D render, text, or letters>",
              "label": "<2-4 word Persian title for a text card if no image can be made>",
              "media": "<one of the uploaded file names that fits this sentence, or empty>"}],
   "chips": [{"i": <sentence index>, "items": ["<1-3 word Persian label>", ...]}]
@@ -35,8 +36,9 @@ Rules:
 - One caption entry for EVERY sentence that is not dropped. Fix every speech-to-text mistake from
   context, keep the colloquial wording, remove hesitation sounds and repeats, keep English terms
   in Latin script, Persian digits for numbers, never add or summarise.
-- "broll": pick about 55% of the sentences (the most concrete or visual ones, never two very short
-  ones in a row); use each uploaded file at most once, where it fits best.
+- "broll": pick only 25-35% of the sentences: the strongest concrete ideas, spaced apart by at least
+  one sentence. Fewer excellent visuals are better than constant decoration. Use each uploaded file
+  at most once, where it fits best.
 - "chips": at most 2 lists, only where the speaker lists things (tools, steps, options, costs);
   2-4 items each, Persian, no Latin script unless a product name.
 """
@@ -77,6 +79,10 @@ def normalize(data: dict, count: int, media_names: list[str]) -> dict:
     for item in data.get("broll") or []:
         k = index((item or {}).get("i"))
         if k is None or any(b["i"] == k for b in broll):
+            continue
+        # Avoid the machine-made slideshow feeling: never place generated
+        # visuals on adjacent sentences and cap a reel at six visual beats.
+        if (broll and k - broll[-1]["i"] < 2) or len(broll) >= 6:
             continue
         media = str(item.get("media") or "").strip()
         media = media if media in media_names and media not in used else ""

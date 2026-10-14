@@ -72,6 +72,7 @@ class ReelPlan:
     hook: Optional[dict] = None                          # {"start","end","text"}
     duration: float = 0.0
     cold_open: float = 0.0
+    theme: str = "editorial"
 
 
 # --- planning -------------------------------------------------------------------
@@ -106,18 +107,13 @@ def _face(faces, a, b) -> tuple[float, float]:
 
 
 def _chunks(text: str) -> list[tuple[str, str]]:
-    """Caption chunks of one or two words: (small lead word, big keyword)."""
+    """Calmer 3-4 word caption chunks: (lead phrase, accented keyword)."""
     words = [w for w in re.sub(r"[.،,!?؟]+", " ", text).split() if w]
     out = []
     while words:
-        # A short function word ("که", "رو", "به") rides above the next word,
-        # which carries the yellow emphasis.
-        if len(words) >= 2 and len(words[0]) <= 3 and len(words[1]) >= 3:
-            out.append((words[0], words[1]))
-            words = words[2:]
-        else:
-            out.append(("", words[0]))
-            words = words[1:]
+        take = min(4, len(words))
+        group, words = words[:take], words[take:]
+        out.append((" ".join(group[:-1]), group[-1]))
     return out
 
 
@@ -289,20 +285,31 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
     def on_split(t: float) -> bool:
         return any(a <= t < b for a, b in split_spans)
 
-    key_size, lead_size = int(H * 0.06), int(H * 0.038)
+    minimal = plan.theme == "minimal"
+    key_size, lead_size = ((int(H * 0.046), int(H * 0.034)) if minimal
+                           else (int(H * 0.052), int(H * 0.034)))
     hook_end = plan.hook["end"] if plan.hook else 0.0
     for c in plan.captions:
         if c["end"] <= hook_end:
             continue
         start = max(c["start"], hook_end)
-        y = seam - H * 0.004 if on_split(start) else H * 0.62
-        pop = "\\fscx118\\fscy118\\t(0,120,\\fscx100\\fscy100)"
+        y = seam - H * 0.004 if on_split(start) else H * (0.76 if minimal else 0.68)
+        pop = "\\fad(70,70)" if minimal else "\\fscx108\\fscy108\\t(0,120,\\fscx100\\fscy100)"
+        if minimal:
+            phrase = " ".join(part for part in (c["lead"], c["key"]) if part)
+            events.append(f"Dialogue: 4,{_ass_time(start)},{_ass_time(c['end'])},key,,0,0,0,,"
+                          f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f}){pop}}}{_spaced(_esc(phrase))}")
+            continue
         if c["lead"]:
             events.append(f"Dialogue: 4,{_ass_time(start)},{_ass_time(c['end'])},lead,,0,0,0,,"
                           f"{{\\an2\\q2\\pos({W / 2:.0f},{y - key_size * 0.55:.0f}){pop}}}{_esc(c['lead'])}")
         events.append(f"Dialogue: 4,{_ass_time(start)},{_ass_time(c['end'])},key,,0,0,0,,"
                       f"{{\\an5\\q2\\pos({W / 2:.0f},{y + key_size * 0.08:.0f}){pop}}}{_esc(c['key'])}")
-    if plan.hook:
+    if plan.hook and minimal:
+        y = H * 0.69
+        events.append(f"Dialogue: 5,{_ass_time(plan.hook['start'] + 0.1)},{_ass_time(plan.hook['end'])},hook,,0,0,0,,"
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f})\\fad(180,180)}}{_spaced(_esc(plan.hook['text']))}")
+    elif plan.hook:
         # The hook builds word by word on one line at chest height.
         words = plan.hook["text"].split()
         y = seam if on_split(plan.hook["start"]) else H * 0.64
@@ -339,10 +346,10 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
     white, black = "&H00FFFFFF", "&H00000000"
     soft = "&H64000000"
     styles = [
-        f"Style: key,{FONT},{key_size},{_colour(YELLOW).replace('&H', '&H00', 1)[:-1]},&H000000FF,{soft},{soft},"
+        f"Style: key,{FONT},{key_size},{white if minimal else _colour(YELLOW).replace('&H', '&H00', 1)[:-1]},&H000000FF,{soft},{soft},"
         "-1,0,0,0,100,100,0,0,1,3,2,5,0,0,0,-1",
         f"Style: lead,{FONT},{lead_size},{white},&H000000FF,{soft},{soft},-1,0,0,0,100,100,0,0,1,2,1,2,0,0,0,-1",
-        f"Style: hook,{FONT},{int(H * 0.07)},{_colour(YELLOW).replace('&H', '&H00', 1)[:-1]},&H000000FF,{soft},"
+        f"Style: hook,{FONT},{int(H * (0.052 if minimal else 0.062))},{white if minimal else _colour(YELLOW).replace('&H', '&H00', 1)[:-1]},&H000000FF,{soft},"
         f"{soft},-1,0,0,0,100,100,0,0,1,3,2,5,0,0,0,-1",
         f"Style: chip,{FONT},{chip_size},{white},&H000000FF,{black},&H80000000,-1,0,0,0,100,100,0,0,1,0,1,5,0,0,0,-1",
         f"Style: card,{FONT},{int(H * 0.05)},{white},&H000000FF,{black},&H80000000,-1,0,0,0,100,100,0,0,1,0,2,5,0,0,0,-1",
@@ -363,6 +370,7 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
 
 GRADE = ("eq=contrast=1.08:saturation=1.12:gamma=0.99,"
          "colorbalance=rs=0.03:bs=-0.03:rm=0.03:bm=-0.03,unsharp=5:5:0.6")
+MINIMAL_GRADE = "eq=contrast=1.04:saturation=0.96:gamma=1.01,unsharp=5:5:0.35"
 
 
 def speaker_crop(shot: Shot, sw: int, sh: int) -> tuple[int, int, int, int]:
@@ -386,6 +394,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
     sw, sh, _ = probe_video(video)
+    grade = MINIMAL_GRADE if plan.theme == "minimal" else GRADE
     fps = probe_fps(video)
     fps_value = eval_fps(fps)
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -420,11 +429,11 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
             # Continue the push across shots of the same picture so it never jumps back.
             vf.append(f"[{next_input}:v]zoompan=z='1.0+{PICTURE_ZOOM}*on/{frames}':"
                       f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={W}x{SPLIT_Y}:fps={fps},setsar=1[t{k}]")
-            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{GRADE}[b{k}]")
+            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{grade}[b{k}]")
             vf.append(f"[t{k}][b{k}]vstack=inputs=2[v{k}]")
             next_input += 1
         else:
-            vf.append(f"{cut},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{GRADE}[v{k}]")
+            vf.append(f"{cut},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{grade}[v{k}]")
         fade = min(0.012, shot.length / 4)
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")

@@ -336,9 +336,12 @@ class JarvisImageProvider(ProviderAdapter):
 class SaroviImageProvider(ProviderAdapter):
     """Generate editable content stills with a selected Sarovi image model."""
 
-    def __init__(self, name: str, model: str):
+    def __init__(self, name: str, model: str, *, quality: str = "medium",
+                 fallback_models: tuple[str, ...] = ()):
         self.name = name
         self.model = model
+        self.quality = quality
+        self.fallback_models = fallback_models
 
     @property
     def capabilities(self) -> list[str]:
@@ -367,20 +370,23 @@ class SaroviImageProvider(ProviderAdapter):
         payload = {
             "model": self.model, "prompt": request_prompt,
             "aspectRatio": aspect, "count": 1,
-            "quality": "medium", "outputFormat": "png",
+            "quality": self.quality, "outputFormat": "png",
         }
         selected_model = self.model
-        try:
-            result = request("/studio/image", payload)
-        except RuntimeError as exc:
-            # The advertised Seedream route currently returns this upstream error
-            # for even the catalog's minimal request. Preserve the requested model
-            # in metadata while keeping image generation usable.
-            if self.name != "sarovi_seedream" or "HTTP 502: INVALID_REFERENCE" not in str(exc):
-                raise
-            selected_model = "google/gemini-2.5-flash-image"
-            log.warning("Sarovi Seedream returned INVALID_REFERENCE; trying Nano Banana")
-            result = request("/studio/image", {**payload, "model": selected_model})
+        candidates = (self.model, *self.fallback_models)
+        last_error: RuntimeError | None = None
+        for selected_model in candidates:
+            try:
+                result = request("/studio/image", {**payload, "model": selected_model})
+                break
+            except RuntimeError as exc:
+                last_error = exc
+                if selected_model == candidates[-1]:
+                    raise
+                log.warning("Sarovi image model %s failed; trying %s", selected_model,
+                            candidates[candidates.index(selected_model) + 1])
+        else:  # pragma: no cover - the loop either succeeds or raises
+            raise last_error or RuntimeError("no image model was available")
         outputs = result.get("outputs") or []
         item = outputs[0] if outputs else None
         if not isinstance(item, dict) or item.get("mediaType") not in ("image/png", "image/jpeg", "image/webp"):
@@ -406,7 +412,7 @@ class SaroviImageProvider(ProviderAdapter):
             generation_id=gen_id, width=width, height=height,
             metadata={"prompt": prompt, "model": selected_model,
                       "requested_model": self.model, "fallback_used": selected_model != self.model,
-                      "aspect": aspect,
+                      "aspect": aspect, "quality": self.quality,
                       "billing_reported": False, "sarovi_generation_id": result.get("generationId")},
         )
 
@@ -444,6 +450,11 @@ def list_providers() -> list[dict]:
 register_provider("local_fixture", LocalFixtureProvider())
 register_provider("jarvis_image", JarvisImageProvider())
 register_provider("sarovi_seedream", SaroviImageProvider(
-    "sarovi_seedream", "bytedance-seed/seedream-5-0-lite"))
+    "sarovi_seedream", "bytedance-seed/seedream-5-0-lite",
+    fallback_models=("google/gemini-2.5-flash-image",)))
 register_provider("sarovi_nano_banana", SaroviImageProvider(
     "sarovi_nano_banana", "google/gemini-2.5-flash-image"))
+register_provider("sarovi_nano_banana_pro", SaroviImageProvider(
+    "sarovi_nano_banana_pro", "google/gemini-3-pro-image", quality="high",
+    fallback_models=("google/gemini-nano-banana-2.1", "google/gemini-3.1-flash-image",
+                     "google/gemini-2.5-flash-image")))

@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 __all__ = ["track_faces", "plan_reel", "render", "probe_video"]
 
 FONT = "Ray ExtraBlack"
-CAPTION_FONT = "Ray Bold"
+CAPTION_FONT = "Ray ExtraBold"
 ACCENT_FONT = "IRAN Kharazmi"
 ACCENT_COLOUR = "&H00A8D8F0"      # warm cream for the calligraphic accent (ASS BGR)
 PICTURE_ZOOM = 0.08
@@ -206,8 +206,8 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
     white = "&H00FFFFFF"
     soft = "&H70000000"
     styles = [
-        f"Style: cap,{CAPTION_FONT},{int(H * 0.036)},{white},&H000000FF,{soft},{soft},"
-        "-1,0,0,0,100,100,0,0,1,1.5,1.5,5,0,0,0,-1",
+        f"Style: cap,{CAPTION_FONT},{int(H * 0.044)},{white},&H000000FF,{soft},{soft},"
+        "-1,0,0,0,100,100,0,0,1,2.5,1.2,5,0,0,0,-1",
         f"Style: title,{FONT},{int(H * 0.07)},{white},&H000000FF,{soft},&H80000000,"
         "-1,0,0,0,100,100,0,0,1,0,3,8,0,0,0,-1",
         f"Style: accent,{ACCENT_FONT},{int(H * 0.058)},{ACCENT_COLOUR},&H000000FF,{soft},&H80000000,"

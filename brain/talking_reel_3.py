@@ -10,8 +10,9 @@ from . import talking_reel_2 as split
 
 SYSTEM_PROMPT = split.SYSTEM_PROMPT.replace(
     "concrete\n                        subject, clean modern editorial or 3D style, no text or letters in the image",
-    "concrete\n                        subject, cinematic photograph, moody low-key lighting, shallow depth of field,\n"
-    "                        35mm film look, rich shadows, no text or letters in the image",
+    "one concrete object as a premium minimalist still-life photograph, restrained charcoal and warm\n"
+    "                        ivory palette, soft directional light, generous negative space, real material\n"
+    "                        texture, no people, faces, hands, screens, text, letters, surrealism, or 3D render",
 ).replace(
     '  "chips": [{"i": <sentence index>, "items": ["<1-3 word Persian label>", ...]}]\n}',
     '  "chips": [{"i": <sentence index>, "items": ["<1-3 word Persian label>", ...]}],\n'
