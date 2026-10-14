@@ -19,7 +19,7 @@ DEFAULT_INSTRUCTIONS = "فارسی معیار ایران، با تلفظ طبی�
 MAX_AUDIO_BYTES = 25_000_000
 
 
-def generate_narration(text: str, output_dir: Path) -> TTSResult:
+def generate_narration(text: str, output_dir: Path, instructions: str | None = None) -> TTSResult:
     key = os.getenv("SAROVI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("Sarovi voice is not configured on the server")
@@ -27,7 +27,9 @@ def generate_narration(text: str, output_dir: Path) -> TTSResult:
         raise ValueError("Narration must contain 1 to 12000 characters")
     model = os.getenv("SAROVI_TTS_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
     voice = os.getenv("SAROVI_TTS_VOICE", DEFAULT_VOICE).strip() or DEFAULT_VOICE
-    instructions = os.getenv("SAROVI_TTS_INSTRUCTIONS", DEFAULT_INSTRUCTIONS).strip()
+    if instructions is None:
+        instructions = os.getenv("SAROVI_TTS_INSTRUCTIONS", DEFAULT_INSTRUCTIONS)
+    instructions = instructions.strip()
     payload = {"model": model, "text": text.strip(), "voice": voice, "format": "wav"}
     if instructions:
         payload["instructions"] = instructions

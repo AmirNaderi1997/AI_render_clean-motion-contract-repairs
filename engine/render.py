@@ -201,15 +201,30 @@ def render(
                 "acodec=aac", f"ab={ab}"]
 
     font_file = None
+    burn = None
     try:
         import xml.etree.ElementTree as ET
         root = ET.parse(mlt).getroot()
         font_file = root.findtext("property[@name='ai-render:caption_font_file']")
+        burn = _burn_ass_settings(root)
     except (ET.ParseError, OSError, NameError):
         pass
     rc = _run_and_stream(cmd, _melt_env(style, [Path(font_file)] if font_file else None), on_progress)
     if rc != 0:
         raise RuntimeError(f"melt failed with exit code {rc}")
+
+    if burn:
+        from .render_ass import burn_ass
+        burned = render_target.with_name(render_target.stem + ".captions" + render_target.suffix)
+        try:
+            burn_ass(
+                render_target, burned, *burn,
+                crf=int(render_cfg.get("preview_crf", 22)) if preview else int(crf),
+                preset="veryfast" if preview else render_cfg.get("preset", "medium"),
+            )
+            os.replace(burned, render_target)
+        finally:
+            burned.unlink(missing_ok=True)
 
     if apply_loudnorm:
         try:
@@ -225,6 +240,15 @@ def render(
         finally:
             render_target.unlink(missing_ok=True)
     return out
+
+
+def _burn_ass_settings(root) -> Optional[tuple[Path, Optional[Path]]]:
+    """Return (captions.ass, fonts dir) when build() deferred captions to libass."""
+    ass = root.findtext("property[@name='ai-render:burn_ass']")
+    if not ass:
+        return None
+    fonts = root.findtext("property[@name='ai-render:burn_ass_fontsdir']")
+    return Path(ass), (Path(fonts) if fonts else None)
 
 
 def loudnorm(src: Path, dst: Path, target_lufs: float = -14, true_peak: float = -1.5) -> Path:
@@ -288,11 +312,23 @@ def export_poster(plan, job_dir: Path, out: Path, base_dir: Optional[Path] = Non
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [melt_bin(), str(mlt), f"in={frame}", f"out={frame}", "-consumer",
            f"avformat:{out}", "vcodec=mjpeg", "qscale=2", "an=1"]
-    font_file = ET.parse(mlt).getroot().findtext("property[@name='ai-render:caption_font_file']")
+    root = ET.parse(mlt).getroot()
+    font_file = root.findtext("property[@name='ai-render:caption_font_file']")
+    burn = _burn_ass_settings(root)
     active_style = style_override or load_style(style_name)
     rc = _run_and_stream(cmd, _melt_env(active_style, [Path(font_file)] if font_file else None), None)
     if rc != 0 or not out.exists():
         raise RuntimeError(f"poster export failed (melt exit {rc})")
+    if burn:
+        from .render_ass import burn_ass
+        burned = out.with_name(out.stem + ".captions" + out.suffix)
+        try:
+            # Sample inside the cover window: the rounded frame time can land
+            # a few milliseconds before the cover's ASS start time.
+            burn_ass(out, burned, *burn, time_offset=max(frame / fps, t) + 0.5 / fps, still=True)
+            os.replace(burned, out)
+        finally:
+            burned.unlink(missing_ok=True)
     return out
 
 

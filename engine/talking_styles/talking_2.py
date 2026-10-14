@@ -1,0 +1,468 @@
+"""Talking-head style "صحبتی ۲" (talking_2): educational split screen.
+
+* the top half shows a picture for the sentence (the creator's upload, a
+  library asset or an AI image) in a rounded card with a slow zoom on a
+  coloured background; the speaker fills the bottom half
+* other stretches show the speaker full frame, punching in and out every
+  2-3 seconds
+* captions of one or two words on the seam: a small white lead word above a
+  big yellow keyword, no box
+* glassy grey chips pop in as a stacked list where the speaker lists things
+* the first seconds open on the hook on the seam; a louder mix (-14 LUFS);
+  the same CTA card and logo outro as "صحبتی ۱"
+
+Shared plumbing (face tracking, cuts, outro, fonts) comes from talking_1,
+which is frozen.
+"""
+from __future__ import annotations
+
+import hashlib
+import logging
+import re
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Optional
+
+from ..localize import _ass_time, _rounded_rect, measure_text_boxes, probe_fps, probe_video
+from ..render_ass import ass_burner_ffmpeg, subtitles_filter
+from . import talking_1 as base
+from .talking_1 import (W, H, _colour, _esc, _median, _spaced, cold_open_span, eval_fps, fonts_bundle,
+                        music_bed, persian_digits, render_outro, speech_ranges, track_faces, vignette_png)
+
+log = logging.getLogger(__name__)
+
+__all__ = ["track_faces", "plan_reel", "render", "probe_video"]
+
+SPLIT_Y = H // 2               # seam between the picture and the speaker
+BG_COLOUR = "#0F4C55"          # teal background behind the picture card
+CARD_MARGIN = 44               # card inset from the frame edges (px)
+CARD_RADIUS = 34
+YELLOW = "#F5E04A"
+MIN_PIECE, MAX_PIECE = 1.8, 3.0   # cut rhythm (seconds)
+PICTURE_ZOOM = 0.07            # slow push on the picture over a shot
+MUSIC_DB = -15.0
+LOUDNESS = -14.0
+FONT = "Ray ExtraBlack"
+CHIP_COLOUR = "#8A9298"         # glassy grey chips
+
+
+@dataclass
+class Shot:
+    src_in: float
+    src_out: float
+    split: bool = False
+    close: bool = False
+    face: tuple[float, float] = (0.5, 0.35)
+    out_start: float = 0.0
+    picture: Optional[str] = None      # image path for the top card
+    slot: Optional[int] = None         # sentence index of the B-roll slot
+
+    @property
+    def length(self) -> float:
+        return self.src_out - self.src_in
+
+
+@dataclass
+class ReelPlan:
+    shots: list[Shot]
+    captions: list[dict] = field(default_factory=list)   # {"start","end","lead","key"} output time
+    chips: list[dict] = field(default_factory=list)      # {"start","end","items"}
+    cards: list[dict] = field(default_factory=list)      # text cards: {"start","end","text"}
+    hook: Optional[dict] = None                          # {"start","end","text"}
+    duration: float = 0.0
+    cold_open: float = 0.0
+
+
+# --- planning -------------------------------------------------------------------
+
+def _pieces(ranges: list[tuple[float, float]], words: list[dict]) -> list[tuple[float, float]]:
+    """Kept ranges split at word ends into MIN_PIECE..MAX_PIECE pieces."""
+    out = []
+    for a, b in ranges:
+        start = a
+        while b - start > MAX_PIECE:
+            ends = [float(w["end"]) for w in words if start + MIN_PIECE <= float(w["end"]) <= min(b - 1.0, start + MAX_PIECE)]
+            if not ends:
+                break
+            cut = max(ends)
+            out.append((start, cut))
+            start = cut
+        out.append((start, b))
+    return out
+
+
+def _sentence_at(sentences: list[dict], t: float) -> Optional[int]:
+    for k, s in enumerate(sentences):
+        if s["start"] - 0.3 <= t <= s["end"] + 0.3:
+            return k
+    return None
+
+
+def _face(faces, a, b) -> tuple[float, float]:
+    inside = [(cx, cy) for t, cx, cy in faces if a - 0.5 <= t <= b + 0.5]
+    near = inside or [(cx, cy) for t, cx, cy in sorted(faces, key=lambda f: abs(f[0] - a))[:3]]
+    return _median([c[0] for c in near], 0.5), _median([c[1] for c in near], 0.35)
+
+
+def _chunks(text: str) -> list[tuple[str, str]]:
+    """Caption chunks of one or two words: (small lead word, big keyword)."""
+    words = [w for w in re.sub(r"[.،,!?؟]+", " ", text).split() if w]
+    out = []
+    while words:
+        # A short function word ("که", "رو", "به") rides above the next word,
+        # which carries the yellow emphasis.
+        if len(words) >= 2 and len(words[0]) <= 3 and len(words[1]) >= 3:
+            out.append((words[0], words[1]))
+            words = words[2:]
+        else:
+            out.append(("", words[0]))
+            words = words[1:]
+    return out
+
+
+def plan_reel(transcript: dict, decisions: dict, faces: list[tuple[float, float, float]], duration: float,
+              pictures: Optional[dict[int, str]] = None) -> ReelPlan:
+    """Shots, captions, chips and cards on the output timeline.
+
+    ``pictures`` maps a B-roll sentence index to its image; slots without one
+    become text cards with the slot's Persian label.
+    """
+    from brain.talking_reel import is_filler
+
+    sentences, words = transcript["sentences"], transcript["words"]
+    pictures = pictures or {}
+    dropped = [sentences[k] for k in decisions.get("drop", [])]
+
+    def drop(word: dict) -> bool:
+        t = float(word["start"])
+        return is_filler(word.get("w", "")) or any(s["start"] - 0.05 <= t <= s["end"] + 0.05 for s in dropped)
+
+    ranges = speech_ranges(words, drop, duration)
+    if not ranges:
+        raise ValueError("nothing left to keep after cutting pauses")
+    broll = {b["i"]: b for b in decisions.get("broll", [])}
+    chip_lists = {c["i"]: c["items"] for c in decisions.get("chips", [])}
+    shots: list[Shot] = []
+    close = False
+    for a, b in _pieces(ranges, words):
+        k = _sentence_at(sentences, (a + b) / 2)
+        split = k is not None and (k in broll or k in chip_lists)
+        close = not close if not split else close
+        shots.append(Shot(a, b, split=split, close=close and not split, face=_face(faces, a, b),
+                          slot=k if split else None,
+                          picture=pictures.get(k) if split and k not in chip_lists else None))
+
+    cold = cold_open_span(decisions.get("cold_open"), sentences, words)
+    if cold:
+        a, b, _ = cold
+        shots.insert(0, Shot(a, b, split=False, close=True, face=_face(faces, a, b)))
+    t = 0.0
+    for shot in shots:
+        shot.out_start = t
+        t += shot.length
+    total = t
+    main = shots[1:] if cold else shots
+
+    def out_time(src: float) -> float:
+        for shot in main:
+            if src < shot.src_in:
+                return shot.out_start
+            if src <= shot.src_out:
+                return shot.out_start + src - shot.src_in
+        return total
+
+    captions = []
+    if cold:
+        captions += _timed_chunks(cold[2], shots[0].src_in, shots[0].src_out, words,
+                                  lambda s: s - shots[0].src_in)
+    for k, sentence in enumerate(sentences):
+        text = decisions["captions"].get(k) or decisions["captions"].get(str(k))
+        if text and k not in decisions.get("drop", []):
+            captions += _timed_chunks(text, sentence["start"], sentence["end"], words, out_time)
+    captions.sort(key=lambda c: c["start"])
+    for c, nxt in zip(captions, captions[1:]):
+        c["end"] = min(max(c["end"], nxt["start"]), nxt["start"]) if nxt["start"] - c["end"] < 0.5 else c["end"]
+
+    chips, cards = [], []
+    for shot_group in _groups(main):
+        k = shot_group[0].slot
+        start, end = shot_group[0].out_start, shot_group[-1].out_start + shot_group[-1].length
+        if k in chip_lists:
+            chips.append({"start": start, "end": end, "items": [persian_digits(i) for i in chip_lists[k]]})
+        elif k in broll and not shot_group[0].picture:
+            cards.append({"start": start, "end": end, "text": persian_digits(broll[k].get("label") or "")})
+    hook = None
+    if decisions.get("hook"):
+        hook = {"start": 0.0, "end": min(3.0, total), "text": persian_digits(decisions["hook"])}
+    return ReelPlan(shots=shots, captions=captions, chips=chips, cards=cards, hook=hook, duration=total,
+                    cold_open=shots[0].length if cold else 0.0)
+
+
+def _groups(shots: list[Shot]) -> list[list[Shot]]:
+    """Consecutive split shots of the same slot."""
+    groups: list[list[Shot]] = []
+    for shot in shots:
+        if not shot.split:
+            continue
+        if groups and groups[-1][-1].slot == shot.slot and abs(
+                groups[-1][-1].out_start + groups[-1][-1].length - shot.out_start) < 0.01:
+            groups[-1].append(shot)
+        else:
+            groups.append([shot])
+    return groups
+
+
+def _timed_chunks(text: str, s0: float, s1: float, words: list[dict], out_time) -> list[dict]:
+    spoken = [w for w in words if s0 - 0.05 <= float(w["start"]) <= s1 + 0.05]
+    if not spoken:
+        return []
+    chunks = _chunks(persian_digits(text))
+    total = sum(len(lead) + len(key) + 1 for lead, key in chunks) or 1
+    chars = [len(w["w"]) + 1 for w in spoken]
+    csum = [0]
+    for c in chars:
+        csum.append(csum[-1] + c)
+
+    def time_at(share: float) -> float:
+        target = share * csum[-1]
+        for j, w in enumerate(spoken):
+            if csum[j + 1] >= target:
+                frac = (target - csum[j]) / max(1, chars[j])
+                return float(w["start"]) + frac * (float(w["end"]) - float(w["start"]))
+        return float(spoken[-1]["end"])
+
+    out, done = [], 0
+    for lead, key in chunks:
+        a = time_at(done / total)
+        done += len(lead) + len(key) + 1
+        b = time_at(done / total)
+        out.append({"start": out_time(a), "end": out_time(b), "lead": lead, "key": key})
+    return [c for c in out if c["end"] - c["start"] > 0.04]
+
+
+# --- pictures -----------------------------------------------------------------------
+
+def card_size() -> tuple[int, int]:
+    return W - 2 * CARD_MARGIN, SPLIT_Y - 2 * CARD_MARGIN
+
+
+def picture_panel(picture: Path, out: Path) -> Path:
+    """Top half: the picture in a rounded card with a soft shadow on the background colour.
+
+    Rendered 12% larger than the frame area so the slow zoom never shows edges.
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter, ImageOps
+
+    scale = 1.12
+    pw, ph = int(W * scale), int(SPLIT_Y * scale)
+    cw, ch = int(card_size()[0] * scale), int(card_size()[1] * scale)
+    bg = Image.new("RGB", (pw, ph), BG_COLOUR)
+    image = ImageOps.fit(Image.open(picture).convert("RGB"), (cw, ch), Image.LANCZOS)
+    mask = Image.new("L", (cw, ch), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, cw - 1, ch - 1), radius=int(CARD_RADIUS * scale), fill=255)
+    x, y = (pw - cw) // 2, (ph - ch) // 2
+    shadow = Image.new("L", (pw, ph), 0)
+    shadow.paste(mask, (x, y + 18))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(26))
+    bg = Image.composite(Image.new("RGB", (pw, ph), "#000000"), bg, shadow.point(lambda v: int(v * 0.45)))
+    bg.paste(image, (x, y), mask)
+    bg.save(out)
+    return out
+
+
+def plain_panel(out: Path) -> Path:
+    from PIL import Image
+
+    Image.new("RGB", (int(W * 1.12), int(SPLIT_Y * 1.12)), BG_COLOUR).save(out)
+    return out
+
+
+# --- overlay (ASS) --------------------------------------------------------------------
+
+def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
+    events: list[str] = []
+    seam = SPLIT_Y
+    split_spans = [(s.out_start, s.out_start + s.length) for s in plan.shots if s.split]
+
+    def on_split(t: float) -> bool:
+        return any(a <= t < b for a, b in split_spans)
+
+    key_size, lead_size = int(H * 0.06), int(H * 0.038)
+    hook_end = plan.hook["end"] if plan.hook else 0.0
+    for c in plan.captions:
+        if c["end"] <= hook_end:
+            continue
+        start = max(c["start"], hook_end)
+        y = seam - H * 0.004 if on_split(start) else H * 0.62
+        pop = "\\fscx118\\fscy118\\t(0,120,\\fscx100\\fscy100)"
+        if c["lead"]:
+            events.append(f"Dialogue: 4,{_ass_time(start)},{_ass_time(c['end'])},lead,,0,0,0,,"
+                          f"{{\\an2\\q2\\pos({W / 2:.0f},{y - key_size * 0.55:.0f}){pop}}}{_esc(c['lead'])}")
+        events.append(f"Dialogue: 4,{_ass_time(start)},{_ass_time(c['end'])},key,,0,0,0,,"
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y + key_size * 0.08:.0f}){pop}}}{_esc(c['key'])}")
+    if plan.hook:
+        # The hook builds word by word on one line at chest height.
+        words = plan.hook["text"].split()
+        y = seam if on_split(plan.hook["start"]) else H * 0.64
+        for k in range(len(words)):
+            t0 = plan.hook["start"] + 0.1 + k * 0.3
+            t1 = plan.hook["start"] + 0.1 + (k + 1) * 0.3 if k + 1 < len(words) else plan.hook["end"]
+            pop = "\\fscx125\\fscy125\\t(0,150,\\fscx100\\fscy100)" if k == 0 else ""
+            events.append(f"Dialogue: 5,{_ass_time(t0)},{_ass_time(t1)},hook,,0,0,0,,"
+                          f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f}){pop}}}{_spaced(_esc(' '.join(words[:k + 1])))}")
+    chip_size = int(H * 0.046)
+    for chip in plan.chips:
+        items = chip["items"]
+        inks = measure_text_boxes([(_spaced(_esc(i)), chip_size) for i in items], W, H, FONT, fonts_dir)
+        pitch = chip_size * 1.85
+        step = min(0.45, (chip["end"] - chip["start"]) * 0.5 / max(1, len(items)))
+        for k, (item, (iw, ia, ib)) in enumerate(zip(items, inks)):
+            y = SPLIT_Y / 2 + (k - (len(items) - 1) / 2) * pitch
+            t0 = chip["start"] + 0.15 + k * step
+            half = iw / 2 + chip_size * 0.6
+            top, bottom = y + ia - chip_size * 0.32, y + ib + chip_size * 0.32
+            fade = "\\fad(120,0)"
+            events.append(_rounded_rect(2, t0, chip["end"], W / 2 - half, top, W / 2 + half, bottom, CHIP_COLOUR,
+                                        (bottom - top) / 2, extra=f"\\1a&H38&{fade}"))
+            events.append(f"Dialogue: 3,{_ass_time(t0)},{_ass_time(chip['end'])},chip,,0,0,0,,"
+                          f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f}){fade}\\fscx120\\fscy120\\t(0,150,\\fscx100\\fscy100)}}"
+                          f"{_spaced(_esc(item))}")
+    for card in plan.cards:
+        cw, chh = card_size()
+        events.append(_rounded_rect(2, card["start"], card["end"], CARD_MARGIN, CARD_MARGIN, CARD_MARGIN + cw,
+                                    CARD_MARGIN + chh, "#123A40", CARD_RADIUS))
+        events.append(f"Dialogue: 3,{_ass_time(card['start'])},{_ass_time(card['end'])},card,,0,0,0,,"
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{SPLIT_Y / 2:.0f})\\fad(150,0)}}{_spaced(_esc(card['text']))}")
+
+    white, black = "&H00FFFFFF", "&H00000000"
+    soft = "&H64000000"
+    styles = [
+        f"Style: key,{FONT},{key_size},{_colour(YELLOW).replace('&H', '&H00', 1)[:-1]},&H000000FF,{soft},{soft},"
+        "-1,0,0,0,100,100,0,0,1,3,2,5,0,0,0,-1",
+        f"Style: lead,{FONT},{lead_size},{white},&H000000FF,{soft},{soft},-1,0,0,0,100,100,0,0,1,2,1,2,0,0,0,-1",
+        f"Style: hook,{FONT},{int(H * 0.07)},{_colour(YELLOW).replace('&H', '&H00', 1)[:-1]},&H000000FF,{soft},"
+        f"{soft},-1,0,0,0,100,100,0,0,1,3,2,5,0,0,0,-1",
+        f"Style: chip,{FONT},{chip_size},{white},&H000000FF,{black},&H80000000,-1,0,0,0,100,100,0,0,1,0,1,5,0,0,0,-1",
+        f"Style: card,{FONT},{int(H * 0.05)},{white},&H000000FF,{black},&H80000000,-1,0,0,0,100,100,0,0,1,0,2,5,0,0,0,-1",
+        "Style: plain,Arial,10,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",
+    ]
+    return "\n".join([
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}", "WrapStyle: 2",
+        "ScaledBorderAndShadow: yes", "", "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding",
+        *styles, "", "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text", *events,
+    ]) + "\n"
+
+
+# --- render -------------------------------------------------------------------------
+
+GRADE = ("eq=contrast=1.08:saturation=1.12:gamma=0.99,"
+         "colorbalance=rs=0.03:bs=-0.03:rm=0.03:bm=-0.03,unsharp=5:5:0.6")
+
+
+def speaker_crop(shot: Shot, sw: int, sh: int) -> tuple[int, int, int, int]:
+    """Source crop for the speaker: 9:16 full frame (wide/close) or W x SPLIT_Y for the bottom half."""
+    if shot.split:
+        aspect = W / (H - SPLIT_Y)
+        ch = sh * 0.56
+        cw = min(sw, ch * aspect)
+        ch = cw / aspect
+        fx, fy = shot.face[0] * sw, shot.face[1] * sh
+        x = min(max(0, fx - cw / 2), sw - cw)
+        # Face a little below the middle, leaving the seam captions clear of the head.
+        y = min(max(0, fy - 0.5 * ch), sh - ch)
+        return int(cw) & ~1, int(ch) & ~1, int(x) & ~1, int(y) & ~1
+    return base.crop_for(base.Shot(shot.src_in, shot.src_out, close=shot.close, face=shot.face), sw, sh)
+
+
+def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Optional[Path] = None,
+           cta: str = "", on_progress: Optional[Callable[[int], None]] = None, **_ignored) -> Path:
+    ffmpeg = ass_burner_ffmpeg()
+    if ffmpeg is None:
+        raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
+    sw, sh, _ = probe_video(video)
+    fps = probe_fps(video)
+    fps_value = eval_fps(fps)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    fonts = fonts_bundle(work_dir)
+    ass = work_dir / "reel2.ass"
+    ass.write_text(build_ass(plan, fonts), encoding="utf-8")
+    outro, outro_seconds = render_outro(work_dir, cta.strip(), fps, fonts)
+    total = plan.duration + outro_seconds
+
+    panels: dict[str, Path] = {}
+    plain = plain_panel(work_dir / "panel_plain.png")
+
+    def panel_for(shot: Shot) -> Path:
+        if not shot.picture:
+            return plain
+        if shot.picture not in panels:
+            digest = hashlib.sha256(shot.picture.encode()).hexdigest()[:12]
+            panels[shot.picture] = picture_panel(Path(shot.picture), work_dir / f"panel_{digest}.png")
+        return panels[shot.picture]
+
+    n = len(plan.shots)
+    inputs = ["-i", str(video)]
+    vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
+          f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
+    next_input = 1
+    for k, shot in enumerate(plan.shots):
+        cw, ch, x, y = speaker_crop(shot, sw, sh)
+        cut = f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,crop={cw}:{ch}:{x}:{y}"
+        if shot.split:
+            inputs += ["-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(panel_for(shot))]
+            frames = max(1, round(shot.length * fps_value))
+            # Continue the push across shots of the same picture so it never jumps back.
+            vf.append(f"[{next_input}:v]zoompan=z='1.0+{PICTURE_ZOOM}*on/{frames}':"
+                      f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={W}x{SPLIT_Y}:fps={fps},setsar=1[t{k}]")
+            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{GRADE}[b{k}]")
+            vf.append(f"[t{k}][b{k}]vstack=inputs=2[v{k}]")
+            next_input += 1
+        else:
+            vf.append(f"{cut},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{GRADE}[v{k}]")
+        fade = min(0.012, shot.length / 4)
+        vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
+                  f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
+    vf.append("".join(f"[v{k}][a{k}]" for k in range(n)) + f"concat=n={n}:v=1:a=1[cv][ca]")
+    inputs += ["-loop", "1", "-framerate", fps, "-i", str(vignette_png(work_dir / "vignette.png"))]
+    vf.append(f"[{next_input}:v]format=rgba,colorchannelmixer=aa=0.5[vig]")
+    next_input += 1
+    content = "vmain" if outro else "vout"
+    vf.append(f"[cv][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},format=yuv420p[{content}]")
+    if outro:
+        inputs += ["-i", str(outro)]
+        vf.append(f"[{next_input}:v]setsar=1,format=yuv420p[vend]")
+        vf.append("[vmain][vend]concat=n=2:v=1:a=0[vout]")
+        next_input += 1
+    vf.append(f"[ca]apad=pad_dur={outro_seconds + 0.1:.3f}[cpad]")
+    loud = f"loudnorm=I={LOUDNESS}:TP=-1:LRA=8,aresample=48000[aout]"
+    if music and music.is_file():
+        inputs += ["-i", str(music_bed(music, total + 1.0, work_dir))]
+        vf.append(f"[{next_input}:a]atrim=0:{total:.3f},volume={MUSIC_DB}dB,afade=t=in:d=0.5,"
+                  f"afade=t=out:st={max(0.0, total - 1.6):.3f}:d=1.6,aresample=48000,aformat=channel_layouts=stereo[m]")
+        vf.append("[cpad]aresample=48000,aformat=channel_layouts=stereo,asplit[vo][key]")
+        vf.append("[m][key]sidechaincompress=threshold=0.03:ratio=4:attack=40:release=400[duck]")
+        vf.append(f"[vo][duck]amix=inputs=2:normalize=0:duration=first,{loud}")
+    else:
+        vf.append(f"[cpad]{loud}")
+    cmd = [ffmpeg, "-hide_banner", "-y", *inputs, "-filter_complex", ";".join(vf),
+           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "19", "-preset", "medium",
+           "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
+           "-progress", "pipe:1", "-nostats", str(out)]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    assert proc.stdout is not None
+    for row in proc.stdout:
+        if row.startswith("out_time_us=") and on_progress and total > 0:
+            try:
+                on_progress(min(99, int(int(row.split("=")[1]) / 1e6 / total * 100)))
+            except ValueError:
+                pass
+    stderr = proc.stderr.read() if proc.stderr else ""
+    if proc.wait() != 0:
+        raise RuntimeError(f"ffmpeg failed: {stderr.strip()[-800:]}")
+    return out

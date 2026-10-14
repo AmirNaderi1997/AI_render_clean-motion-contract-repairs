@@ -114,8 +114,8 @@ def build_ass(plan: Plan, style: dict) -> str:
     base = dict(cap.get("base", {}))
     if _plan_is_persian(plan) and "persian_font" in cap:
         base = {**base, "font": cap["persian_font"]}
-    from .font_library import family_for_plan
-    selected_font = family_for_plan(plan.canvas)
+    from .font_library import ass_family_for_plan, family_for_plan
+    selected_font = ass_family_for_plan(plan.canvas) or family_for_plan(plan.canvas)
     if selected_font:
         base["font"] = render_font_family(selected_font)
     lines = ["[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}",
@@ -135,11 +135,18 @@ def build_ass(plan: Plan, style: dict) -> str:
     if has_headline_in_ass:
         all_styles = list(STYLE_NAMES) + ["headline"]
 
+    # libass lays out lines with a left-to-right base direction unless the
+    # style's Encoding is -1 (auto-detect). With an LTR base, inline colour
+    # runs in a Persian line come out in reversed order.
+    encoding = -1 if _plan_is_persian(plan) else 1
     for name in all_styles:
         if name == "headline":
             s = {**base, **headline_s}
-            # Headline defaults: large, italic, dark background box.
-            size_default = int(headline_s.get("accent_size", 90))
+            # Headline defaults: large, italic, dark background box. The
+            # inline-accent line uses the SRT layers' primary size unless the
+            # preset sets an explicit headline size; never the base size.
+            size_default = int(headline_s.get("primary_size", headline_s.get("accent_size", 90)))
+            s["size"] = headline_s.get("size", size_default)
             bg_default = "#101010CC"
             margin_v_default = int(H * 0.22)  # ≈420 px from bottom at 1920
         else:
@@ -169,7 +176,7 @@ def build_ass(plan: Plan, style: dict) -> str:
             f"{ass_colour(s.get('colour', '#FFFFFF'))},&H000000FF,{ass_colour(s.get('outline_colour', '#000000'))},"
             f"{ass_colour(background)},{-1 if s.get('bold', True) else 0},{italic_flag},0,0,100,100,0,0,{border_style},"
             f"{outline_size},{scaled('shadow', 0)},2,{scaled('margin_sides', 60)},"
-            f"{scaled('margin_sides', 60)},{margin_v},1")
+            f"{scaled('margin_sides', 60)},{margin_v},{encoding}")
     lines += ["", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
     highlight_colour = cap.get("highlight_colour", "#FFD43B")
     for c in plan.captions:

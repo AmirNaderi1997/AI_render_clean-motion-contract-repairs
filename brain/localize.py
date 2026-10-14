@@ -1,0 +1,497 @@
+"""Persian localization of short English videos (e.g. dropshipping reels).
+
+The pipeline keeps the source picture, replaces the spoken English with a
+Persian voice-over, covers the burned-in English captions with Persian ones
+and ends on a "comment <number>" call to action. This module holds the text
+side: sentence splitting, translation with the configured LLM, the CTA
+template and Persian voice generation.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import re
+import subprocess
+import time
+from pathlib import Path
+from typing import Optional
+
+log = logging.getLogger(__name__)
+
+DEFAULT_CTA_NUMBER = "31"
+# Two caption lines (split at "\n"), as in the reference reels.
+CTA_TEMPLATE = 'اگه میخوای ساده و کامل این کارو یاد بگیری\nعدد "{n}" رو برام کامنت کن'
+DEFAULT_TITLE_EMOJIS = "🔥😯"
+# Persian speech runs at roughly 13-15 characters per second; keep a little
+# headroom so a translated line can be spoken inside its English time slot.
+CHARS_PER_SECOND = 11.0
+
+_SPLIT_MIN_SECONDS = 4.0
+_SPLIT_MIN_PART_SECONDS = 1.2
+
+
+def _span(words: list[dict]) -> float:
+    return float(words[-1]["end"]) - float(words[0]["start"])
+
+
+def _split_words(words: list[dict]) -> list[list[dict]]:
+    """Split at sentence ends, then at commas while a part is still long."""
+    parts: list[list[dict]] = [[]]
+    for word in words:
+        parts[-1].append(word)
+        if str(word["w"]).rstrip("\"')").endswith((".", "!", "?")) and word is not words[-1]:
+            parts.append([])
+    out: list[list[dict]] = []
+    for part in (p for p in parts if p):
+        out.extend(_split_commas(part))
+    return out
+
+
+def _split_commas(words: list[dict]) -> list[list[dict]]:
+    if _span(words) <= _SPLIT_MIN_SECONDS:
+        return [words]
+    best = None
+    for idx, word in enumerate(words[:-1]):
+        if not str(word["w"]).endswith(","):
+            continue
+        left, right = words[: idx + 1], words[idx + 1:]
+        if _span(left) >= _SPLIT_MIN_PART_SECONDS and _span(right) >= _SPLIT_MIN_PART_SECONDS:
+            balance = abs(_span(left) - _span(right))
+            if best is None or balance < best[0]:
+                best = (balance, left, right)
+    if best is None:
+        return [words]
+    return _split_commas(best[1]) + _split_commas(best[2])
+
+
+def split_lines(transcript: dict) -> list[dict]:
+    """Turn transcript sentences into caption-sized lines with word timings.
+
+    ASR sentences are split at inner sentence ends (Whisper often merges
+    two) and long ones at commas, so each line maps to one on-screen caption
+    and one voice clip.
+    """
+    words = [w for w in transcript.get("words", []) if str(w.get("w", "")).strip()]
+    lines: list[dict] = []
+    for sentence in transcript.get("sentences", []):
+        start, end = float(sentence["start"]), float(sentence["end"])
+        members = [w for w in words if start - 0.01 <= float(w["start"]) and float(w["end"]) <= end + 0.01]
+        if not members:
+            lines.append({"start": start, "end": end, "en": sentence["text"].strip(), "words": []})
+            continue
+        for part in _split_words(members):
+            lines.append({
+                "start": float(part[0]["start"]),
+                "end": float(part[-1]["end"]),
+                "en": " ".join(str(w["w"]).strip() for w in part).strip(),
+                "words": [str(w["w"]).strip() for w in part],
+            })
+    for index, line in enumerate(lines):
+        line["i"] = index
+    return lines
+
+
+_SYSTEM = """You localize short English social videos (dropshipping / ecommerce
+tutorials) for a Persian-speaking Instagram audience. Return JSON only.
+
+For every input line decide its kind:
+- "lyrics": song lyrics, singing, chants or background vocals that are not the narrator explaining something. These keep the original audio and get no Persian line.
+- "cta": the closing call to action (e.g. "comment G for a free DM", "follow for more").
+- "speech": everything else the narrator says.
+
+For "speech" lines write natural spoken colloquial Persian (محاوره‌ای), like a creator talking to a friend:
+- keep brand, site and tool names in Latin script exactly as written (AliExpress, dropship.io, Shopify, Meta Ads, Higgs Field)
+- write prices and numbers as digits
+- max_chars is a hard limit (the narrator speaks fast and the voice must fit the line's seconds);
+  aim for 70-100% of it
+- every line still needs its verb and must read naturally; when max_chars is small, write a short
+  command that keeps the key action ("کمپین بساز", "بودجه رو بذار ۲۰ دلار"), never a verbless
+  fragment like "اکانت Meta Ads"; drop filler words before dropping meaning
+- do not add facts that are not in the English
+- the English comes from speech recognition and can contain mistakes; fix obvious ones from context
+  (e.g. "$2 .33" for a price people pay online after "$1" means $233, "Close your store link" means "Post your store link")
+
+Also write "title": a short Persian hook for a fixed headline at the top of the video.
+It sits above the whole video, so it must make people stop scrolling without
+explaining the steps: 4-7 words, about the product or the opportunity, no prices,
+no numbers, grammatical and natural. Good examples:
+"این محصول این روزا حسابی ترند شده", "همه دارن اینو میخرن", "این محصول داره میترکونه".
+And "title_emojis": one or two emojis that fit the hook (e.g. "🔥😯").
+
+Translate only the items in "lines"; "full_script_for_context" is the whole video for context.
+When "write_title" is false, return "title" and "title_emojis" as "".
+
+Output schema:
+{"title": str, "title_emojis": str, "lines": [{"i": int, "kind": "speech"|"lyrics"|"cta", "fa": str}]}
+"fa" is "" for lyrics and cta lines."""
+
+
+CHUNK_LINES = 6
+
+
+def _chat_with_fallback(system: str, request: str) -> tuple[dict, object]:
+    """chat_json with retries, then Sarovi: flaky links drop provider calls."""
+    from brain.llm import chat_json
+
+    providers: list[Optional[str]] = [None]
+    if os.environ.get("SAROVI_API_KEY", "").strip() and os.environ.get("LLM_PROVIDER", "").lower() != "sarovi":
+        providers.append("sarovi")
+    errors = []
+    for provider in providers:
+        for attempt in range(3):
+            try:
+                return chat_json(system, request, max_tokens=3000, temperature=0.3,
+                                 provider=provider, timeout_seconds=90)
+            except Exception as exc:
+                errors.append(f"{provider or 'default'}: {exc}")
+                log.warning("translation via %s attempt %d failed: %s", provider or "default", attempt + 1, exc)
+                time.sleep(2 * (attempt + 1))
+    raise RuntimeError("translation failed: " + "; ".join(errors)[-400:])
+
+
+def translate(lines: list[dict]) -> tuple[dict, dict]:
+    """Translate lines with the configured LLM. Returns (result, usage).
+
+    Lines go in chunks of ``CHUNK_LINES`` so each request is short; every
+    chunk sees the whole English script for context. The first chunk also
+    writes the title.
+    """
+    payload = []
+    for k, line in enumerate(lines):
+        # A line may use the pause after it: its room runs to the next line.
+        room = (lines[k + 1]["start"] if k + 1 < len(lines) else line["end"] + 1.0) - line["start"]
+        payload.append({
+            "i": line["i"],
+            "start": round(line["start"], 2),
+            "seconds": round(room, 2),
+            "max_chars": max(8, int(room * CHARS_PER_SECOND)),
+            "en": line["en"],
+        })
+    script = [item["en"] for item in payload]
+    merged: dict = {"lines": []}
+    model, cost = "", 0.0
+    for offset in range(0, len(payload), CHUNK_LINES):
+        chunk = payload[offset:offset + CHUNK_LINES]
+        request = json.dumps({"full_script_for_context": script, "lines": chunk,
+                              "write_title": offset == 0}, ensure_ascii=False)
+        data, usage = _chat_with_fallback(_SYSTEM, request)
+        merged["lines"].extend(item for item in data.get("lines", []) if isinstance(item, dict))
+        if offset == 0:
+            merged["title"], merged["title_emojis"] = data.get("title"), data.get("title_emojis")
+        model = getattr(usage, "model", model)
+        cost += float(usage.cost_estimate)
+    return merged, {"model": model, "cost_usd": cost}
+
+
+def apply_translation(lines: list[dict], data: dict, cta_number: str) -> tuple[list[dict], str, str]:
+    """Merge LLM output into lines; returns (lines, title, title_emojis)."""
+    by_index = {int(item.get("i", -1)): item for item in data.get("lines", []) if isinstance(item, dict)}
+    out = []
+    for line in lines:
+        item = by_index.get(line["i"], {})
+        kind = item.get("kind") if item.get("kind") in {"speech", "lyrics", "cta"} else "speech"
+        fa = str(item.get("fa") or "").strip()
+        if kind == "speech" and not fa:
+            kind = "lyrics"
+        out.append({**line, "kind": kind, "fa": fa})
+    spoken = [line for line in out if line["kind"] != "lyrics"]
+    if spoken and not any(line["kind"] == "cta" for line in out):
+        spoken[-1]["kind"] = "cta"
+    for line in out:
+        if line["kind"] == "cta":
+            line["fa"] = cta_text(cta_number)
+    title = str(data.get("title") or "").strip() or "این محصول این روزا حسابی ترند شده"
+    emojis = str(data.get("title_emojis") or "").strip() or DEFAULT_TITLE_EMOJIS
+    return out, title, emojis
+
+
+def cta_text(number: str) -> str:
+    return CTA_TEMPLATE.format(n=str(number).strip() or DEFAULT_CTA_NUMBER)
+
+
+# --- Persian number words, so TTS reads "31" as «سی و یک» --------------------
+
+_ONES = ["صفر", "یک", "دو", "سه", "چهار", "پنج", "شش", "هفت", "هشت", "نه"]
+_TEENS = ["ده", "یازده", "دوازده", "سیزده", "چهارده", "پانزده", "شانزده", "هفده", "هجده", "نوزده"]
+_TENS = ["", "", "بیست", "سی", "چهل", "پنجاه", "شصت", "هفتاد", "هشتاد", "نود"]
+_HUNDREDS = ["", "صد", "دویست", "سیصد", "چهارصد", "پانصد", "ششصد", "هفتصد", "هشتصد", "نهصد"]
+_FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def number_words(n: int) -> str:
+    if n < 0:
+        return "منفی " + number_words(-n)
+    if n < 10:
+        return _ONES[n]
+    if n < 20:
+        return _TEENS[n - 10]
+    if n < 100:
+        tens, ones = divmod(n, 10)
+        return _TENS[tens] + (f" و {_ONES[ones]}" if ones else "")
+    if n < 1000:
+        hundreds, rest = divmod(n, 100)
+        return _HUNDREDS[hundreds] + (f" و {number_words(rest)}" if rest else "")
+    if n < 1_000_000:
+        thousands, rest = divmod(n, 1000)
+        head = "هزار" if thousands == 1 else f"{number_words(thousands)} هزار"
+        return head + (f" و {number_words(rest)}" if rest else "")
+    return str(n)
+
+
+def speakable(text: str) -> str:
+    """Spell out integers and drop quotes and line breaks so TTS reads them in Persian."""
+    text = re.sub(r"[«»\"]", "", text.translate(_FA_DIGITS))
+    text = re.sub(r"\s*\n\s*", " ", text)
+    return re.sub(r"(?<![\w.])(\d{1,6})(?![\w.])", lambda m: number_words(int(m.group(1))), text)
+
+
+# --- Voice --------------------------------------------------------------------
+
+def tts_model() -> str:
+    return os.environ.get("LOCALIZE_TTS_MODEL", "eleven_v3").strip() or "eleven_v3"
+
+
+LIAM_VOICE_ID = "TX3LPaxmHKxFdv7VOQHJ"   # ElevenLabs premade "Liam"
+
+
+def tts_voice() -> str:
+    return os.environ.get("LOCALIZE_VOICE_ID", "").strip() or LIAM_VOICE_ID
+
+
+def audio_duration(path: Path) -> float:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    return float(out or 0.0)
+
+
+VOICE_PROVIDERS = ("elevenlabs", "sarovi")
+
+
+def default_voice_provider() -> str:
+    provider = os.environ.get("LOCALIZE_TTS_PROVIDER", "elevenlabs").strip().lower()
+    return provider if provider in VOICE_PROVIDERS else "elevenlabs"
+
+
+def elevenlabs_characters_left() -> Optional[int]:
+    """Remaining ElevenLabs characters this billing period, or None if unknown."""
+    key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        import httpx
+
+        data = httpx.get("https://api.elevenlabs.io/v1/user/subscription",
+                         headers={"xi-api-key": key}, timeout=15).json()
+        return int(data["character_limit"]) - int(data["character_count"])
+    except Exception:
+        return None
+
+
+def check_voice_budget(texts: list[str], provider: str, cache_dir: Path) -> None:
+    """Fail before rendering when ElevenLabs cannot voice the uncached lines."""
+    if provider != "elevenlabs":
+        return
+    full, _ = narration_script(texts)
+    needed = 0 if _narration_paths(full, cache_dir)[1].is_file() else len(full)
+    left = elevenlabs_characters_left()
+    if needed and left is not None and left < needed:
+        raise RuntimeError(
+            f"ElevenLabs quota is not enough: {max(0, left)} characters left, this video needs {needed}. "
+            "Upgrade the ElevenLabs plan or choose the Sarovi voice for this project."
+        )
+
+
+SAROVI_INSTRUCTIONS = (
+    "فارسی محاوره‌ای تهرانی، سریع و پرانرژی و صمیمی، مثل یک تولیدکننده محتوای اینستاگرام "
+    "که دارد یک ترفند را تند و هیجان‌انگیز توضیح می‌دهد؛ بدون مکث اضافه"
+)
+
+
+def _sarovi_instructions() -> str:
+    return os.environ.get("LOCALIZE_SAROVI_INSTRUCTIONS", "").strip() or SAROVI_INSTRUCTIONS
+
+
+def _trim_silence(src: Path, dst: Path) -> Path:
+    """Drop leading/trailing silence so clips fit the English timing."""
+    edge = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.05"
+    proc = subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-i", str(src),
+         "-af", f"{edge},areverse,{edge},areverse", "-ar", "48000", str(dst)],
+        capture_output=True,
+    )
+    if proc.returncode != 0 or not dst.is_file() or audio_duration(dst) < 0.2:
+        dst.unlink(missing_ok=True)
+        src.replace(dst)
+    else:
+        src.unlink(missing_ok=True)
+    return dst
+
+
+def _clip_path(text: str, provider: str, out_dir: Path) -> Path:
+    if provider == "sarovi":
+        voice = "|".join((os.environ.get("SAROVI_TTS_VOICE", ""), os.environ.get("SAROVI_TTS_MODEL", ""),
+                          _sarovi_instructions()))
+    else:
+        voice = f"{tts_voice()}|{tts_model()}"
+    digest = hashlib.sha256(f"{provider}|{voice}|{speakable(text)}".encode()).hexdigest()[:16]
+    return out_dir / f"line_{provider}_{digest}"
+
+
+def _cached_clip(text: str, provider: str, out_dir: Path) -> Optional[Path]:
+    path = _clip_path(text, provider, out_dir).with_suffix(".wav")
+    return path if path.is_file() and path.stat().st_size > 0 else None
+
+
+def synthesize(text: str, out_dir: Path, provider: str = "elevenlabs") -> tuple[Path, float]:
+    """Generate (or reuse) one Persian clip for ``text``; returns (path, seconds)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cached = _cached_clip(text, provider, out_dir)
+    if cached:
+        return cached, audio_duration(cached)
+    attempts = 6
+    for attempt in range(attempts):
+        try:
+            return _synthesize_once(text, out_dir, provider)
+        except Exception as exc:  # flaky networks drop provider connections
+            message = str(exc)
+            if attempt == attempts - 1 or "quota" in message.lower() or "402" in message:
+                raise
+            # Sarovi rate-limits request starts (429); back off much longer.
+            delay = 8 * (attempt + 1) if "429" in message else 2 * (attempt + 1)
+            log.warning("voice attempt %d failed (%s); retrying in %ss", attempt + 1, message, delay)
+            time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def _synthesize_once(text: str, out_dir: Path, provider: str) -> tuple[Path, float]:
+    spoken = speakable(text)
+    final = _clip_path(text, provider, out_dir).with_suffix(".wav")
+    if provider == "sarovi":
+        from brain.sarovi_voice import generate_narration
+
+        raw = Path(generate_narration(spoken, out_dir, instructions=_sarovi_instructions()).file_path)
+    else:
+        from brain.tts import _generate_elevenlabs
+
+        raw = final.with_name(final.stem + "_raw.mp3")
+        _generate_elevenlabs(spoken, str(raw), tts_voice(), tts_model())
+    _trim_silence(raw, final)
+    return final, audio_duration(final)
+
+
+# --- One-take ElevenLabs narration ----------------------------------------------
+# Voicing every line separately makes each clip start fresh, so tone and pace
+# jump between lines. Instead the whole narration is generated in one request
+# with character timings and cut into per-line pieces.
+
+_SENTENCE_END = ".!?؟…"
+
+
+def narration_script(texts: list[str]) -> tuple[str, list[tuple[int, int]]]:
+    """Join lines into one speakable text; returns (text, [(start, end) char span per line])."""
+    parts: list[str] = []
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    for raw in texts:
+        piece = speakable(raw).strip().rstrip("،,")
+        if piece and piece[-1] not in _SENTENCE_END:
+            piece += "."
+        if parts:
+            pos += 1  # the joining space
+        spans.append((pos, pos + len(piece)))
+        parts.append(piece)
+        pos += len(piece)
+    return " ".join(parts), spans
+
+
+def _narration_paths(full: str, out_dir: Path) -> tuple[Path, Path]:
+    digest = hashlib.sha256(f"{tts_voice()}|{tts_model()}|{full}".encode()).hexdigest()[:16]
+    base = out_dir / f"narration_{digest}"
+    return base.with_suffix(".mp3"), base.with_suffix(".json")
+
+
+def _elevenlabs_with_timestamps(text: str) -> tuple[bytes, dict]:
+    import base64
+
+    import httpx
+
+    key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("ElevenLabs API key is not set")
+    response = httpx.post(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{tts_voice()}/with-timestamps",
+        headers={"xi-api-key": key},
+        json={"text": text, "model_id": tts_model()},
+        timeout=httpx.Timeout(300.0, connect=20.0),
+    )
+    if response.status_code == 403:
+        raise RuntimeError("ElevenLabs refused the request (HTTP 403); check the network/VPN")
+    if response.status_code == 402 or "quota" in response.text.lower():
+        raise RuntimeError(f"ElevenLabs quota exceeded (HTTP {response.status_code})")
+    response.raise_for_status()
+    data = response.json()
+    return base64.b64decode(data["audio_base64"]), data["alignment"]
+
+
+def split_by_alignment(alignment: dict, spans: list[tuple[int, int]], total: float) -> list[tuple[float, float]]:
+    """Audio (start, end) of each character span; cuts fall midway between lines."""
+    starts = alignment["character_start_times_seconds"]
+    ends = alignment["character_end_times_seconds"]
+    chars = alignment["characters"]
+    voiced = []
+    for a, b in spans:
+        idx = [k for k in range(a, min(b, len(chars))) if chars[k].strip()]
+        voiced.append((starts[idx[0]], ends[idx[-1]]) if idx else None)
+    cuts = []
+    for k, item in enumerate(voiced):
+        if item is None:
+            cuts.append((0.0, 0.0))
+            continue
+        prev = next((v for v in reversed(voiced[:k]) if v), None)
+        nxt = next((v for v in voiced[k + 1:] if v), None)
+        t0 = (prev[1] + item[0]) / 2 if prev else max(0.0, item[0] - 0.05)
+        t1 = (item[1] + nxt[0]) / 2 if nxt else min(total, item[1] + 0.3)
+        cuts.append((t0, t1))
+    return cuts
+
+
+def synthesize_narration(texts: list[str], out_dir: Path) -> list[tuple[Path, float]]:
+    """Voice all ``texts`` in ONE ElevenLabs request and cut it per line.
+
+    Returns (clip path, seconds) per text. The full take and its alignment
+    are cached, so re-renders of unchanged text spend no credit.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    full, spans = narration_script(texts)
+    audio, timing = _narration_paths(full, out_dir)
+    if not (audio.is_file() and timing.is_file()):
+        for attempt in range(4):
+            try:
+                data, alignment = _elevenlabs_with_timestamps(full)
+                break
+            except Exception as exc:
+                message = str(exc).lower()
+                if attempt == 3 or "quota" in message or "403" in message:
+                    raise
+                log.warning("narration attempt %d failed (%s); retrying", attempt + 1, exc)
+                time.sleep(3 * (attempt + 1))
+        audio.write_bytes(data)
+        timing.write_text(json.dumps(alignment, ensure_ascii=False))
+    alignment = json.loads(timing.read_text())
+    total = audio_duration(audio)
+    clips = []
+    for k, (t0, t1) in enumerate(split_by_alignment(alignment, spans, total)):
+        piece = audio.with_name(f"{audio.stem}_{k:02d}.wav")
+        if t1 - t0 < 0.05:
+            clips.append((piece, 0.0))
+            continue
+        raw = piece.with_name(piece.stem + "_raw.wav")
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(audio), "-ss", f"{t0:.3f}", "-to", f"{t1:.3f}",
+                        "-ar", "48000", str(raw)], capture_output=True, check=True)
+        _trim_silence(raw, piece)
+        clips.append((piece, audio_duration(piece)))
+    return clips

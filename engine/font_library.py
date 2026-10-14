@@ -375,6 +375,27 @@ def family_for_plan(canvas) -> str | None:
     return str(resolve_font(canvas.caption_font_id)["family"])
 
 
+def ass_family_for_plan(canvas) -> str | None:
+    """Return the face-specific family name libass should request.
+
+    Approved fonts are listed under their typographic family (``Ray``), which
+    every weight of the family shares. libass matches that name against all
+    installed faces and can pick a system Regular instead of the selected
+    ExtraBlack file, so ASS styles name the file's own legacy family
+    (``Ray ExtraBlack``) when it has one.
+    """
+    if not canvas.caption_font_id:
+        return None
+    try:
+        from fontTools.ttLib import TTFont
+
+        font = TTFont(resolve_font(canvas.caption_font_id)["path"], lazy=True)
+        legacy = font["name"].getDebugName(1)
+    except Exception:
+        return None
+    return legacy.strip() if legacy and legacy.strip() else None
+
+
 def stage_for_job(font_id: str, job_dir: Path) -> dict[str, Any]:
     """Copy the selected approved font beside job exports for portability."""
     entry = resolve_font(font_id)

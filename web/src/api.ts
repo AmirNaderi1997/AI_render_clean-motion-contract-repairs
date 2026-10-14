@@ -243,6 +243,70 @@ async function uploadWithProgress<T>(url: string, body: FormData,
   });
 }
 
+export interface LocalizeLine {
+  i: number;
+  start: number;
+  end: number;
+  en: string;
+  fa: string;
+  kind: "speech" | "lyrics" | "cta";
+}
+
+export interface TalkingReelState {
+  status: "idle" | "running" | "done" | "error";
+  stage: string;
+  message: string;
+  progress: number;
+  hook: string;
+  hook_highlight: string[];
+  name: string;
+  title: string;
+  music: string | null;
+  cta: string;
+  style: string;
+  hook2?: string;
+  slots?: { i: number; label: string; source: "upload" | "library" | "ai" | "card"; file: string | null }[];
+  output: string | null;
+  duration?: number;
+  shots?: number;
+}
+
+export interface TalkingReelSummary {
+  job_id: string;
+  name: string | null;
+  status: TalkingReelState["status"];
+  stage: string;
+  hook: string;
+  output: string | null;
+  updated_at: number;
+}
+
+export type LocalizeBoxColour = "black" | "white" | "red" | "blue" | "green";
+
+export interface LocalizeProject {
+  id: string;
+  name: string;
+  status: "queued" | "analyzing" | "ready" | "rendering" | "done" | "error";
+  stage: string;
+  message: string;
+  progress: number;
+  cta_number: string;
+  music: string | null;
+  voice_provider: "elevenlabs" | "sarovi";
+  caption_box?: LocalizeBoxColour | null;
+  title_box?: LocalizeBoxColour | null;
+  end_card?: boolean;
+  end_card_seconds?: number;
+  title: string;
+  title_emojis: string;
+  lines: LocalizeLine[];
+  output: string | null;
+  cost_usd: number;
+  created_at: number;
+}
+
+export type LocalizeSummary = Pick<LocalizeProject, "id" | "name" | "status" | "stage" | "message" | "title" | "output" | "created_at">;
+
 export const api = {
   authenticatedObjectUrl,
   async downloadAuthenticated(url: string, filename: string, openInNewTab = false,
@@ -668,6 +732,68 @@ export const api = {
   rawUrl(id: string) { return `${BASE}/jobs/${id}/raw`; },
   exportUrl(id: string, fname: string) { return `${BASE}/jobs/${id}/exports/${fname}`; },
   planUrl(id: string) { return `${BASE}/jobs/${id}/plan.json`; },
+
+  // ── Localization (Dropshipping) ──
+  async listLocalize(): Promise<LocalizeSummary[]> {
+    return j(await authFetch(`${BASE}/localize`));
+  },
+  async getLocalize(id: string): Promise<LocalizeProject> {
+    return j(await authFetch(`${BASE}/localize/${id}`));
+  },
+  async createLocalize(video: File, ctaNumber: string, music: string | null,
+    onProgress?: (percent: number) => void): Promise<LocalizeProject> {
+    const fd = new FormData();
+    fd.append("video", video);
+    fd.append("cta_number", ctaNumber);
+    if (music) fd.append("music", music);
+    return uploadWithProgress(`${BASE}/localize`, fd, onProgress);
+  },
+  async editLocalize(id: string, body: Partial<Pick<LocalizeProject, "title" | "title_emojis" | "cta_number" | "music" | "voice_provider" | "caption_box" | "title_box" | "end_card" | "end_card_seconds">>
+    & { lines?: { i: number; fa?: string; kind?: LocalizeLine["kind"] }[] }): Promise<LocalizeProject> {
+    return j(await authFetch(`${BASE}/localize/${id}`, {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    }));
+  },
+  async analyzeLocalize(id: string): Promise<LocalizeProject> {
+    return j(await authFetch(`${BASE}/localize/${id}/analyze`, { method: "POST" }));
+  },
+  async renderLocalize(id: string): Promise<LocalizeProject> {
+    return j(await authFetch(`${BASE}/localize/${id}/render`, { method: "POST" }));
+  },
+  async deleteLocalize(id: string): Promise<void> {
+    return j(await authFetch(`${BASE}/localize/${id}`, { method: "DELETE" }));
+  },
+  async getTalkingReel(jobId: string): Promise<TalkingReelState> {
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel`));
+  },
+  async editTalkingReel(jobId: string, body: Partial<Pick<TalkingReelState, "hook" | "hook2" | "hook_highlight" | "name" | "title" | "music" | "cta" | "style">>): Promise<TalkingReelState> {
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel`, {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    }));
+  },
+  async renderTalkingReel(jobId: string, regenerate = false): Promise<TalkingReelState> {
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/render?regenerate=${regenerate}`, { method: "POST" }));
+  },
+  async talkingReelMedia(jobId: string): Promise<string[]> {
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/media`));
+  },
+  async uploadTalkingReelMedia(jobId: string, files: File[]): Promise<{ saved: string[]; media: string[] }> {
+    const fd = new FormData();
+    files.forEach(f => fd.append("files", f));
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/media`, { method: "POST", body: fd }));
+  },
+  async deleteTalkingReelMedia(jobId: string, name: string): Promise<void> {
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/media/${encodeURIComponent(name)}`, { method: "DELETE" }));
+  },
+  async talkingReelStyles(): Promise<{ id: string; label: string }[]> {
+    return j(await authFetch(`${BASE}/talking-reels/styles`));
+  },
+  async listTalkingReels(): Promise<TalkingReelSummary[]> {
+    return j(await authFetch(`${BASE}/talking-reels`));
+  },
+  talkingReelOutputUrl(jobId: string): string { return `${BASE}/jobs/${jobId}/talking-reel/output`; },
+  localizeOutputUrl(id: string): string { return `${BASE}/localize/${id}/output`; },
+  localizeSourceUrl(id: string): string { return `${BASE}/localize/${id}/source`; },
 
   // ── Asset Library ──
   async getLibrary(): Promise<LibraryData> {

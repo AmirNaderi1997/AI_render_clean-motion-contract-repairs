@@ -14,6 +14,8 @@ const StyleLibrary = React.lazy(() => import("./StyleLibrary"));
 const StyleLearner = React.lazy(() => import("./StyleLearner"));
 const Library = React.lazy(() => import("./Library"));
 const ContentCreator = React.lazy(() => import("./ContentCreator"));
+const Localize = React.lazy(() => import("./Localize"));
+const TalkingReels = React.lazy(() => import("./TalkingReels"));
 const Landing = React.lazy(() => import("./Landing"));
 const Signup = React.lazy(() => import("./Signup"));
 const ForgotPassword = React.lazy(() => import("./ForgotPassword"));
@@ -115,6 +117,14 @@ function AuthenticatedApp() {
             <span className="nav-icon">&#10024;</span>
             Content Creator
           </NavLink>
+          <NavLink to="/talking">
+            <span className="nav-icon">&#127908;</span>
+            ویدیو صحبتی
+          </NavLink>
+          <NavLink to="/localize">
+            <span className="nav-icon">&#127760;</span>
+            Dropshipping
+          </NavLink>
           <NavLink to="/jobs">
             <span className="nav-icon">&#9776;</span>
             Jobs
@@ -149,6 +159,8 @@ function AuthenticatedApp() {
         <Routes>
           <Route path="/new" element={<NewReel />} />
           <Route path="/content" element={<ContentCreator />} />
+          <Route path="/localize" element={<Localize />} />
+          <Route path="/talking" element={<TalkingReels />} />
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/jobs/:id" element={<PlanReview />} />
           <Route path="/jobs/:id/render" element={<Render />} />

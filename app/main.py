@@ -30,7 +30,7 @@ from . import auth, jobs as jobstore
 from .auth_routes import router as auth_router
 from .database import DB_AVAILABLE, close_db, engine, init_db
 from .config import settings
-from .routers import ai, content, denoise, effects, fonts, jobs, music, plans, premiere, qc, render, style
+from .routers import ai, content, denoise, effects, fonts, jobs, localize, music, plans, premiere, qc, render, style, talking_reel
 from .health import router as health_router
 
 log = logging.getLogger(__name__)
@@ -84,6 +84,8 @@ async def lifespan(app: FastAPI):
         log.info("Python runtime %s has configured optional audio runtimes available", sys.executable)
     n = jobstore.rescan()
     log.info("job registry rescan: loaded %d job(s) from %s", n, jobstore.JOBS_ROOT)
+    from app.localize import recover_interrupted
+    recover_interrupted()
     yield
     await close_db()
 
@@ -141,6 +143,8 @@ app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(ai.router)
 app.include_router(jobs.router)
+app.include_router(talking_reel.router)
+app.include_router(talking_reel.list_router)
 app.include_router(plans.router)
 app.include_router(render.router)
 app.include_router(music.router)
@@ -155,6 +159,7 @@ app.include_router(premiere.router)
 app.include_router(qc.router)
 app.include_router(fonts.router)
 app.include_router(fonts.legacy_router)
+app.include_router(localize.router)
 
 
 @app.middleware("http")

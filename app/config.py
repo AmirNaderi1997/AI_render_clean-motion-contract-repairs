@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # Media artifacts only: uploads, rendered outputs and editable exports.
     # Job metadata/status is persisted in PostgreSQL.
     JOBS_DIR: str = "/app/job_data"
+    # Localization (Persian voice-over) projects; defaults to a "localize_jobs"
+    # folder next to JOBS_DIR.
+    LOCALIZE_DIR: str = ""
     ASSETS_DIR: str = "assets"
     HEALTH_MIN_DISK_FREE_GB: float = 2.0
     PRESETS_DIR: str = "presets"

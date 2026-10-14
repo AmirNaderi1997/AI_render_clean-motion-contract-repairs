@@ -6,6 +6,7 @@ import { PremiereCard } from "./PremiereCard";
 import { Timeline, outputToRaw, segmentOutputMarks } from "./Timeline";
 import { AuthenticatedMedia } from "./AuthenticatedMedia";
 import { MusicPicker } from "./MusicPicker";
+import { TalkingReelCard } from "./TalkingReel";
 import { Breadcrumbs, JobWorkflow, LoadingState, NextStep, friendlyError } from "./ui";
 
 type Tab = "visual" | "json";
@@ -372,6 +373,7 @@ export default function PlanReview() {
         </div>
       </div>
       <JobWorkflow job={job} current={2} />
+      <TalkingReelCard jobId={job.id} />
       {!parsedPlan && !isGenerating && <div className="empty-state" role="status"><strong>No edit plan yet</strong><p>Generate a plan from this job to review its timeline and render a reel.</p><a className="button-link" href="/new">Create a reel</a></div>}
       {parsedPlan && !isGenerating && <NextStep>Review the edit plan, then start a preview render to check the result.</NextStep>}
 

@@ -1,0 +1,837 @@
+"""Talking-head style "صحبتی ۱" (talking_1): a podcast clip cut into a styled vertical reel.
+
+FROZEN: this is a saved style the user relies on. Do not change its look;
+new looks go in a new module under ``engine/talking_styles`` (see
+``tests/test_talking_reel.py::test_talking_1_is_frozen``).
+
+Style (matches the reference reels the user works from):
+
+* jump cuts on pauses and hesitation sounds, alternating wide and close
+  framing on the speaker's face every few seconds (face found with the
+  macOS Vision framework, see ``tools/face_track``)
+* a soft warm grade; a few emotional sentences in black and white, entered
+  and left with a warm light flash
+* a pinned hook title (heavy Persian font, highlighted words in yellow) in
+  a translucent dark rounded box, short phrase captions right above it, a
+  name/title lower third; up to two emphasis moments (black and white,
+  blurred, every overlay off, the key phrase punching in word by word)
+* a low music bed ducked under the voice, loudness normalised
+
+Rendering is one ffmpeg pass (trim/crop per shot, concat, ASS overlay,
+audio mix); it needs an ffmpeg with libass (see ``render_ass``).
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Optional
+
+from ..localize import _ass_colour, _ass_time, _rounded_rect, measure_text_boxes, probe_fps, probe_video
+from ..render_ass import ass_burner_ffmpeg, subtitles_filter
+
+log = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+FACE_TRACK = PROJECT_ROOT / "tools" / "face_track"
+
+W, H = 1080, 1920
+GAP_CUT = 0.35            # pauses longer than this are cut out
+CUT_PAD = 0.08            # speech kept around each cut
+MIN_SHOT = 4.0            # framing changes at most this often (seconds of output)
+MAX_SHOT = 7.5            # a longer stretch gets a punch-in at a word boundary
+CLOSE_ZOOM = 1.4          # close framing, relative to the full-height wide crop
+YELLOW = "#F5B800"
+FLASH_COLOUR = "#FFD9A0"
+MUSIC_DB = -19.0           # music bed under the voice (ducked further while speaking)
+PUSH_ZOOM = 0.08           # slow push-in over a shot (Ken Burns)
+BOX_ALPHA = "&H33&"        # title/caption boxes: ~80% opaque near-black
+BOX_PAD_X, BOX_PAD_Y = 0.28, 0.13   # box padding around the text ink, x font size
+LOGO = PROJECT_ROOT / "assets" / "brand" / "logo.png"
+LOGO_SECONDS = 2.4
+CTA_SECONDS = 3.6
+FONT = "Ray ExtraBlack"
+CAPTION_FONT = "Ray Black"
+LATIN_FONT = "Avenir Next"
+_FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+@dataclass
+class Shot:
+    src_in: float
+    src_out: float
+    close: bool = False
+    bw: bool = False
+    face: tuple[float, float] = (0.5, 0.35)   # normalised face centre in the source
+    out_start: float = 0.0
+    push: bool = False      # slow smooth zoom-in over the shot
+
+    @property
+    def length(self) -> float:
+        return self.src_out - self.src_in
+
+
+@dataclass
+class ReelPlan:
+    shots: list[Shot]
+    captions: list[dict] = field(default_factory=list)   # {"start","end","text"} output time
+    notes: list[dict] = field(default_factory=list)      # {"start","end","text"} output time
+    flashes: list[float] = field(default_factory=list)   # output times
+    duration: float = 0.0
+    cold_open: float = 0.0   # length of the teaser played before the start
+
+
+# --- face tracking ------------------------------------------------------------
+
+def face_track_binary() -> Optional[Path]:
+    """Compile the Vision face tracker once (macOS only); None when unavailable."""
+    binary = FACE_TRACK / "face_track"
+    source = FACE_TRACK / "face_track.swift"
+    if binary.is_file() and (not source.is_file() or binary.stat().st_mtime >= source.stat().st_mtime):
+        return binary
+    swiftc = shutil.which("swiftc")
+    if not swiftc or not source.is_file():
+        return None
+    proc = subprocess.run([swiftc, "-O", str(source), "-o", str(binary)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        log.warning("face tracker build failed: %s", proc.stderr[-400:])
+        return None
+    return binary
+
+
+def track_faces(video: Path, fps: float = 2.0) -> list[tuple[float, float, float]]:
+    """(time, cx, cy) of the largest face, sampled at ``fps``; empty if unavailable."""
+    binary = face_track_binary()
+    if binary is None:
+        return []
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-vf", f"fps={fps},scale=640:-2",
+                        f"{tmp}/f_%05d.png"], check=True, capture_output=True)
+        frames = sorted(Path(tmp).glob("f_*.png"))
+        out = subprocess.run([str(binary), *map(str, frames)], capture_output=True, text=True).stdout
+    faces = []
+    for line in out.splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if item.get("face"):
+            k = int(Path(item["file"]).stem.split("_")[1]) - 1
+            cx, cy = item["face"][:2]
+            faces.append(((k + 0.5) / fps, float(cx), float(cy)))
+    return faces
+
+
+def _median(values: list[float], default: float) -> float:
+    values = sorted(values)
+    return values[len(values) // 2] if values else default
+
+
+# --- cuts and shots -----------------------------------------------------------
+
+def speech_ranges(words: list[dict], drop: Callable[[dict], bool], duration: float) -> list[tuple[float, float]]:
+    """Source ranges to keep: speech with pauses and dropped words cut out."""
+    kept = [w for w in words if not drop(w)]
+    ranges: list[list[float]] = []
+    for w in kept:
+        start, end = float(w["start"]), float(w["end"])
+        if ranges and start - ranges[-1][1] <= GAP_CUT:
+            ranges[-1][1] = max(ranges[-1][1], end)
+        else:
+            ranges.append([start, end])
+    out = []
+    for k, (a, b) in enumerate(ranges):
+        a = max(0.0, a - CUT_PAD, out[-1][1] if out else 0.0)
+        b = min(duration, b + CUT_PAD)
+        if b - a > 0.15:
+            out.append((round(a, 3), round(b, 3)))
+    return out
+
+
+def build_shots(ranges: list[tuple[float, float]], words: list[dict]) -> list[Shot]:
+    """Shots from kept ranges: framing alternates every MIN_SHOT..MAX_SHOT seconds.
+
+    Cuts are where the framing changes; a long stretch without a cut gets a
+    punch-in at the word boundary closest to its middle.
+    """
+    pieces: list[tuple[float, float, bool]] = []   # (in, out, starts_after_a_cut)
+    for a, b in ranges:
+        start = a
+        while b - start > MAX_SHOT:
+            target = start + (b - start) / 2 if b - start < 2 * MAX_SHOT else start + MAX_SHOT * 0.75
+            bounds = [float(w["end"]) for w in words if start + MIN_SHOT * 0.6 < float(w["end"]) < b - 1.5]
+            if not bounds:
+                break
+            split = min(bounds, key=lambda t: abs(t - target))
+            pieces.append((start, split, start == a))
+            start = split
+        pieces.append((start, b, start == a))
+    shots: list[Shot] = []
+    close = False
+    since_change = MIN_SHOT
+    for a, b, after_cut in pieces:
+        if shots and since_change >= MIN_SHOT:
+            close = not close
+            since_change = 0.0
+        elif shots and not after_cut:
+            close = not close   # a forced punch-in inside one stretch
+            since_change = 0.0
+        shots.append(Shot(a, b, close=close))
+        since_change += b - a
+    t = 0.0
+    for shot in shots:
+        shot.out_start = t
+        t += shot.length
+    return shots
+
+
+def to_output(shots: list[Shot], t: float) -> float:
+    """Source time to output time (times in a cut gap map to the next shot)."""
+    for shot in shots:
+        if t < shot.src_in:
+            return shot.out_start
+        if t <= shot.src_out:
+            return shot.out_start + t - shot.src_in
+    return shots[-1].out_start + shots[-1].length if shots else 0.0
+
+
+# --- captions -----------------------------------------------------------------
+
+def persian_digits(text: str) -> str:
+    return text.translate(_FA_DIGITS) if not re.search(r"[A-Za-z]\d|\d[A-Za-z]", text) else text
+
+
+def phrases(text: str, max_words: int = 6) -> list[str]:
+    """Caption phrases of 2..max_words words, broken at punctuation first."""
+    out: list[str] = []
+    for clause in re.split(r"(?<=[،,.!?؟])\s+", text.strip()):
+        words = clause.split()
+        while len(words) > max_words:
+            take = max_words if len(words) - max_words >= 2 else len(words) - 2
+            out.append(" ".join(words[:take]))
+            words = words[take:]
+        if words:
+            if out and len(words) == 1 and len(out[-1].split()) < max_words:
+                out[-1] += " " + words[0]
+            else:
+                out.append(" ".join(words))
+    return [p.rstrip(".") for p in out if p.strip(" .")]
+
+
+def caption_events(sentences: list[dict], words: list[dict], decisions: dict, shots: list[Shot]) -> list[dict]:
+    """Phrase captions on the output timeline.
+
+    The corrected sentence is split into phrases; each phrase is timed by
+    the share of characters it covers within the sentence's spoken words.
+    """
+    events = []
+    for k, sentence in enumerate(sentences):
+        text = decisions["captions"].get(k) if isinstance(decisions.get("captions"), dict) else None
+        if text is None:
+            text = decisions.get("captions", {}).get(str(k))
+        if not text or k in decisions.get("drop", []):
+            continue
+        spoken = [w for w in words if sentence["start"] - 0.05 <= float(w["start"]) <= sentence["end"] + 0.05]
+        if not spoken:
+            continue
+        parts = phrases(persian_digits(text))
+        total = sum(len(p) for p in parts) or 1
+        t0, t1 = float(spoken[0]["start"]), float(spoken[-1]["end"])
+        # Character share -> word index -> time, so pauses inside the sentence stay aligned.
+        chars = [len(w["w"]) + 1 for w in spoken]
+        csum = [0]
+        for c in chars:
+            csum.append(csum[-1] + c)
+
+        def time_at(share: float) -> float:
+            target = share * csum[-1]
+            for j, w in enumerate(spoken):
+                if csum[j + 1] >= target:
+                    frac = (target - csum[j]) / max(1, chars[j])
+                    return float(w["start"]) + frac * (float(w["end"]) - float(w["start"]))
+            return t1
+
+        done = 0
+        for part in parts:
+            a = time_at(done / total)
+            done += len(part)
+            b = time_at(done / total)
+            events.append({"start": to_output(shots, a), "end": to_output(shots, b), "text": part})
+    # Each caption stays until the next one (no flicker between phrases).
+    events.sort(key=lambda e: e["start"])
+    for e, nxt in zip(events, events[1:]):
+        if nxt["start"] - e["end"] < 0.6:
+            e["end"] = nxt["start"]
+    return [e for e in events if e["end"] - e["start"] > 0.05]
+
+
+def plan_reel(transcript: dict, decisions: dict, faces: list[tuple[float, float, float]],
+              duration: float) -> ReelPlan:
+    from brain.talking_reel import is_filler
+
+    sentences = transcript["sentences"]
+    words = transcript["words"]
+    dropped = [sentences[k] for k in decisions.get("drop", [])]
+
+    def drop(word: dict) -> bool:
+        t = float(word["start"])
+        return is_filler(word.get("w", "")) or any(s["start"] - 0.05 <= t <= s["end"] + 0.05 for s in dropped)
+
+    ranges = speech_ranges(words, drop, duration)
+    if not ranges:
+        raise ValueError("nothing left to keep after cutting pauses")
+    shots = build_shots(ranges, words)
+    for shot in shots:
+        inside = [(cx, cy) for t, cx, cy in faces if shot.src_in - 0.5 <= t <= shot.src_out + 0.5]
+        near = inside or [(cx, cy) for t, cx, cy in sorted(faces, key=lambda f: abs(f[0] - shot.src_in))[:3]]
+        shot.face = (_median([c[0] for c in near], 0.5), _median([c[1] for c in near], 0.35))
+    bw_spans = [(sentences[k]["start"], sentences[k]["end"]) for k in decisions.get("bw", [])]
+    for k, shot in enumerate(shots):
+        mid = (shot.src_in + shot.src_out) / 2
+        shot.bw = any(a - 0.2 <= mid <= b + 0.2 for a, b in bw_spans)
+        # A slow push-in on emotional lines and every third longer shot.
+        shot.push = shot.bw or (k % 3 == 2 and shot.length >= 3.5)
+
+    # Cold open: the most provocative line first, then the talk from the start.
+    cold = cold_open_span(decisions.get("cold_open"), sentences, words)
+    cold_captions: list[dict] = []
+    if cold:
+        a, b, text = cold
+        teaser = Shot(a, b, close=True, push=True, face=_face_at(faces, a, b))
+        for shot in shots:
+            shot.out_start += teaser.length
+        parts = phrases(persian_digits(text))
+        total_chars = sum(len(p) for p in parts) or 1
+        t = 0.0
+        for part in parts:
+            span = teaser.length * len(part) / total_chars
+            cold_captions.append({"start": t, "end": t + span, "text": part})
+            t += span
+        shots = [teaser] + shots
+    main = shots[1:] if cold else shots
+    total = shots[-1].out_start + shots[-1].length
+    flashes = [main[0].out_start] if cold else []
+    for prev, shot in zip(main, main[1:]):
+        if prev.bw != shot.bw:
+            flashes.append(shot.out_start)
+    notes = []
+    for note in decisions.get("notes", []):
+        s = sentences[note["i"]]
+        start = to_output(main, s["start"])
+        stop = min(total, max(start + 2.4, min(to_output(main, s["end"]), start + 3.6)))
+        notes.append({"start": start, "end": stop, "text": persian_digits(note["text"])})
+    for note in notes:
+        flashes += [note["start"], note["end"]]
+    flashes = sorted({round(t, 2) for t in flashes})
+    return ReelPlan(shots=shots, captions=cold_captions + caption_events(sentences, words, decisions, main),
+                    notes=notes, flashes=flashes, duration=total, cold_open=shots[0].length if cold else 0.0)
+
+
+def _face_at(faces: list[tuple[float, float, float]], a: float, b: float) -> tuple[float, float]:
+    inside = [(cx, cy) for t, cx, cy in faces if a - 0.5 <= t <= b + 0.5]
+    near = inside or [(cx, cy) for t, cx, cy in sorted(faces, key=lambda f: abs(f[0] - a))[:3]]
+    return _median([c[0] for c in near], 0.5), _median([c[1] for c in near], 0.35)
+
+
+def _plain(word: str) -> str:
+    return re.sub(r"[^\w]", "", word.replace("\u200c", "")).replace("ي", "ی").replace("ك", "ک")
+
+
+def cold_open_span(cold: Optional[dict], sentences: list[dict], words: list[dict]
+                   ) -> Optional[tuple[float, float, str]]:
+    """Source (start, end, text) of the teaser line, found in the sentence's words."""
+    if not cold or cold.get("i") is None:
+        return None
+    sentence = sentences[int(cold["i"])]
+    spoken = [w for w in words if sentence["start"] - 0.05 <= float(w["start"]) <= sentence["end"] + 0.05]
+    if not spoken:
+        return None
+    wanted = [_plain(w) for w in str(cold.get("text") or "").split() if _plain(w)]
+    best = None
+    if wanted:
+        plain = [_plain(w["w"]) for w in spoken]
+        for start in range(len(plain)):
+            hits = sum(1 for k, token in enumerate(wanted) if start + k < len(plain) and plain[start + k] == token)
+            if hits and (best is None or hits > best[0]):
+                best = (hits, start)
+    if best and best[0] >= max(2, len(wanted) // 2):
+        first = spoken[best[1]]
+        last = spoken[min(len(spoken), best[1] + len(wanted)) - 1]
+        text = str(cold.get("text"))
+    else:
+        first, last, text = spoken[0], spoken[-1], sentence["text"]
+    a, b = float(first["start"]) - CUT_PAD, float(last["end"]) + 0.25
+    return (max(0.0, a), b, text) if 1.0 <= b - a <= 7.0 else None
+
+
+# --- overlay (ASS) --------------------------------------------------------------
+
+def _colour(hex_colour: str) -> str:
+    return f"&H{_ass_colour(hex_colour)[4:]}&"
+
+
+def _esc(text: str) -> str:
+    return text.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ")
+
+
+def _spaced(text: str) -> str:
+    # The Ray font's space glyph is nearly zero wide.
+    return re.sub(r" +", "  ", text.strip())
+
+
+def hook_line(hook: str, highlight: list[str]) -> str:
+    """Hook text with highlighted phrases wrapped in yellow colour overrides."""
+    text = _esc(hook)
+    for phrase in sorted(highlight, key=len, reverse=True):
+        phrase = _esc(phrase)
+        if phrase and phrase in text:
+            text = text.replace(phrase, "\x00" + phrase + "\x01", 1)
+    text = _spaced(text)
+    return text.replace("\x00", f"{{\\1c{_colour(YELLOW)}}}").replace("\x01", "{\\1c&HFFFFFF&}")
+
+
+def build_ass(plan: ReelPlan, hook: str, highlight: list[str], name: str, title: str,
+              fonts_dir: Optional[Path]) -> str:
+    end = max(0.05, plan.duration - 0.02)
+    hook_size = int(H * 0.041)
+    # Wrap a long hook to two lines at the space nearest the middle.
+    plain_width = measure_text_boxes([(_spaced(_esc(hook)), hook_size)], W, H, FONT, fonts_dir)[0][0]
+    lines = [hook]
+    if plain_width > W * 0.84 and " " in hook:
+        spaces = [k for k, c in enumerate(hook) if c == " "]
+        cut = min(spaces, key=lambda k: abs(k - len(hook) / 2))
+        lines = [hook[:cut], hook[cut + 1:]]
+    inks = measure_text_boxes([(_spaced(_esc(l)), hook_size) for l in lines], W, H, FONT, fonts_dir)
+    widest = max(w for w, _, _ in inks)
+    if widest > W * 0.86:
+        hook_size = int(hook_size * W * 0.86 / widest)
+        inks = [(int(w * W * 0.86 / widest), a, b) for w, a, b in inks]
+        widest = max(w for w, _, _ in inks)
+    hook_y = H * 0.74
+    pitch = 1.15 * hook_size
+    anchors = [hook_y + (k - (len(lines) - 1) / 2) * pitch for k in range(len(lines))]
+    top = anchors[0] + inks[0][1] - BOX_PAD_Y * hook_size
+    bottom = anchors[-1] + inks[-1][2] + BOX_PAD_Y * hook_size
+    half = widest / 2 + BOX_PAD_X * hook_size
+
+    # The hook pops in (scale bounce) at the start and then stays.
+    events = [_rounded_rect(1, 0, end, W / 2 - half, top, W / 2 + half, bottom, "#000000", 18,
+                            extra=f"\\1a{BOX_ALPHA}\\fad(200,0)")]
+    pop = "\\fscx140\\fscy140\\t(0,260,\\fscx92\\fscy92)\\t(260,420,\\fscx100\\fscy100)\\fad(120,0)"
+    for line, y in zip(lines, anchors):
+        events.append(f"Dialogue: 2,{_ass_time(0)},{_ass_time(end)},hook,,0,0,0,,"
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f}){pop}}}{hook_line(line, highlight)}")
+
+    # Phrase captions in their own dark box right above the hook box.
+    cap_size = int(H * 0.0325)
+    texts = [_spaced(_esc(c["text"])) for c in plan.captions]
+    cap_inks = measure_text_boxes([(t, cap_size) for t in texts], W, H, CAPTION_FONT, fonts_dir) if texts else []
+    gap = 12
+    caption_top = top
+    for c, text, (cw, ca, cb) in zip(plan.captions, texts, cap_inks):
+        size = cap_size if cw <= W * 0.88 else int(cap_size * W * 0.88 / cw)
+        f = size / cap_size
+        cw, ca, cb = cw * f, ca * f, cb * f
+        box_bottom = top - gap
+        box_top = box_bottom - (cb - ca) - 2 * BOX_PAD_Y * size
+        y = box_top + BOX_PAD_Y * size - ca
+        caption_top = min(caption_top, box_top)
+        chalf = cw / 2 + BOX_PAD_X * size
+        events.append(_rounded_rect(3, c["start"], c["end"], W / 2 - chalf, box_top, W / 2 + chalf, box_bottom,
+                                    "#000000", 14, extra=f"\\1a{BOX_ALPHA}"))
+        events.append(f"Dialogue: 4,{_ass_time(c['start'])},{_ass_time(c['end'])},caption,,0,0,0,,"
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f})\\fs{size}}}{text}")
+    if name or title:
+        y = bottom + H * 0.062
+        if name:
+            events.append(f"Dialogue: 2,{_ass_time(0)},{_ass_time(end)},name,,0,0,0,,"
+                          f"{{\\an2\\pos({W / 2:.0f},{y:.1f})}}{_esc(name)}")
+        if title:
+            events.append(f"Dialogue: 2,{_ass_time(0)},{_ass_time(end)},title,,0,0,0,,"
+                          f"{{\\an8\\pos({W / 2:.0f},{y + 6:.1f})}}{_esc(title)}")
+    # Emphasis moments belong to the phrase alone: every other overlay is off.
+    events = _cut_windows(events, [(n["start"], n["end"]) for n in plan.notes])
+    events += emphasis_events(plan.notes, fonts_dir)
+    for t in plan.flashes:
+        # A short warm glow across the cut, not a solid wash.
+        events.append(_rounded_rect(6, max(0.0, t - 0.1), t + 0.28, 0, 0, W, H, FLASH_COLOUR, 0,
+                                    extra="\\1a&H90&\\fad(100,180)"))
+
+    white, black = "&H00FFFFFF", "&H00000000"
+    styles = [
+        # A tiny hard shadow (no outline, no blur) lifts the text off its box.
+        f"Style: hook,{FONT},{hook_size},{white},&H000000FF,{black},&H4D000000,-1,0,0,0,100,100,0,0,1,0,2,5,0,0,0,-1",
+        f"Style: caption,{CAPTION_FONT},{cap_size},{white},&H000000FF,{black},&H4D000000,"
+        f"-1,0,0,0,100,100,0,0,1,0,2,5,0,0,0,-1",
+        f"Style: emph,{FONT},{int(H * 0.09)},{white},&H000000FF,{black},&H4D000000,"
+        f"-1,0,0,0,100,100,0,0,1,0,3,5,0,0,0,-1",
+        f"Style: name,{LATIN_FONT} Medium,{int(H * 0.019)},{white},&H000000FF,&H90000000,&H90000000,"
+        f"0,0,0,0,100,100,1,0,1,0,1,2,0,0,0,1",
+        f"Style: title,{LATIN_FONT} Demi Bold,{int(H * 0.0215)},{white},&H000000FF,&H90000000,&H90000000,"
+        f"-1,0,0,0,100,100,0,0,1,0,1,8,0,0,0,1",
+        "Style: plain,Arial,10,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",
+    ]
+    return "\n".join([
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}", "WrapStyle: 2",
+        "ScaledBorderAndShadow: yes", "", "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding",
+        *styles, "", "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text", *events,
+    ]) + "\n"
+
+
+def _cut_windows(events: list[str], windows: list[tuple[float, float]]) -> list[str]:
+    """Remove the given time windows from every event (an event may split in two)."""
+    def parse(t: str) -> float:
+        h, m, sec = t.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(sec)
+
+    out = []
+    for event in events:
+        head, rest = event.split(": ", 1)
+        fields = rest.split(",", 3)
+        spans = [(parse(fields[1]), parse(fields[2]))]
+        for w0, w1 in windows:
+            spans = [piece for a, b in spans for piece in ((a, min(b, w0)), (max(a, w1), b)) if piece[1] - piece[0] > 0.04]
+        for a, b in spans:
+            out.append(f"{head}: {fields[0]},{_ass_time(a)},{_ass_time(b)},{fields[3]}")
+    return out
+
+
+def emphasis_events(notes: list[dict], fonts_dir: Optional[Path]) -> list[str]:
+    """The emphasis phrase word by word: big, centred, each word punching in; the last in yellow."""
+    events = []
+    base = int(H * 0.125)
+    for note in notes:
+        words = note["text"].replace("،", "").split()
+        if not words:
+            continue
+        inks = measure_text_boxes([(_esc(w), base) for w in words], W, H, FONT, fonts_dir)
+        size = min(base, int(base * W * 0.86 / max(w for w, _, _ in inks)))
+        pitch = 1.02 * size
+        t0, t1 = note["start"], note["end"]
+        step = min(0.42, (t1 - t0) * 0.55 / max(1, len(words)))
+        for k, word in enumerate(words):
+            y = H * 0.45 + (k - (len(words) - 1) / 2) * pitch
+            colour = f"\\1c{_colour(YELLOW)}" if k == len(words) - 1 and len(words) > 1 else ""
+            start = t0 + 0.12 + k * step
+            punch = "\\fscx135\\fscy135\\t(0,170,\\fscx96\\fscy96)\\t(170,260,\\fscx100\\fscy100)\\fad(60,180)"
+            events.append(f"Dialogue: 7,{_ass_time(start)},{_ass_time(t1)},emph,,0,0,0,,"
+                          f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f})\\fs{size}{colour}{punch}}}{_esc(word)}")
+    return events
+
+
+# --- render -------------------------------------------------------------------
+
+# Warm, contrasty and rich: S-curve with deeper blacks, warm shadows to highlights.
+GRADE = ("eq=contrast=1.10:saturation=1.16:gamma=0.98,"
+         "curves=master='0/0 0.12/0.08 0.5/0.5 0.85/0.9 1/1',"
+         "colorbalance=rs=0.04:bs=-0.05:rm=0.05:gm=0.008:bm=-0.05:rh=0.035:bh=-0.04,unsharp=5:5:0.6")
+BW = "hue=s=0,eq=contrast=1.12:brightness=-0.01"
+
+
+def crop_for(shot: Shot, sw: int, sh: int) -> tuple[int, int, int, int]:
+    """(w, h, x, y) of the 9:16 source crop for a shot's framing."""
+    ch = sh / (CLOSE_ZOOM if shot.close else 1.0)
+    cw = ch * 9 / 16
+    if cw > sw:   # a portrait or square source: use the full width instead
+        cw, ch = sw, sw * 16 / 9
+    cw, ch = int(cw) & ~1, int(ch) & ~1
+    fx, fy = shot.face[0] * sw, shot.face[1] * sh
+    x = min(max(0, fx - cw / 2), sw - cw)
+    # Close framing keeps the face in the upper third; wide keeps the full height.
+    y = min(max(0, fy - 0.36 * ch), sh - ch) if shot.close else max(0, (sh - ch) / 2)
+    return cw, ch, int(x) & ~1, int(y) & ~1
+
+
+def eval_fps(fps: str) -> float:
+    num, _, den = fps.partition("/")
+    return float(num) / float(den or 1)
+
+
+def vignette_png(out: Path) -> Path:
+    """Soft edge vignette, darker towards the bottom (text area), as an RGBA overlay."""
+    import numpy as np
+    from PIL import Image
+
+    y, x = np.mgrid[0:H, 0:W].astype(np.float32)
+    nx, ny = (x - W / 2) / (W / 2), (y - H / 2) / (H / 2)
+    edge = np.clip((np.sqrt(nx ** 2 * 0.9 + ny ** 2 * 0.55) - 0.55) / 0.6, 0, 1) ** 1.6 * 0.45
+    bottom = np.clip((y / H - 0.55) / 0.45, 0, 1) ** 1.4 * 0.55
+    alpha = np.clip(1 - (1 - edge) * (1 - bottom), 0, 0.8)
+    rgba = np.zeros((H, W, 4), np.uint8)
+    rgba[..., 3] = (alpha * 255).astype(np.uint8)
+    Image.fromarray(rgba, "RGBA").save(out)
+    return out
+
+
+def music_bed(music: Path, duration: float, work_dir: Path) -> Path:
+    """Loop a short track to ``duration`` with crossfaded seams (no hard loop jump)."""
+    length = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                   str(music)], capture_output=True, text=True).stdout.strip() or 0)
+    if length <= 0 or length >= duration:
+        return music
+    fade = min(2.0, length / 4)
+    copies = int((duration - fade) // (length - fade)) + 1
+    out = work_dir / f"music_bed_{music.stem}_{copies}.wav"
+    if out.is_file():
+        return out
+    chain = [f"[0:a][1:a]acrossfade=d={fade}[x1]"] + [
+        f"[x{k - 1}][{k}:a]acrossfade=d={fade}[x{k}]" for k in range(2, copies)]
+    last = f"x{copies - 1}" if copies > 1 else "0:a"
+    cmd = ["ffmpeg", "-v", "error", "-y"]
+    for _ in range(copies):
+        cmd += ["-i", str(music)]
+    if copies > 1:
+        cmd += ["-filter_complex", ";".join(chain), "-map", f"[{last}]"]
+    subprocess.run(cmd + [str(out)], check=True, capture_output=True)
+    return out
+
+
+def fonts_bundle(work_dir: Path) -> Path:
+    """libass loads fonts from one flat directory; collect the reel's fonts there."""
+    out = work_dir / "fonts"
+    out.mkdir(parents=True, exist_ok=True)
+    for path in (PROJECT_ROOT / "presets" / "fonts").rglob("*"):
+        if path.suffix.lower() in {".ttf", ".otf"} and not (out / path.name).exists():
+            shutil.copy2(path, out / path.name)
+    return out
+
+
+# --- outro: CTA card and logo motion -------------------------------------------
+
+CTA_FONT = "Ray ExtraBlack"
+CTA_HIGHLIGHT = re.compile(r"عدد\s*\S+\s*(?:رو|را)?\s*(?:برام\s*)?کامنت\s*کن")
+
+
+def cta_events(cta: str, t0: float, t1: float, fonts_dir: Optional[Path]) -> list[str]:
+    """Two-line CTA set straight on the end-card background; "عدد N رو کامنت کن" in gold."""
+    from ..localize import END_CARD_HIGHLIGHT
+
+    text = persian_digits(" ".join(cta.split()))
+    words = text.split(" ")
+    size = int(H * 0.05)
+    lines = [text]
+    match = CTA_HIGHLIGHT.search(text)
+    if match and match.start() > 0 and text[:match.start()].strip():
+        # The ask gets its own line: "... / عدد ۲۰ رو کامنت کن ..."
+        lines = [text[:match.start()].strip(), text[match.start():].strip()]
+    elif len(words) > 3:
+        cut = min(range(1, len(words)), key=lambda k: abs(len(" ".join(words[:k])) - len(text) / 2))
+        lines = [" ".join(words[:cut]), " ".join(words[cut:])]
+    spans, pos = [], 0
+    for line in lines:
+        pos = text.index(line, pos)
+        spans.append((pos, pos + len(line)))
+        pos += len(line)
+    inks = measure_text_boxes([(_spaced(_esc(l)), size) for l in lines], W, H, CTA_FONT, fonts_dir)
+    widest = max(w for w, _, _ in inks)
+    if widest > W * 0.86:
+        size = int(size * W * 0.86 / widest)
+    pitch = 1.12 * size
+    anchors = [H * 0.47 + (k - (len(lines) - 1) / 2) * pitch for k in range(len(lines))]
+    pop = "\\fad(250,0)\\fscx85\\fscy85\\t(0,300,\\fscx100\\fscy100)"
+    gold, white = _colour(END_CARD_HIGHLIGHT), "&HFFFFFF&"
+    events = []
+    for line, (a, b), y in zip(lines, spans, anchors):
+        if match and match.start() < b and match.end() > a:
+            h0, h1 = max(match.start(), a) - a, min(match.end(), b) - a
+            parts = [_spaced(_esc(line[:h0])), f"{{\\1c{gold}}}" + _spaced(_esc(line[h0:h1])),
+                     f"{{\\1c{white}}}" + _spaced(_esc(line[h1:]))]
+            body = "\u00a0\u00a0".join(p for p in parts if p.strip("{}\\1c&HFFFFFF&") or p == parts[1])
+        else:
+            body = _spaced(_esc(line))
+        events.append(f"Dialogue: 2,{_ass_time(t0)},{_ass_time(t1)},cta,,0,0,0,,"
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f}){pop}}}{body}")
+    return events
+
+
+def logo_frames(out_dir: Path, fps: float, seconds: float = LOGO_SECONDS) -> Path:
+    """Logo reveal frames: scale up with a soft overshoot, glow, a light sweep, fade out."""
+    import math
+
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pattern = out_dir / "logo_%04d.png"
+    count = max(1, round(seconds * fps))
+    if (out_dir / f"logo_{count:04d}.png").is_file():
+        return pattern
+    mark = Image.open(LOGO).convert("RGBA")
+    base_h = int(H * 0.11)
+    mark = mark.resize((int(mark.width * base_h / mark.height), base_h), Image.LANCZOS)
+    padded = Image.new("RGBA", (mark.width + 160, mark.height + 160), (255, 255, 255, 0))
+    padded.alpha_composite(mark, (80, 80))
+    glow = padded.filter(ImageFilter.GaussianBlur(28))
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    radial = np.clip(1 - np.sqrt(((xx - W / 2) / (W * 0.7)) ** 2 + ((yy - H * 0.47) / (H * 0.4)) ** 2), 0, 1)
+    bg = np.stack([11 + 16 * radial, 11 + 12 * radial, 12 + 8 * radial], -1).astype(np.uint8)
+
+    def ease_back(t: float) -> float:   # overshoots slightly, then settles
+        c = 1.70158
+        return 1 + (c + 1) * (t - 1) ** 3 + c * (t - 1) ** 2
+
+    for k in range(count):
+        t = k / fps
+        p = min(1.0, t / 0.75)
+        scale = 0.55 + 0.45 * ease_back(p)
+        alpha = min(1.0, t / 0.3) * (1 - max(0.0, (t - (seconds - 0.45)) / 0.45))
+        frame = Image.fromarray(bg.copy()).convert("RGBA")
+        size = (max(1, int(mark.width * scale)), max(1, int(mark.height * scale)))
+        m = mark.resize(size, Image.LANCZOS)
+        g = glow.resize((int(glow.width * scale), int(glow.height * scale)), Image.LANCZOS)
+        cx, cy = W // 2, int(H * 0.47)
+        # Light sweep: a bright diagonal band crossing the mark between 0.8 s and 1.5 s.
+        sweep = (t - 0.8) / 0.7
+        if 0 <= sweep <= 1:
+            arr = np.array(m).astype(np.float32)
+            h, w = arr.shape[:2]
+            band = (np.arange(w)[None, :] + np.arange(h)[:, None] * 0.6) / (w + h * 0.6)
+            boost = np.clip(1 - np.abs(band - sweep) / 0.12, 0, 1)[..., None] * 0.9
+            arr[..., :3] = np.minimum(255, arr[..., :3] + boost * 255)
+            m = Image.fromarray(arr.astype(np.uint8), "RGBA")
+        for layer, strength in ((g, 0.55 + 0.25 * math.sin(min(1.0, t / 1.2) * math.pi)), (m, 1.0)):
+            layer = layer.copy()
+            layer.putalpha(layer.getchannel("A").point(lambda v: int(v * alpha * strength)))
+            frame.alpha_composite(layer, (cx - layer.width // 2, cy - layer.height // 2))
+        frame.convert("RGB").save(out_dir / f"logo_{k + 1:04d}.png")
+    return pattern
+
+
+def render_outro(work_dir: Path, cta: str, fps: str, fonts: Path) -> tuple[Optional[Path], float]:
+    """Silent outro clip: optional CTA card, then the logo motion. Returns (path, seconds)."""
+    from ..localize import render_end_card
+
+    ffmpeg = ass_burner_ffmpeg()
+    fps_value = eval_fps(fps)
+    if not LOGO.is_file() and not cta:
+        return None, 0.0
+    parts, inputs, chains = [], [], []
+    cta_seconds = CTA_SECONDS if cta else 0.0
+    if cta:
+        bg = render_end_card(work_dir / "cta_bg.png", W, H, LOGO if LOGO.is_file() else None)
+        ass = work_dir / "cta.ass"
+        ass.write_text("\n".join([
+            "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}", "WrapStyle: 2", "",
+            "[V4+ Styles]",
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+            "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+            "Alignment, MarginL, MarginR, MarginV, Encoding",
+            f"Style: cta,{CTA_FONT},{int(H * 0.05)},&H00FFFFFF,&H000000FF,&H00000000,&H66000000,"
+            "-1,0,0,0,100,100,0,0,1,0,2,5,0,0,0,-1",
+            "Style: plain,Arial,10,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",
+            "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+            *cta_events(cta, 0, cta_seconds, fonts),
+        ]) + "\n", encoding="utf-8")
+        inputs += ["-loop", "1", "-framerate", fps, "-t", f"{cta_seconds:.3f}", "-i", str(bg)]
+        chains.append(f"[{len(parts)}:v]scale={W}:{H},setsar=1,format=yuv420p,{subtitles_filter(ass, fonts)}[p{len(parts)}]")
+        parts.append(f"[p{len(parts)}]")
+    logo_seconds = 0.0
+    if LOGO.is_file():
+        logo_seconds = LOGO_SECONDS
+        pattern = logo_frames(work_dir / "logo_frames", fps_value)
+        inputs += ["-framerate", fps, "-i", str(pattern)]
+        chains.append(f"[{len(parts)}:v]setsar=1,format=yuv420p[p{len(parts)}]")
+        parts.append(f"[p{len(parts)}]")
+    out = work_dir / "outro.mp4"
+    graph = ";".join(chains + ["".join(parts) + f"concat=n={len(parts)}:v=1:a=0,fps={fps}[o]"])
+    subprocess.run([ffmpeg, "-v", "error", "-y", *inputs, "-filter_complex", graph, "-map", "[o]",
+                    "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", str(out)], check=True,
+                   capture_output=True)
+    return out, cta_seconds + logo_seconds
+
+
+def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list[str], name: str, title: str,
+           work_dir: Path, music: Optional[Path] = None, cta: str = "",
+           on_progress: Optional[Callable[[int], None]] = None) -> Path:
+    ffmpeg = ass_burner_ffmpeg()
+    if ffmpeg is None:
+        raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
+    sw, sh, _ = probe_video(video)
+    fps = probe_fps(video)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    fonts = fonts_bundle(work_dir)
+    ass = work_dir / "reel.ass"
+    ass.write_text(build_ass(plan, hook, highlight, name, title, fonts), encoding="utf-8")
+
+    fps_value = eval_fps(fps)
+    vignette = vignette_png(work_dir / "vignette.png")
+    outro, outro_seconds = render_outro(work_dir, cta.strip(), fps, fonts)
+    total = plan.duration + outro_seconds
+    n = len(plan.shots)
+    vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
+          f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
+    for k, shot in enumerate(plan.shots):
+        cw, ch, x, y = crop_for(shot, sw, sh)
+        look = GRADE + (f",{BW}" if shot.bw else "")
+        if shot.push:
+            # Slow eased push-in anchored on the face (Ken Burns), rendered
+            # from a 1.5x frame so the motion stays smooth.
+            frames = max(1, round(shot.length * fps_value))
+            ax = min(max((shot.face[0] * sw - x) / cw, 0.2), 0.8)
+            ay = min(max((shot.face[1] * sh - y) / ch, 0.2), 0.8)
+            zoom = (f"zoompan=z='1+{PUSH_ZOOM}*(1-cos(PI*min(on/{frames},1)))/2':"
+                    f"x='iw*{ax:.3f}-iw/zoom*{ax:.3f}':y='ih*{ay:.3f}-ih/zoom*{ay:.3f}':"
+                    f"d=1:s={W}x{H}:fps={fps}")
+            frame = f"scale={W * 3 // 2}:{H * 3 // 2}:flags=lanczos,{zoom}"
+        else:
+            frame = f"scale={W}:{H}:flags=lanczos,fps={fps}"
+        vf.append(f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,"
+                  f"crop={cw}:{ch}:{x}:{y},{frame},setsar=1,{look}[v{k}]")
+        fade = min(0.012, shot.length / 4)
+        vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
+                  f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
+    vf.append("".join(f"[v{k}][a{k}]" for k in range(n)) + f"concat=n={n}:v=1:a=1[cv][ca]")
+    vf.append(f"[1:v]format=rgba[vig]")
+    content = "vmain" if outro else "vout"
+    windows = "+".join(f"between(t,{n['start']:.3f},{n['end']:.3f})" for n in plan.notes)
+    emphasis = (f"gblur=sigma=9:enable='{windows}',hue=s=0:enable='{windows}',"
+                f"eq=brightness=-0.07:contrast=1.05:enable='{windows}'," if windows else "")
+    vf.append(f"[cv]{emphasis}null[cvx]")
+    vf.append(f"[cvx][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},"
+              f"format=yuv420p[{content}]")
+    inputs = ["-i", str(video), "-loop", "1", "-framerate", fps, "-i", str(vignette)]
+    next_input = 2
+    if outro:
+        inputs += ["-i", str(outro)]
+        vf.append(f"[{next_input}:v]setsar=1,format=yuv420p[vend]")
+        vf.append("[vmain][vend]concat=n=2:v=1:a=0[vout]")
+        next_input += 1
+    # The voice ends with the talk; the outro carries only the music.
+    vf.append(f"[ca]apad=pad_dur={outro_seconds + 0.1:.3f}[cpad]")
+    if music and music.is_file():
+        bed = music_bed(music, total + 1.0, work_dir)
+        inputs += ["-i", str(bed)]
+        vf.append(f"[{next_input}:a]atrim=0:{total:.3f},volume={MUSIC_DB}dB,afade=t=in:d=0.8,"
+                  f"afade=t=out:st={max(0.0, total - 1.6):.3f}:d=1.6,aresample=48000,"
+                  f"aformat=channel_layouts=stereo[m]")
+        vf.append("[cpad]aresample=48000,aformat=channel_layouts=stereo,asplit[vo][key]")
+        vf.append("[m][key]sidechaincompress=threshold=0.03:ratio=5:attack=50:release=500[duck]")
+        vf.append("[vo][duck]amix=inputs=2:normalize=0:duration=first,"
+                  "loudnorm=I=-16:TP=-1:LRA=9,aresample=48000[aout]")
+    else:
+        vf.append("[cpad]loudnorm=I=-16:TP=-1:LRA=9,aresample=48000[aout]")
+    cmd = [ffmpeg, "-hide_banner", "-y", *inputs, "-filter_complex", ";".join(vf),
+           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "19", "-preset", "medium",
+           "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
+           "-progress", "pipe:1", "-nostats", str(out)]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    assert proc.stdout is not None
+    for row in proc.stdout:
+        if row.startswith("out_time_us=") and on_progress and total > 0:
+            try:
+                on_progress(min(99, int(int(row.split("=")[1]) / 1e6 / total * 100)))
+            except ValueError:
+                pass
+    stderr = proc.stderr.read() if proc.stderr else ""
+    if proc.wait() != 0:
+        raise RuntimeError(f"ffmpeg failed: {stderr.strip()[-800:]}")
+    return out

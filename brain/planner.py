@@ -1108,6 +1108,11 @@ def _trim_incomplete_source_tail(plan_data: dict, transcript: dict) -> bool:
         return False
     if abs(duration - float(last.get("end") or 0)) > 0.15 or abs(duration - float(words[-1].get("end") or 0)) > 0.15:
         return False
+    # A long unpunctuated "sentence" is a transcript without punctuation (e.g.
+    # a fallback speech-to-text), not a cut-off thought; trimming it once
+    # dropped 77 s of a 91 s talk.
+    if float(last.get("end") or 0) - float(last.get("start") or 0) > 12.0:
+        return False
     if float(segments[-1]["out"]) < float(last.get("start") or 0) + 0.15:
         return False
     previous = sentences[-2]

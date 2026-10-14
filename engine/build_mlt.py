@@ -12,6 +12,7 @@ from typing import Optional
 from xml.sax.saxutils import escape as esc
 
 from .schema import BoundaryTransition, Plan, PROJECT_ROOT
+from .render_ass import ass_burner_ffmpeg
 from .probe import cover_scale as _compute_cover_scale, probe_duration, video_dimensions
 from .effects_v4 import effect_filter_xml_v4 as effect_filter_xml
 from .captions import (
@@ -51,6 +52,20 @@ def _mlt_supports_ass_subtitles() -> bool:
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0 and "identifier: avfilter.subtitles" in result.stdout
+
+
+def _ass_font_dir(style: dict, selected_font_file: Optional[Path]) -> Optional[Path]:
+    """Directory libass should search for the caption fonts."""
+    if selected_font_file:
+        return selected_font_file.parent
+    preset_font_dir = style.get("captions", {}).get("fonts_dir")
+    if preset_font_dir:
+        candidate = Path(preset_font_dir)
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        if candidate.is_dir():
+            return candidate.resolve()
+    return None
 
 
 def _rect(z: float, W: int, H: int) -> str:
@@ -194,6 +209,17 @@ def build(
         f'sample_aspect_num="1" sample_aspect_den="1" display_aspect_num="{display_aspect_num}" '
         f'display_aspect_den="{display_aspect_den}" progressive="1" colorspace="709"/>',
     ]
+    # MLT builds without libass (e.g. Shotcut's bundled melt) can only draw
+    # one colour per cue. When an ffmpeg with libass is available, leave the
+    # captions out of the MLT graph and let render() burn captions.ass after
+    # melt, so headline accents and boxes match the ASS styling exactly.
+    mlt_has_libass = _mlt_supports_ass_subtitles()
+    burn_ass_after = not mlt_has_libass and ass_burner_ffmpeg() is not None
+    if burn_ass_after:
+        font_dir = _ass_font_dir(style, selected_font_file)
+        x.append(f'<property name="ai-render:burn_ass">{esc(str(ass_path.resolve()))}</property>')
+        if font_dir:
+            x.append(f'<property name="ai-render:burn_ass_fontsdir">{esc(str(font_dir))}</property>')
     if style_ref:
         x.extend([
             f'<property name="ai-render:style_id">{esc(style_ref["style_id"])}</property>',
@@ -574,8 +600,8 @@ def build(
     # MLT subtitle filter only accepts one foreground color for a whole cue.
     # Keep the established SRT path on MLT installs without libass.
     rich_captions = any(c.highlighted_word for c in plan.captions)
-    use_ass_captions = rich_captions and _mlt_supports_ass_subtitles()
-    if rich_captions and not use_ass_captions:
+    use_ass_captions = rich_captions and mlt_has_libass
+    if rich_captions and not use_ass_captions and not burn_ass_after:
         log.warning(
             "plan contains highlighted caption words, but this MLT build lacks libass; "
             "export will use the single-colour SRT fallback"
@@ -595,15 +621,10 @@ def build(
     for offset, variant in enumerate(("primary", "accent"), len(STYLE_NAMES) + 1):
         if variant in headline_parts:
             layers.append((offset, "headline", f"headline_{variant}", headline_parts[variant]))
+    if burn_ass_after:
+        layers = []
     if use_ass_captions:
-        font_dir = selected_font_file.parent if selected_font_file else None
-        preset_font_dir = style.get("captions", {}).get("fonts_dir")
-        if not font_dir and preset_font_dir:
-            candidate = Path(preset_font_dir)
-            if not candidate.is_absolute():
-                candidate = PROJECT_ROOT / candidate
-            if candidate.is_dir():
-                font_dir = candidate.resolve()
+        font_dir = _ass_font_dir(style, selected_font_file)
         x.append(
             '<filter mlt_service="avfilter.subtitles">'
             f'<property name="av.filename">{esc(str(ass_path.resolve()))}</property>'
