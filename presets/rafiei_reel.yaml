@@ -1,0 +1,133 @@
+# Rafiei Reel Style — caption look, render defaults, and AI brain tuning.
+# Colours are #RRGGBB (alpha optional as #RRGGBBAA, 00 = opaque).
+name: Rafiei Reel Style
+rafiei_style:
+  caption_emphasis_color: "#FFD700"
+  caption_emphasis_alt_color: "#00E5FF"
+  opening_title: true
+  preferred_effects:
+    - steady__neutral
+    - hold_close__neutral
+    - slow_push__neutral
+    - punch__neutral
+    - slow_pull__neutral
+  avoid_effects:
+    - camera_shake
+    - rgb_split
+    - zoom_blur_transition
+    - emoji_sticker_pop
+  watermark:
+    text: "رضا رفیعی"
+    font: "maneli"
+    position: "bottom_center"
+    opacity: 0.7
+    size: 28
+  credit_lower_third:
+    text: "Founder of RAFIEI HOLDING"
+    font: "RAY-MEDIUM"
+    show_on_intro: true
+captions:
+  highlight_colour: "#FFD43B"
+  fonts_dir: presets/fonts
+  persian_font: "Ray ExtraBlack"   # default for Persian captions
+  base:
+    font: Arial
+    size: 48
+    bold: true
+    weight: 900
+    colour: "#FFFFFF"
+    outline_colour: "#000000"
+    outline: 3
+    background_colour: "#10101088"
+    shadow: 0
+    margin_bottom: 520
+    margin_sides: 110
+  styles:
+    normal:
+      background_colour: "#00000000"   # no box behind rolling speech captions
+      margin_bottom: 680               # sit just above the persistent hook
+    emphasis:
+      # Emphasis captions are larger while the selected spoken word gets the accent color.
+      colour: "#FFFFFF"
+      size: 120
+      background_colour: "#00000000"   # no box; emphasis relies on word colour only
+      margin_bottom: 680
+    cta:
+      colour: "#FFD43B"
+      size: 62
+    cover:
+      colour: "#FFFFFF"
+      size: 84
+      weight: 900
+      outline: 3
+      margin_bottom: 1480
+      split_min_words: 4
+      primary_size: 72
+      primary_y: 180
+      primary_height: 110
+      accent_colour: "#FFD43B"
+      accent_size: 92
+      accent_y: 285
+      accent_height: 130
+    headline:
+      enabled: true
+      italic: true
+      ass_border_style: 3              # opaque background box in ASS path
+      split_min_words: 4
+      primary_size: 72
+      primary_y: 1380
+      primary_height: 100
+      primary_colour: "#FFFFFF"
+      accent_size: 90
+      accent_y: 1490
+      accent_height: 118
+      accent_colour: "#FFD43B"
+      background_colour: "#101010CC"
+      margin_sides: 72
+      outline: 0
+      box_padding: 16
+  # Stage 2: caption generation rules
+  min_words: 2
+  max_words: 5
+  max_words_per_line: 5
+render:
+  crf: 20
+  preset: medium
+  audio_bitrate: 192k
+  preview_scale: 0.5
+  loudness_lufs: -14
+music:
+  fade_out: 0.8
+  default_volume_db: -14
+  duck_volume_db: -24
+zoom:
+  punch_frames: 6
+  min_zoom: 1.0
+  max_zoom: 1.20
+  punch_in_zoom: 1.15
+  slow_zoom_from: 1.0
+  slow_zoom_to: 1.08
+# Stage 2: AI brain parameters
+silence:
+  min_pause_sec: 0.4
+  padding_sec: 0.08
+  noise_db: -35
+editing:
+  max_static_sec: 4.0
+  punch_in_speed: 1.15
+  slow_zoom_chance: 0.6
+broll:
+  default_duration_sec: 2.0
+  min_gap_sec: 8.0
+sfx:
+  whoosh_on_broll: true
+  whoosh_volume_db: -3
+correction:
+  low_prob_threshold: 0.60       # flag ASR words below this probability
+  auto_apply_min_confidence: 0.85  # auto-apply LLM fix when LLM confidence >= this
+  max_flagged_ratio: 0.40          # skip LLM call if more than this fraction of words are flagged
+  similarity_threshold: 0.20     # minimum char-bigram Jaccard for replace to pass guardrail
+effects:
+  max_family_share: 0.40         # no single family may occupy more than this fraction of segments
+  accent_min_gap_sec: 6.0        # minimum seconds between flash/punch_bright/flash_end
+  max_static_sec: 4.0            # max consecutive still/breathe seconds before critic flags it
