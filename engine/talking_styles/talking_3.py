@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 __all__ = ["track_faces", "plan_reel", "render", "probe_video"]
 
 FONT = "Ray ExtraBlack"
-CAPTION_FONT = "Vazirmatn"
+CAPTION_FONT = "Ray ExtraBold"
 ACCENT_FONT = "IRAN Kharazmi"
 ACCENT_COLOUR = "&H00A8D8F0"      # warm cream for the calligraphic accent (ASS BGR)
 PICTURE_ZOOM = 0.08

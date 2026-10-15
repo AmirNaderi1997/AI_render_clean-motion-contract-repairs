@@ -43,7 +43,7 @@ MIN_PIECE, MAX_PIECE = 1.8, 3.0   # cut rhythm (seconds)
 PICTURE_ZOOM = 0.07            # slow push on the picture over a shot
 MUSIC_DB = -15.0
 LOUDNESS = -14.0
-FONT = "Vazirmatn"
+FONT = "Ray ExtraBlack"
 CHIP_COLOUR = "#8A9298"         # glassy grey chips
 
 
