@@ -66,7 +66,8 @@ def catalog_stats() -> dict:
     }
 
 
-def recommend(visual_type: str, title: str = "", *, limit: int = 3) -> list[dict]:
+def recommend(visual_type: str, title: str = "", *, limit: int = 3,
+              exclude: set[str] | None = None) -> list[dict]:
     """Return catalog references ranked for a 9:16 talking-head overlay.
 
     Results are inspiration/provenance for the audited local adapter.  They do
@@ -75,7 +76,10 @@ def recommend(visual_type: str, title: str = "", *, limit: int = 3) -> list[dict
     wanted = set(TYPE_TAGS.get(visual_type, TYPE_TAGS["concept"]))
     title_tokens = _tokens(title)
     ranked = []
+    excluded = exclude or set()
     for item in load_catalog().get("items", []):
+        if item.get("name") in excluded:
+            continue
         haystack = _tokens(" ".join([
             str(item.get("name", "")), str(item.get("title", "")),
             str(item.get("description", "")), " ".join(item.get("tags", [])),

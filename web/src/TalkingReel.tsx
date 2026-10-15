@@ -8,6 +8,9 @@ const STAGES: Record<string, string> = {
   queued: "در صف", transcribing: "تشخیص گفتار", "editing text": "اصلاح متن و تیتر",
   "choosing style": "انتخاب هوشمند استایل", "tracking the face": "تشخیص صورت",
   "finding pictures": "پیدا کردن و ساختن تصویرها", rendering: "رندر",
+  "planning visual beats": "طراحی استوری‌لاین", "building motion graphics": "ساخت موشن‌ها",
+  "rendering motion graphics": "رندر موشن‌ها", "reviewing motion graphics": "بازبینی خروجی",
+  "improving motion graphics": "بهبود خودکار", "reviewing improved render": "بازبینی نسخه بهبودیافته",
 };
 
 /** Talking-head reel (podcast clip -> styled vertical reel) for one job. */
@@ -55,6 +58,7 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
         await api.editTalkingReel(jobId, {
           hook: draft.hook, hook_highlight: draft.hook_highlight, name: draft.name, title: draft.title, music: draft.music,
           cta: draft.cta ?? "", style: draft.style || "talking_1", hook2: draft.hook2 ?? "", captions: draft.captions ?? [],
+          storyboard: draft.storyboard ?? [],
         });
       }
       setState(await api.renderTalkingReel(jobId, regenerate));
@@ -93,6 +97,7 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
           <button className="btn-secondary" onClick={() => api.downloadAuthenticated(api.talkingReelOutputUrl(jobId), `${jobId}_talking_reel.mp4`)}>دانلود ویدیو</button>
         </div>
       )}
+      {state.visual_qc && <p className="muted">کنترل کیفیت موشن: {state.visual_qc.passed ? "تأیید شد" : "نیازمند بازبینی"} • {state.visual_qc.samples} فریم نمونه • تغییر صحنه {state.visual_qc.mean_scene_change}</p>}
       <div className="row">
         <label>استایل تدوین
           <select value={draft.style || "talking_1"} disabled={running} onChange={e => { void chooseStyle(e.target.value); }}>
@@ -153,6 +158,30 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
                 <input value={caption.text} disabled={running} style={{ flex: 1 }}
                   onChange={e => setDraft({ ...draft, captions: draft.captions!.map((item, i) => i === index ? { ...item, text: e.target.value } : item) })} />
               </label>
+            ))}
+          </div>
+        </div>
+      )}
+      {draft.style === "talking_2" && draft.storyboard && draft.storyboard.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <h3>استوری‌لاین پیشنهادی قبل از رندر</h3>
+          <p className="muted">هر ردیف یک دنیای بصری کوتاه است؛ موتور از میان ۴۴۷ موشن کاتالوگ، مناسب‌ترین قالب‌های غیرتکراری را انتخاب می‌کند.</p>
+          <div style={{ display: "grid", gap: 10 }}>
+            {draft.storyboard.map((beat, index) => (
+              <div key={`${beat.i}-${index}`} className="row" style={{ alignItems: "center", padding: 10, border: "1px solid var(--border)", borderRadius: 10 }}>
+                <span className="tag">{String(index + 1).padStart(2, "0")}</span>
+                <input value={beat.title} disabled={running} style={{ flex: 1 }}
+                  onChange={e => setDraft({ ...draft, storyboard: draft.storyboard!.map((item, i) => i === index ? { ...item, title: e.target.value } : item) })} />
+                <select value={beat.visual_type} disabled={running}
+                  onChange={e => setDraft({ ...draft, storyboard: draft.storyboard!.map((item, i) => i === index ? { ...item, visual_type: e.target.value } : item) })}>
+                  <option value="kinetic_type">تایپوگرافی کوبشی</option><option value="concept">استعاره تصویری</option>
+                  <option value="comparison">مقایسه</option><option value="media_collage">کلاژ</option>
+                  <option value="ui_showcase">نمایش محصول</option><option value="stat">آمار</option>
+                  <option value="chat">گفتگو</option><option value="before_after">قبل/بعد</option>
+                  <option value="steps">مراحل</option>
+                </select>
+                <span className="tag">{beat.motion_style || "motion"}</span>
+              </div>
             ))}
           </div>
         </div>

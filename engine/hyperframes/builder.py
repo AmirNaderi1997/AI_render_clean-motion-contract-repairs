@@ -31,29 +31,60 @@ def _visual_type(title: str, items: list[str], requested: str = "") -> str:
 
 
 def build_visual_beats(plan, decisions: dict) -> list[VisualBeat]:
-    """Map source-sentence decisions onto the cut output timeline."""
+    """Turn the approved storyboard into short, varied output-time worlds.
+
+    Story beats deliberately do not inherit sentence duration: Persian speech
+    transcripts often contain one enormous sentence, which used to produce one
+    enormous card.  Every catalog item is scored for every beat; selected
+    references are unique until the suitable pool is exhausted.
+    """
     chips = {int(item["i"]): list(item.get("items") or []) for item in decisions.get("chips") or []}
+    storyboard = list(decisions.get("storyboard") or [])
+    if not storyboard:
+        storyboard = [{**item, "title": item.get("label") or item.get("visual") or "نکته مهم"}
+                      for item in decisions.get("broll") or []]
+    duration = float(getattr(plan, "duration", 0) or 0)
+    if not storyboard or duration < 1:
+        return []
+    count = min(9, max(7, len(storyboard)))
+    storyboard = (storyboard * ((count + len(storyboard) - 1) // len(storyboard)))[:count]
+    # Keep room for the speaker between worlds. The first visual starts after
+    # the hook and each scene is capped to avoid the old permanent-list look.
+    usable_start = min(3.0, duration * .08)
+    step = max(3.1, (duration - usable_start - 1.0) / count)
+    used_refs: set[str] = set()
+    fallback_types = ["kinetic_type", "concept", "comparison", "media_collage", "ui_showcase", "stat", "chat", "before_after"]
+    fallback_motions = ["slam", "assemble", "wipe", "collage", "orbit", "count_up", "type_on", "reveal"]
     beats: list[VisualBeat] = []
-    for n, item in enumerate(decisions.get("broll") or []):
+    for n, item in enumerate(storyboard):
         sentence = int(item["i"])
-        shots = [shot for shot in plan.shots if shot.slot == sentence]
-        if not shots:
-            continue
-        start = min(float(shot.out_start) for shot in shots)
-        end = max(float(shot.out_start + shot.length) for shot in shots)
-        if end - start < 0.65:
-            continue
-        title = " ".join(str(item.get("label") or "").split())[:80]
+        start = usable_start + n * step
+        scene_duration = min(4.8, max(2.35, step * .72))
+        end = min(duration - .35, start + scene_duration)
+        title = " ".join(str(item.get("title") or item.get("label") or "").split())[:80]
         if not title:
             title = " ".join(str(item.get("visual") or "").split()[:5]) or "نکته مهم"
         raw_items = list(item.get("items") or []) or chips.get(sentence, [])
         values = [" ".join(str(value).split())[:35] for value in raw_items if str(value).strip()]
         visual_type = _visual_type(title, values, str(item.get("visual_type") or ""))
+        if beats and visual_type == beats[-1].visual_type:
+            visual_type = fallback_types[n % len(fallback_types)]
+        motion_style = str(item.get("motion_style") or fallback_motions[n % len(fallback_motions)])
+        if beats and motion_style == beats[-1].motion_style:
+            motion_style = fallback_motions[n % len(fallback_motions)]
+        matches = recommend(visual_type, title, limit=3, exclude=used_refs)
+        refs = [match["name"] for match in matches]
+        if refs:
+            used_refs.add(refs[0])
         beats.append(VisualBeat(
             id=f"beat-{sentence}-{n}", start=start, end=end,
             anchor_word=title.split()[0], visual_type=visual_type,
             title=title, items=values, accent="amber" if n % 2 else "teal",
-            registry_refs=[match["name"] for match in recommend(visual_type, title)],
+            layout="full_frame" if n in {0, 3, count - 1} else "top_panel",
+            registry_refs=refs,
+            narrative_role=str(item.get("narrative_role") or "evidence"),
+            motion_style=motion_style,
+            why=str(item.get("why") or ""),
         ))
     return beats
 
@@ -94,9 +125,9 @@ def _beat_markup(beat: VisualBeat) -> str:
     else:
         body = '<div class="concept"><i></i><i></i><i></i><span></span></div>'
     return (
-        f'<section id="{beat.id}" class="visual-beat {beat.visual_type} {beat.accent} clip" '
+        f'<section id="{beat.id}" data-motion="{html.escape(beat.motion_style)}" class="visual-beat {beat.visual_type} {beat.accent} {beat.layout} clip" '
         f'data-start="{beat.start:.3f}" data-duration="{beat.end - beat.start:.3f}" data-track-index="2">'
-        f'<div class="beat-inner"><div class="eyebrow">نکته‌ی کلیدی</div><h2 dir="rtl">{title}</h2>{body}</div></section>'
+        f'<div class="beat-inner"><div class="ghost">{html.escape(beat.anchor_word)}</div><div class="eyebrow">{html.escape(beat.narrative_role)}</div><h2 dir="rtl">{title}</h2>{body}</div></section>'
     )
 
 
@@ -105,10 +136,17 @@ def _timeline_script(beats: list[VisualBeat]) -> str:
     for beat in beats:
         duration = beat.end - beat.start
         selector = f"#{beat.id} .beat-inner"
-        lines.append(
-            f'tl.fromTo("{selector}", {{opacity:0,scale:.97}}, '
-            f'{{opacity:1,scale:1,duration:.32,ease:"power2.out"}}, {beat.start:.3f});'
-        )
+        entrances = {
+            "slam": ('{opacity:0,scale:1.34,rotation:2}', '"back.out(1.45)"'),
+            "wipe": ('{opacity:0,x:520,clipPath:"inset(0 0 0 100%)"}', '"power4.out"'),
+            "assemble": ('{opacity:0,y:180,rotation:-3}', '"expo.out"'),
+            "orbit": ('{opacity:0,scale:.55,rotation:-14}', '"power3.out"'),
+            "type_on": ('{opacity:0,filter:"blur(24px)"}', '"power2.out"'),
+            "count_up": ('{opacity:0,y:-120,scale:.8}', '"back.out(1.7)"'),
+            "collage": ('{opacity:0,x:-260,rotation:5}', '"power3.out"'),
+        }
+        origin, ease = entrances.get(beat.motion_style, ('{opacity:0,y:90,scale:.94}', '"power3.out"'))
+        lines.append(f'tl.fromTo("{selector}", {origin}, {{opacity:1,x:0,y:0,scale:1,rotation:0,clipPath:"inset(0 0 0 0)",filter:"blur(0px)",duration:.52,ease:{ease},immediateRender:false}}, {beat.start:.3f});')
         lines.append(
             f'tl.to("{selector}", {{opacity:0,duration:.22,ease:"power1.in"}}, '
             f'{max(beat.start + .4, beat.end - .22):.3f});'
@@ -186,11 +224,12 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
 *{{box-sizing:border-box}}html,body{{margin:0;width:1080px;height:1920px;overflow:hidden;background:#080b0c}}
 #root{{position:relative;width:100%;height:100%;overflow:hidden;font-family:Ray,sans-serif}}
 .base{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}
-.visual-beat{{position:absolute;left:46px;right:46px;top:82px;height:760px;padding:62px 58px;border-radius:42px;overflow:hidden;
-background:#f3f0e8;color:#151a1b;box-shadow:0 28px 80px #0007;direction:rtl}}
+.visual-beat{{position:absolute;left:42px;right:42px;top:72px;height:720px;padding:62px 58px;border-radius:42px;overflow:hidden;background:#f3f0e8;color:#151a1b;box-shadow:0 28px 80px #0007;direction:rtl}}
+.visual-beat.full_frame{{inset:0;height:1920px;border-radius:0;background:#efe9dc;display:grid;align-items:center}}
+.visual-beat.full_frame .beat-inner{{padding:240px 86px}}.visual-beat.full_frame h2{{font-size:108px;max-width:920px}}
 .beat-inner{{position:absolute;inset:0;padding:62px 58px;opacity:0}}
 .visual-beat:after{{content:"";position:absolute;inset:0;border:2px solid #ffffff80;border-radius:42px;pointer-events:none}}
-.eyebrow{{font-size:29px;color:#5a6263;margin-bottom:25px}}h2{{font-size:66px;line-height:1.28;margin:0;max-width:870px;letter-spacing:-.02em}}
+.ghost{{position:absolute;left:-20px;top:8px;font-size:190px;opacity:.06;white-space:nowrap;direction:rtl}}.eyebrow{{font-size:25px;color:#5a6263;margin-bottom:25px;text-transform:uppercase}}h2{{font-size:66px;line-height:1.28;margin:0;max-width:870px;letter-spacing:-.02em}}
 .teal{{--accent:#157a7b}}.amber{{--accent:#c77a25}}.stat{{font-size:150px;color:var(--accent);margin-top:58px;line-height:1}}
 .meter{{height:18px;background:#d8d4ca;border-radius:12px;margin-top:34px;overflow:hidden;direction:ltr}}.meter i{{display:block;width:78%;height:100%;background:var(--accent);transform-origin:left}}
 .step{{display:flex;align-items:center;gap:24px;margin-top:27px;font-size:40px}}.step b{{display:grid;place-items:center;width:72px;height:72px;border-radius:22px;background:var(--accent);color:white;font-size:28px}}.step span{{border-bottom:2px solid #151a1b20;padding:10px 0;flex:1}}

@@ -269,6 +269,10 @@ export interface TalkingReelState {
   analysis_ready?: boolean;
   hook2?: string;
   captions?: { i: number; text: string }[];
+  storyboard?: { i: number; title: string; visual_type: string; narrative_role?: string; motion_style?: string; why?: string }[];
+  visual_beats?: { title: string; visual_type: string; start: number; end: number; registry_refs?: string[] }[];
+  catalog_reviewed?: number;
+  visual_qc?: { passed: boolean; problems: string[]; samples: number; mean_scene_change: number };
   slots?: { i: number; label: string; source: "upload" | "library" | "ai" | "card"; file: string | null }[];
   output: string | null;
   duration?: number;
@@ -770,7 +774,7 @@ export const api = {
   async getTalkingReel(jobId: string): Promise<TalkingReelState> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel`));
   },
-  async editTalkingReel(jobId: string, body: Partial<Pick<TalkingReelState, "hook" | "hook2" | "hook_highlight" | "name" | "title" | "music" | "cta" | "style" | "captions">>): Promise<TalkingReelState> {
+  async editTalkingReel(jobId: string, body: Partial<Pick<TalkingReelState, "hook" | "hook2" | "hook_highlight" | "name" | "title" | "music" | "cta" | "style" | "captions" | "storyboard">>): Promise<TalkingReelState> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel`, {
       method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
     }));

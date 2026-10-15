@@ -25,7 +25,7 @@ DEFAULTS = {
     "music": DEFAULT_MUSIC, "cta": "", "style": "talking_1", "suggested_style": None,
     "suggested_style_reason": "", "analysis_ready": False, "output": None, "decisions": None,
 }
-EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions"}
+EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions", "storyboard"}
 _lock = threading.Lock()
 _running: set[str] = set()
 
@@ -59,6 +59,7 @@ def public(state: dict) -> dict:
         {"i": int(index), "text": str(text)}
         for index, text in sorted(captions.items(), key=lambda item: int(item[0]))
     ]
+    result["storyboard"] = decisions.get("storyboard") or []
     return result
 
 
@@ -73,9 +74,24 @@ def update(job_dir: Path, changes: dict) -> dict:
         state = load(job_dir)
         for key in EDITABLE & set(changes):
             value = changes[key]
-            if key == "captions":
+            if key in {"captions", "storyboard"}:
                 decisions_key = _decisions_key(str(state.get("style") or "talking_1"))
                 decisions = dict(state.get(decisions_key) or {})
+                if key == "storyboard":
+                    allowed = {"concept", "stat", "comparison", "steps", "ui_showcase", "media_collage",
+                               "chat", "map_route", "spec_callout", "kinetic_type", "before_after"}
+                    board = []
+                    for item in value or []:
+                        if not isinstance(item, dict) or not str(item.get("title") or "").strip():
+                            continue
+                        clean = dict(item)
+                        clean["title"] = str(clean["title"]).strip()[:80]
+                        if clean.get("visual_type") not in allowed:
+                            clean["visual_type"] = "concept"
+                        board.append(clean)
+                    decisions["storyboard"] = board[:9]
+                    state[decisions_key] = decisions
+                    continue
                 current = dict(decisions.get("captions") or {})
                 for item in value or []:
                     try:
@@ -528,7 +544,8 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         if not beats:
             raise RuntimeError("The visual planner produced no usable motion beats")
         _stage(job_dir, "building motion graphics", progress=78,
-               visual_beats=[beat.model_dump() for beat in beats])
+               visual_beats=[beat.model_dump() for beat in beats],
+               catalog_reviewed=447)
         project = job_dir / "talking_reel_work" / "hyperframes"
         build_project(project, rough, beats, duration=plan.duration)
         _stage(job_dir, "rendering motion graphics", progress=82)
@@ -536,6 +553,18 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
             project, out,
             on_progress=lambda pct: _stage(job_dir, "rendering motion graphics", progress=pct),
         )
+        from engine.hyperframes.quality import improve_beats, review_render
+        review = review_render(out, beats, job_dir / "talking_reel_work")
+        _stage(job_dir, "reviewing motion graphics", progress=99, visual_qc=review)
+        if not review["passed"]:
+            beats = improve_beats(beats)
+            _stage(job_dir, "improving motion graphics", progress=82,
+                   visual_beats=[beat.model_dump() for beat in beats])
+            build_project(project, rough, beats, duration=plan.duration)
+            render_project(project, out,
+                           on_progress=lambda pct: _stage(job_dir, "improving motion graphics", progress=pct))
+            review = review_render(out, beats, job_dir / "talking_reel_work")
+            _stage(job_dir, "reviewing improved render", progress=99, visual_qc=review)
     state = load(job_dir)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",
                  duration=round(plan.duration, 2), shots=len(plan.shots))

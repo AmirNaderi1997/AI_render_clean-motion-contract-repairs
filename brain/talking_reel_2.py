@@ -34,6 +34,12 @@ media files the creator uploaded. Return ONLY a JSON object:
              "items": ["<up to 4 short Persian facts, steps, labels or specs used by the visual>"],
              "media": "<one of the uploaded file names that fits this sentence, or empty>"}],
   "chips": [{"i": <sentence index>, "items": ["<1-3 word Persian label>", ...]}]
+  "storyboard": [{"i": <sentence index>,
+                   "title": "<2-6 word Persian on-screen idea>",
+                   "visual_type": "<one of the visual types above>",
+                   "narrative_role": "<hook|value|evidence|contrast|payoff>",
+                   "motion_style": "<slam|wipe|assemble|orbit|type_on|count_up|collage>",
+                   "why": "<short Persian reason this frame advances the story>"}]
 }
 
 Rules:
@@ -45,6 +51,10 @@ Rules:
   are better than constant decoration. Use each uploaded file at most once, where it fits best.
 - "chips": at most 2 lists, only where the speaker lists things (tools, steps, options, costs);
   2-4 items each, Persian, no Latin script unless a product name.
+- "storyboard": REQUIRED. Propose 7-9 short, varied visual beats before rendering. Multiple beats
+  may reference the same long sentence. Start with viewer value, then evidence/contrast, then payoff.
+  Never repeat the same visual_type or motion_style consecutively. A beat is a visual world, not a
+  bullet-list slide. Use steps at most once.
 """
 
 
@@ -145,6 +155,43 @@ def normalize(data: dict, count: int, media_names: list[str]) -> dict:
     hook = str(data.get("hook") or "").strip()
     if not hook:
         raise RuntimeError("the LLM returned no hook")
+    allowed = {"concept", "stat", "comparison", "steps", "ui_showcase", "media_collage",
+               "chat", "map_route", "spec_callout", "kinetic_type", "before_after"}
+    storyboard = []
+    for item in data.get("storyboard") or []:
+        k = index((item or {}).get("i"))
+        title = " ".join(str((item or {}).get("title") or "").split())[:80]
+        visual_type = str((item or {}).get("visual_type") or "concept")
+        if k is None or not title:
+            continue
+        if visual_type not in allowed or (storyboard and visual_type == storyboard[-1]["visual_type"]):
+            visual_type = ("kinetic_type", "comparison", "media_collage", "ui_showcase", "stat", "concept")[len(storyboard) % 6]
+        storyboard.append({
+            "i": k, "title": title, "visual_type": visual_type,
+            "narrative_role": str((item or {}).get("narrative_role") or "evidence")[:20],
+            "motion_style": str((item or {}).get("motion_style") or "slide")[:20],
+            "why": str((item or {}).get("why") or "این بخش را تصویری و قابل‌فهم می‌کند")[:120],
+        })
+    # Some transcripts contain only one or two very long sentences.  Build a
+    # real multi-beat proposal from their clauses instead of one 30-second card.
+    pool = [(k, str(shared["captions"].get(k) or shared["captions"].get(str(k)) or ""))
+            for k in range(count) if k not in shared["drop"]]
+    fragments = []
+    for k, text in pool:
+        parts = [p.strip() for p in re.split(r"[،؛؟?!]|(?:\s+که\s+)|(?:\s+ولی\s+)|(?:\s+بعد\s+)", text) if len(p.split()) >= 2]
+        fragments.extend((k, " ".join(p.split()[:6])) for p in (parts or [text]) if p.strip())
+    types = ["kinetic_type", "concept", "comparison", "media_collage", "ui_showcase", "stat", "chat", "before_after"]
+    motions = ["slam", "assemble", "wipe", "collage", "orbit", "count_up", "type_on", "reveal"]
+    target = min(9, max(7, len(fragments)))
+    n = 0
+    while len(storyboard) < target and fragments:
+        k, title = fragments[n % len(fragments)]
+        vt = types[len(storyboard) % len(types)]
+        storyboard.append({"i": k, "title": title or "نکته مهم", "visual_type": vt,
+                           "narrative_role": "hook" if not storyboard else ("payoff" if len(storyboard) == target - 1 else "evidence"),
+                           "motion_style": motions[len(storyboard) % len(motions)],
+                           "why": "تبدیل حرف گوینده به یک تصویر کوتاه و متمایز"})
+        n += 1
     return {"hook": hook, "captions": shared["captions"], "drop": shared["drop"],
             "cold_open": shared.get("cold_open"), "broll": sorted(broll, key=lambda b: b["i"]),
-            "chips": chips[:2]}
+            "chips": chips[:2], "storyboard": storyboard[:9]}
