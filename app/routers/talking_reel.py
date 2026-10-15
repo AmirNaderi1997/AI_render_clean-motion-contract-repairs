@@ -23,6 +23,7 @@ class ReelEdit(BaseModel):
     cta: Optional[str] = None
     style: Optional[str] = None
     hook2: Optional[str] = None
+    captions: Optional[list[dict]] = None
 
 
 def _job(request: Request, job_id: str):
@@ -51,6 +52,17 @@ def render(request: Request, job_id: str, regenerate: bool = False):
     job = _job(request, job_id)
     try:
         return store.public(store.start(job.dir, job.dir / "raw" / job.raw_name, regenerate=regenerate))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/analyze")
+def analyze(request: Request, job_id: str, style: Optional[str] = None):
+    job = _job(request, job_id)
+    try:
+        return store.public(store.analyze(
+            job.dir, job.dir / "raw" / job.raw_name, style=style,
+        ))
     except ValueError as exc:
         raise HTTPException(409, str(exc))
 

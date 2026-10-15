@@ -22,9 +22,10 @@ DEFAULT_MUSIC = "assets/music/motivational_piano_beat.mp3"
 DEFAULTS = {
     "status": "idle", "stage": "", "message": "", "progress": 0,
     "hook": "", "hook_highlight": [], "name": "Reza Rafiei", "title": "Founder Of Rafiei Group",
-    "music": DEFAULT_MUSIC, "cta": "", "style": "talking_1", "output": None, "decisions": None,
+    "music": DEFAULT_MUSIC, "cta": "", "style": "talking_1", "suggested_style": None,
+    "suggested_style_reason": "", "analysis_ready": False, "output": None, "decisions": None,
 }
-EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style"}
+EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions"}
 _lock = threading.Lock()
 _running: set[str] = set()
 
@@ -50,7 +51,19 @@ def save(job_dir: Path, state: dict) -> dict:
 
 
 def public(state: dict) -> dict:
-    return {k: v for k, v in state.items() if not k.startswith("decisions")}
+    result = {k: v for k, v in state.items() if not k.startswith("decisions")}
+    key = _decisions_key(str(state.get("style") or "talking_1"))
+    decisions = state.get(key) or {}
+    captions = decisions.get("captions") or {}
+    result["captions"] = [
+        {"i": int(index), "text": str(text)}
+        for index, text in sorted(captions.items(), key=lambda item: int(item[0]))
+    ]
+    return result
+
+
+def _decisions_key(style: str) -> str:
+    return "decisions" if style == "talking_1" else f"decisions_{style.rsplit('_', 1)[-1]}"
 
 
 def update(job_dir: Path, changes: dict) -> dict:
@@ -60,6 +73,22 @@ def update(job_dir: Path, changes: dict) -> dict:
         state = load(job_dir)
         for key in EDITABLE & set(changes):
             value = changes[key]
+            if key == "captions":
+                decisions_key = _decisions_key(str(state.get("style") or "talking_1"))
+                decisions = dict(state.get(decisions_key) or {})
+                current = dict(decisions.get("captions") or {})
+                for item in value or []:
+                    try:
+                        index = int(item.get("i"))
+                    except (AttributeError, TypeError, ValueError):
+                        continue
+                    text = str(item.get("text") or "").strip()
+                    if text and (index in current or str(index) in current):
+                        current[index] = text
+                        current.pop(str(index), None)
+                decisions["captions"] = current
+                state[decisions_key] = decisions
+                continue
             if key == "hook_highlight":
                 value = [str(v).strip() for v in (value or []) if str(v).strip()]
             elif key == "style":
@@ -85,12 +114,80 @@ def resolve_music(music: Optional[str]) -> Optional[Path]:
     return path
 
 
+def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None) -> dict:
+    """Transcribe and prepare editable AI decisions without starting a render."""
+    key = str(job_dir)
+    with _lock:
+        if key in _running:
+            raise ValueError("talking reel is busy")
+        state = load(job_dir)
+        state.update(status="running", stage="transcribing", message="", progress=5, analysis_ready=False)
+        save(job_dir, state)
+        _running.add(key)
+
+    def run() -> None:
+        try:
+            _analyze(job_dir, raw_video, style=style)
+        except Exception as exc:
+            log.exception("talking reel analysis failed for %s", job_dir.name)
+            current = load(job_dir)
+            current.update(status="error", stage="", message=str(exc)[:500], analysis_ready=False)
+            save(job_dir, current)
+        finally:
+            with _lock:
+                _running.discard(key)
+
+    threading.Thread(target=run, daemon=True).start()
+    return state
+
+
+def _analyze(job_dir: Path, video: Path, *, style: Optional[str]) -> None:
+    from dotenv import load_dotenv
+    from importlib import import_module
+    from brain import talking_reel as base_brain
+
+    load_dotenv(PROJECT_ROOT / ".env")
+    transcript = transcript_for(job_dir, video)
+    selected = style
+    reason = ""
+    if not selected:
+        _stage(job_dir, "choosing style", progress=15)
+        selected, reason = base_brain.recommend_style(transcript["sentences"])
+    from engine.talking_reel import STYLES
+    if selected not in STYLES:
+        raise ValueError(f"unknown style {selected!r}")
+
+    _stage(job_dir, "editing text", progress=30)
+    state = load(job_dir)
+    if selected == "talking_1":
+        decisions = base_brain.decide(transcript["sentences"])
+        state["decisions"] = decisions
+        state["hook"] = decisions["hook"]
+        state["hook_highlight"] = decisions["hook_highlight"]
+    else:
+        brain_name, decisions_key, _music = SPLIT_STYLES[selected]
+        decisions = import_module(brain_name).decide(
+            transcript["sentences"], [p.name for p in user_media(job_dir)]
+        )
+        state[decisions_key] = decisions
+        state["hook2"] = decisions["hook"]
+    state.update(
+        status="ready", stage="", message="", progress=100, style=selected,
+        suggested_style=selected if style is None else state.get("suggested_style"),
+        suggested_style_reason=reason if style is None else state.get("suggested_style_reason", ""),
+        analysis_ready=True,
+    )
+    save(job_dir, state)
+
+
 def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False) -> dict:
     key = str(job_dir)
     with _lock:
         if key in _running:
             raise ValueError("talking reel is busy")
         state = load(job_dir)
+        if not state.get("analysis_ready"):
+            raise ValueError("analyze and review the talking reel before rendering")
         state.update(status="running", stage="queued", message="", progress=0)
         save(job_dir, state)
         _running.add(key)

@@ -6,7 +6,8 @@ import { friendlyError, notify } from "./ui";
 const DEFAULT_MUSIC = "assets/music/motivational_piano_beat.mp3";
 const STAGES: Record<string, string> = {
   queued: "در صف", transcribing: "تشخیص گفتار", "editing text": "اصلاح متن و تیتر",
-  "tracking the face": "تشخیص صورت", "finding pictures": "پیدا کردن و ساختن تصویرها", rendering: "رندر",
+  "choosing style": "انتخاب هوشمند استایل", "tracking the face": "تشخیص صورت",
+  "finding pictures": "پیدا کردن و ساختن تصویرها", rendering: "رندر",
 };
 
 /** Talking-head reel (podcast clip -> styled vertical reel) for one job. */
@@ -53,7 +54,7 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
       if (!regenerate) {
         await api.editTalkingReel(jobId, {
           hook: draft.hook, hook_highlight: draft.hook_highlight, name: draft.name, title: draft.title, music: draft.music,
-          cta: draft.cta ?? "", style: draft.style || "talking_1", hook2: draft.hook2 ?? "",
+          cta: draft.cta ?? "", style: draft.style || "talking_1", hook2: draft.hook2 ?? "", captions: draft.captions ?? [],
         });
       }
       setState(await api.renderTalkingReel(jobId, regenerate));
@@ -61,15 +62,29 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
     } catch (err) { setError(friendlyError(err, "start the talking reel")); }
   }
 
+  async function analyze(style?: string) {
+    setError("");
+    try {
+      if (style) await api.editTalkingReel(jobId, { style });
+      setState(await api.analyzeTalkingReel(jobId, style));
+      notify("تحلیل و پیشنهادهای قبل از رندر شروع شد");
+    } catch (err) { setError(friendlyError(err, "analyze the talking reel")); }
+  }
+
+  async function chooseStyle(style: string) {
+    setDraft({ ...draft!, style });
+    await analyze(style);
+  }
+
   return (
     <div className="card" dir="rtl">
       <div className="section-header">
         <h2>ویدیوی صحبتی (پادکست ← ریل عمودی)</h2>
         <span className="tag">
-          {running ? `${STAGES[state.stage] || state.stage} ${state.progress}%` : state.status === "done" ? "آماده" : state.status === "error" ? "خطا" : ""}
+          {running ? `${STAGES[state.stage] || state.stage} ${state.progress}%` : state.status === "ready" ? "آماده‌ی بازبینی" : state.status === "done" ? "آماده" : state.status === "error" ? "خطا" : ""}
         </span>
       </div>
-      <p className="muted">شروع با هوک (جمله‌ی کوبنده + تیتر پاپ‌آپ)، کات روی سکوت‌ها، زوم نزدیک/باز و زوم آروم، رنگ گرم و کنتراست‌دار، وینیت، تیتر و زیرنویس اصلاح‌شده، اسم و سمت و موزیک انگیزشی.</p>
+      <p className="muted">اول ترنسکریب و تحلیل انجام می‌شود. استایل پیشنهادی، تیتر قلاب، کلمات برجسته و زیرنویس‌ها را بازبینی کن؛ سپس رندر را شروع کن.</p>
       {state.status === "error" && <div className="errors">{state.message}</div>}
       {error && <div className="errors">{error}</div>}
       {state.output && state.status === "done" && (
@@ -80,11 +95,13 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
       )}
       <div className="row">
         <label>استایل تدوین
-          <select value={draft.style || "talking_1"} disabled={running} onChange={e => setDraft({ ...draft, style: e.target.value })}>
+          <select value={draft.style || "talking_1"} disabled={running} onChange={e => { void chooseStyle(e.target.value); }}>
             {styles.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
         </label>
+        {state.suggested_style && <span className="tag">پیشنهاد سیستم: {styles.find(s => s.id === state.suggested_style)?.label || state.suggested_style}</span>}
       </div>
+      {state.suggested_style_reason && <p className="muted">دلیل پیشنهاد: {state.suggested_style_reason}</p>}
       {enhanced ? (
         <>
           <div className="row">
@@ -126,6 +143,20 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
           </label>
         </div>
       )}
+      {draft.captions && draft.captions.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <h3>بازبینی زیرنویس‌ها قبل از رندر</h3>
+          <div style={{ display: "grid", gap: 8, maxHeight: 360, overflowY: "auto" }}>
+            {draft.captions.map((caption, index) => (
+              <label key={caption.i} className="row" style={{ alignItems: "center" }}>
+                <span className="tag">{caption.i + 1}</span>
+                <input value={caption.text} disabled={running} style={{ flex: 1 }}
+                  onChange={e => setDraft({ ...draft, captions: draft.captions!.map((item, i) => i === index ? { ...item, text: e.target.value } : item) })} />
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="row">
         <label>اسم <input dir="ltr" value={draft.name} disabled={running} onChange={e => setDraft({ ...draft, name: e.target.value })} /></label>
         <label>سمت <input dir="ltr" value={draft.title} disabled={running} onChange={e => setDraft({ ...draft, title: e.target.value })} /></label>
@@ -141,8 +172,8 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
         </label>
       </div>
       <div className="row">
-        <button disabled={running} onClick={() => { void render(false); }}>{state.output ? "رندر دوباره با این تنظیمات" : "ساخت ویدیوی صحبتی"}</button>
-        <button className="btn-secondary" disabled={running} onClick={() => { void render(true); }}>پیشنهاد دوباره‌ی تیتر و زیرنویس (AI)</button>
+        <button disabled={running || !state.analysis_ready} onClick={() => { void render(false); }}>{state.output ? "رندر دوباره با این تنظیمات" : "تأیید تنظیمات و شروع رندر"}</button>
+        <button className="btn-secondary" disabled={running} onClick={() => { void analyze(draft.style || "talking_1"); }}>پیشنهاد دوباره‌ی تیتر و زیرنویس (بدون رندر)</button>
       </div>
     </div>
   );

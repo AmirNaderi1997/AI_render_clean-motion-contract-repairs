@@ -253,7 +253,7 @@ export interface LocalizeLine {
 }
 
 export interface TalkingReelState {
-  status: "idle" | "running" | "done" | "error";
+  status: "idle" | "running" | "ready" | "done" | "error";
   stage: string;
   message: string;
   progress: number;
@@ -264,7 +264,11 @@ export interface TalkingReelState {
   music: string | null;
   cta: string;
   style: string;
+  suggested_style?: string | null;
+  suggested_style_reason?: string;
+  analysis_ready?: boolean;
   hook2?: string;
+  captions?: { i: number; text: string }[];
   slots?: { i: number; label: string; source: "upload" | "library" | "ai" | "card"; file: string | null }[];
   output: string | null;
   duration?: number;
@@ -766,13 +770,17 @@ export const api = {
   async getTalkingReel(jobId: string): Promise<TalkingReelState> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel`));
   },
-  async editTalkingReel(jobId: string, body: Partial<Pick<TalkingReelState, "hook" | "hook2" | "hook_highlight" | "name" | "title" | "music" | "cta" | "style">>): Promise<TalkingReelState> {
+  async editTalkingReel(jobId: string, body: Partial<Pick<TalkingReelState, "hook" | "hook2" | "hook_highlight" | "name" | "title" | "music" | "cta" | "style" | "captions">>): Promise<TalkingReelState> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel`, {
       method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
     }));
   },
   async renderTalkingReel(jobId: string, regenerate = false): Promise<TalkingReelState> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/render?regenerate=${regenerate}`, { method: "POST" }));
+  },
+  async analyzeTalkingReel(jobId: string, style?: string): Promise<TalkingReelState> {
+    const query = style ? `?style=${encodeURIComponent(style)}` : "";
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/analyze${query}`, { method: "POST" }));
   },
   async talkingReelMedia(jobId: string): Promise<string[]> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/media`));

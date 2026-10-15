@@ -3,7 +3,7 @@ import { api, TalkingReelSummary } from "./api";
 import { TalkingReelCard } from "./TalkingReel";
 import { friendlyError, notify } from "./ui";
 
-const STATUS: Record<string, string> = { idle: "آماده‌ی ساخت", running: "در حال ساخت", done: "آماده", error: "خطا" };
+const STATUS: Record<string, string> = { idle: "آماده‌ی تحلیل", running: "در حال تحلیل یا ساخت", ready: "آماده‌ی بازبینی", done: "آماده", error: "خطا" };
 
 /** Talking-head videos: upload a podcast clip, get a styled vertical reel. */
 export default function TalkingReels() {
@@ -29,8 +29,8 @@ export default function TalkingReels() {
     setProgress(0);
     try {
       const { job } = await api.createJob(file, undefined, setProgress);
-      await api.renderTalkingReel(job.id, true);
-      notify("ساخت ویدیوی صحبتی شروع شد");
+      await api.analyzeTalkingReel(job.id);
+      notify("تحلیل ویدیو شروع شد؛ قبل از رندر تنظیمات را بازبینی کن");
       setFile(null);
       setSelected(job.id);
       await refresh();
@@ -41,11 +41,11 @@ export default function TalkingReels() {
   return (
     <div dir="rtl">
       <h1>ویدیو صحبتی</h1>
-      <p className="muted">ویدیوی پادکست یا صحبت (افقی یا عمودی) رو آپلود کن. خودش متن رو درمیاره و اصلاح می‌کنه، تیتر قلاب و هوک شروع می‌سازه، روی سکوت‌ها کات می‌زنه، زوم و رنگ و موزیک و پایان‌بندی لوگو اضافه می‌کنه. بعد از ساخت، تیتر و زیرنویس و بقیه‌ی تنظیمات قابل ویرایشه.</p>
+      <p className="muted">ویدیو را آپلود کن؛ سیستم ابتدا متن را درمی‌آورد، بهترین استایل را پیشنهاد می‌دهد و هوک و زیرنویس‌ها را برای بازبینی آماده می‌کند. رندر فقط بعد از تأیید تو شروع می‌شود.</p>
       <form className="card row" onSubmit={upload}>
         <input type="file" accept="video/*" onChange={e => setFile(e.target.files?.[0] || null)} disabled={progress !== null} />
         <button type="submit" disabled={!file || progress !== null}>
-          {progress !== null ? `در حال آپلود ${progress}%` : "آپلود و ساخت ویدیوی صحبتی"}
+          {progress !== null ? `در حال آپلود ${progress}%` : "آپلود و تحلیل ویدیو"}
         </button>
       </form>
       {error && <div className="errors">{error}</div>}

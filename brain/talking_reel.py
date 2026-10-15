@@ -48,6 +48,13 @@ black-and-white moment: write it in Persian words only (no English words, no Lat
 
 FILLER_WORDS = re.compile(r"^(?:[اآ]+[ِ]?)+$|^(?:ا?م+|ا?و?م+|ا?ه+)$")
 
+STYLE_SELECTOR_PROMPT = """Choose the best edit style for a Persian talking-head reel from its transcript.
+Return ONLY JSON: {"style":"talking_1|talking_2|talking_3|talking_4","reason":"short Persian reason"}.
+Use talking_1 for energetic personal-brand clips that benefit from bold hooks and punchy zooms.
+Use talking_2 for practical education, lists, tools, steps, or concrete explanations where a few minimal illustrations help.
+Use talking_3 for emotional stories, dramatic ideas, or reflective narratives that benefit from cinematic chapter cards.
+Use talking_4 for calm, authentic speaker-led clips where generated visuals would distract. Prefer talking_4 when uncertain."""
+
 
 def _sentences_prompt(sentences: list[dict]) -> str:
     rows = [f"{k}: [{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for k, s in enumerate(sentences)]
@@ -69,6 +76,16 @@ def _chat(system: str, user: str) -> dict:
                 errors.append(f"{provider.name}: {exc}")
                 log.warning("talking reel LLM attempt failed (%s): %s", provider.name, exc)
     raise RuntimeError("LLM unavailable for the talking reel (check the VPN): " + " | ".join(errors)[:600])
+
+
+def recommend_style(sentences: list[dict]) -> tuple[str, str]:
+    """Select a talking-reel style before rendering and explain it to the editor."""
+    data = _chat(STYLE_SELECTOR_PROMPT, _sentences_prompt(sentences))
+    style = str(data.get("style") or "").strip()
+    if style not in {"talking_1", "talking_2", "talking_3", "talking_4"}:
+        style = "talking_4"
+    reason = str(data.get("reason") or "").strip()
+    return style, reason
 
 
 def decide(sentences: list[dict]) -> dict:
