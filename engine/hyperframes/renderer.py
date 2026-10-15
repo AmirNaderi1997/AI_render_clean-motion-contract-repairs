@@ -27,12 +27,24 @@ def render_project(
     env = {**os.environ, "NO_COLOR": "1"}
     if on_progress:
         on_progress(83)
-    check = subprocess.run(
-        ["npx", "--yes", f"hyperframes@{HYPERFRAMES_VERSION}", "check", "."],
-        cwd=project_dir, env=env, text=True, capture_output=True, timeout=180,
-    )
-    if check.returncode:
-        raise HyperFramesError(f"HyperFrames check failed: {(check.stderr or check.stdout)[-1200:]}")
+    check = None
+    detail = ""
+    for attempt in range(3):
+        check = subprocess.run(
+            ["npx", "--yes", f"hyperframes@{HYPERFRAMES_VERSION}", "check", "."],
+            cwd=project_dir, env=env, text=True, capture_output=True, timeout=180,
+        )
+        detail = "\n".join(part for part in (check.stdout, check.stderr) if part)
+        if not check.returncode:
+            break
+        # Browser startup occasionally misses the CLI's 10s navigation
+        # window even though the identical project passes immediately after.
+        # Retry only that transient; structural/runtime errors still fail fast.
+        if "Navigation timeout" not in detail or attempt == 2:
+            raise HyperFramesError(f"HyperFrames check failed: {detail[-2400:]}")
+        time.sleep(1.5 * (attempt + 1))
+    if check is None or check.returncode:
+        raise HyperFramesError(f"HyperFrames check failed: {detail[-2400:]}")
     if on_progress:
         on_progress(86)
     command = (
