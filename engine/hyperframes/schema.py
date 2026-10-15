@@ -19,6 +19,7 @@ class VisualBeat(BaseModel):
     items: list[str] = Field(default_factory=list, max_length=4)
     layout: Literal["top_panel", "full_frame"] = "top_panel"
     accent: Literal["teal", "amber"] = "teal"
+    registry_refs: list[str] = Field(default_factory=list, max_length=3)
 
     @model_validator(mode="after")
     def valid_range(self):

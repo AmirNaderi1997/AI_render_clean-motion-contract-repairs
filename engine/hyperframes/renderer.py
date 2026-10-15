@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 
-HYPERFRAMES_VERSION = "0.8.160"
+HYPERFRAMES_VERSION = "0.8.161"
 
 
 class HyperFramesError(RuntimeError):

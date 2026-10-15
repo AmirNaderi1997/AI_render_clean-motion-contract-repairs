@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 
 from .schema import VisualBeat
+from .catalog import recommend
 
 ROOT = Path(__file__).resolve().parents[2]
 RAY = ROOT / "presets" / "fonts" / "RAY-EXTRABOLD.TTF"
@@ -47,10 +48,12 @@ def build_visual_beats(plan, decisions: dict) -> list[VisualBeat]:
             title = " ".join(str(item.get("visual") or "").split()[:5]) or "نکته مهم"
         raw_items = list(item.get("items") or []) or chips.get(sentence, [])
         values = [" ".join(str(value).split())[:35] for value in raw_items if str(value).strip()]
+        visual_type = _visual_type(title, values, str(item.get("visual_type") or ""))
         beats.append(VisualBeat(
             id=f"beat-{sentence}-{n}", start=start, end=end,
-            anchor_word=title.split()[0], visual_type=_visual_type(title, values, str(item.get("visual_type") or "")),
+            anchor_word=title.split()[0], visual_type=visual_type,
             title=title, items=values, accent="amber" if n % 2 else "teal",
+            registry_refs=[match["name"] for match in recommend(visual_type, title)],
         ))
     return beats
 
@@ -103,11 +106,11 @@ def _timeline_script(beats: list[VisualBeat]) -> str:
         duration = beat.end - beat.start
         selector = f"#{beat.id} .beat-inner"
         lines.append(
-            f'tl.fromTo("{selector}", {{opacity:0,y:-22,scale:.97}}, '
-            f'{{opacity:1,y:0,scale:1,duration:.32,ease:"power2.out"}}, {beat.start:.3f});'
+            f'tl.fromTo("{selector}", {{opacity:0,scale:.97}}, '
+            f'{{opacity:1,scale:1,duration:.32,ease:"power2.out"}}, {beat.start:.3f});'
         )
         lines.append(
-            f'tl.to("{selector}", {{opacity:0,y:-10,duration:.22,ease:"power1.in"}}, '
+            f'tl.to("{selector}", {{opacity:0,duration:.22,ease:"power1.in"}}, '
             f'{max(beat.start + .4, beat.end - .22):.3f});'
         )
         if beat.visual_type == "stat":
@@ -159,7 +162,16 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
     except OSError:
         shutil.copy2(base_video, video)
     shutil.copy2(RAY, assets / "ray-extrabold.ttf")
-    metadata = {"id": "ai-render-talking-2", "name": "AI Render Talking 2"}
+    visual_library = []
+    for beat in beats:
+        value = beat.model_dump()
+        if not value["registry_refs"]:
+            value["registry_refs"] = [match["name"] for match in recommend(beat.visual_type, beat.title)]
+        visual_library.append(value)
+    metadata = {
+        "id": "ai-render-talking-2", "name": "AI Render Talking 2",
+        "visual_library": visual_library,
+    }
     (project_dir / "meta.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
     (project_dir / "hyperframes.json").write_text(json.dumps({
         "$schema": "https://hyperframes.heygen.com/schema/hyperframes.json",
@@ -189,7 +201,7 @@ background:#f3f0e8;color:#151a1b;box-shadow:0 28px 80px #0007;direction:rtl}}
 .chat-stack{{display:flex;flex-direction:column;gap:18px;margin-top:40px}}.bubble{{max-width:72%;padding:20px 28px;border-radius:28px;font-size:34px}}.bubble.b0{{align-self:flex-start;background:#e1ddd3}}.bubble.b1{{align-self:flex-end;background:var(--accent);color:#fff}}
 .route{{height:300px;margin-top:25px}}.route svg{{width:100%;height:100%;overflow:visible}}.route path{{fill:none;stroke:var(--accent);stroke-width:14;stroke-linecap:round;stroke-dasharray:22 22}}.route circle{{fill:#f3f0e8;stroke:var(--accent);stroke-width:12}}
 .specs{{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:48px}}.specs span{{display:flex;flex-direction:column;gap:18px;padding:26px 18px;border:3px solid #151a1b;border-radius:24px;font-size:29px}}.specs b{{font-size:48px;color:var(--accent)}}
-.kinetic{{font-size:118px;line-height:1;margin-top:55px;color:var(--accent);max-width:900px;overflow:hidden}}
+.kinetic{{font-size:118px;line-height:1.3;margin-top:55px;color:var(--accent);max-width:900px;min-height:190px;padding-bottom:30px;overflow:hidden}}
 .before-after{{display:grid;grid-template-columns:1fr 10px 1fr;gap:20px;align-items:center;margin-top:75px;font-size:70px;text-align:center}}.before-after i{{height:210px;background:var(--accent);border-radius:9px}}
 </style></head><body><main id="root" data-composition-id="main" data-start="0" data-duration="{duration:.3f}" data-width="1080" data-height="1920">
 <video id="rough-cut" class="base clip" src="./assets/base.mp4" data-start="0" data-duration="{duration:.3f}" data-track-index="0" data-has-audio="true"></video>
