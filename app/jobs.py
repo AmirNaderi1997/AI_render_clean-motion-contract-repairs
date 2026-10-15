@@ -30,6 +30,7 @@ from app import plan_versions
 
 
 JOBS_ROOT = Path(settings.JOBS_DIR).expanduser()
+LOCAL_REGISTRY = JOBS_ROOT / ".registry.json"
 
 
 def _ensure_jobs_root() -> None:
@@ -236,6 +237,71 @@ def _write_status(job: Job) -> None:
         _await_db(_persist_job(job))
     with _lock:
         _jobs[job.id] = job
+        if not DB_AVAILABLE:
+            _save_local_registry_locked()
+
+
+def _save_local_registry_locked() -> None:
+    """Persist the development fallback registry atomically.
+
+    Media stays inside each job directory; this file only replaces the
+    PostgreSQL metadata rows when DATABASE_URL is intentionally absent.
+    Caller must hold ``_lock``.
+    """
+    _ensure_jobs_root()
+    payload = {job_id: job.to_dict() for job_id, job in _jobs.items()}
+    tmp = LOCAL_REGISTRY.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1))
+    tmp.replace(LOCAL_REGISTRY)
+
+
+def _fallback_user_id() -> Optional[str]:
+    """Assign recovered legacy folders only when one local account exists."""
+    try:
+        from app.auth import _load_users
+        active = [str(value.get("id") or key) for key, value in _load_users().items()
+                  if value.get("is_active", True)]
+        return active[0] if len(active) == 1 else None
+    except Exception:
+        return None
+
+
+def _job_from_local_payload(job_id: str, payload: dict) -> Job:
+    render = payload.get("render") or {}
+    generate = payload.get("generate") or {}
+    qc = payload.get("qc") or {}
+    music = payload.get("music") or {}
+    return Job(
+        id=job_id, dir=JOBS_ROOT / job_id, user_id=payload.get("user_id"),
+        raw_name=payload.get("raw_name"), plan_name=payload.get("plan_name") or "plan.json",
+        render=RenderState(**{k: render.get(k, getattr(RenderState(), k)) for k in RenderState.__dataclass_fields__}),
+        generate=GenerateState(**{k: generate.get(k, getattr(GenerateState(), k)) for k in GenerateState.__dataclass_fields__}),
+        qc=QCState(**{k: qc.get(k, getattr(QCState(), k)) for k in QCState.__dataclass_fields__}),
+        music=MusicState(**{k: music.get(k, getattr(MusicState(), k)) for k in MusicState.__dataclass_fields__}),
+        versions=list(payload.get("versions") or []),
+    )
+
+
+def _recover_local_folder(folder: Path, user_id: Optional[str]) -> Optional[Job]:
+    raw_files = sorted((folder / "raw").glob("*")) if (folder / "raw").is_dir() else []
+    raw = next((path for path in raw_files if path.is_file()), None)
+    if raw is None:
+        return None
+    job = Job(id=folder.name, dir=folder, user_id=user_id, raw_name=raw.name)
+    talking = folder / "talking_reel.json"
+    if talking.is_file():
+        try:
+            state = json.loads(talking.read_text())
+            output = state.get("output")
+            if state.get("status") == "done" and output and (folder / output).is_file():
+                job.render = RenderState(status="done", progress=100, output=Path(output).name)
+            if state.get("analysis_ready"):
+                job.generate.status = "done"
+        except (OSError, ValueError):
+            pass
+    job.versions = sorted(path.name for path in (folder / "exports").glob("*.mp4")) \
+        if (folder / "exports").is_dir() else []
+    return job
 
 
 def create_job(user_id: Optional[str] = None, db=None, *, persist: bool = True) -> Job:
@@ -304,7 +370,28 @@ def rescan(root: Optional[Path] = None) -> int:
         cleanup_orphaned_jobs()
         _recover_stuck_jobs()
         return len(list_jobs())
+    scan_root = (root or JOBS_ROOT).expanduser()
+    scan_root.mkdir(parents=True, exist_ok=True)
+    recovered: dict[str, Job] = {}
+    if LOCAL_REGISTRY.is_file():
+        try:
+            payload = json.loads(LOCAL_REGISTRY.read_text())
+            for job_id, value in payload.items():
+                if Path(job_id).name == job_id and (scan_root / job_id).is_dir():
+                    recovered[job_id] = _job_from_local_payload(job_id, value)
+        except (OSError, ValueError, TypeError):
+            recovered = {}
+    fallback_user = _fallback_user_id()
+    for folder in scan_root.iterdir():
+        if not folder.is_dir() or folder.name == "dead_letters" or folder.name in recovered:
+            continue
+        job = _recover_local_folder(folder, fallback_user)
+        if job is not None:
+            recovered[job.id] = job
     with _lock:
+        _jobs.clear()
+        _jobs.update(recovered)
+        _save_local_registry_locked()
         return len(_jobs)
 
 
