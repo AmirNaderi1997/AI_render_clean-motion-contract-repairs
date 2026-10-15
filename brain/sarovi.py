@@ -3,10 +3,21 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import urllib.error
 import urllib.request
 
 BASE_URL = "https://api.sarovi.ir/v1"
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """Use certifi when macOS framework Python has no usable system CA store."""
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
 
 
 def response_output_text(result: dict) -> str:
@@ -39,7 +50,7 @@ def request(path: str, payload: dict, *, timeout: float = 300) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as response:
             result = json.load(response)
     except urllib.error.HTTPError as exc:
         try:
