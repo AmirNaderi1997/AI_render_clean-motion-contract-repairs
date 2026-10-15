@@ -532,7 +532,10 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         project = job_dir / "talking_reel_work" / "hyperframes"
         build_project(project, rough, beats, duration=plan.duration)
         _stage(job_dir, "rendering motion graphics", progress=82)
-        render_project(project, out)
+        render_project(
+            project, out,
+            on_progress=lambda pct: _stage(job_dir, "rendering motion graphics", progress=pct),
+        )
     state = load(job_dir)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",
                  duration=round(plan.duration, 2), shots=len(plan.shots))
