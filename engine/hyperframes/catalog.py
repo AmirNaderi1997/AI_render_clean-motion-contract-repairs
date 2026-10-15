@@ -12,6 +12,7 @@ from pathlib import Path
 
 
 INDEX = Path(__file__).with_name("catalog_index.json")
+PROFILES = Path(__file__).with_name("catalog_profiles.json")
 
 TYPE_TAGS = {
     "concept": ("diagram", "editorial", "symbol", "callout", "flowchart"),
@@ -31,7 +32,7 @@ PREFERRED = {
     "concept": ("flowchart", "mk-callout-highlight", "editorial-flash-overlay"),
     "stat": ("mk-progress-stat", "data-chart", "stat-counter"),
     "comparison": ("comparison-split", "before-after-wipe"),
-    "steps": ("flowchart", "mk-specs-list"),
+    "steps": ("hw-pipeline", "flowchart-vertical", "flowchart", "mk-specs-list"),
     "ui_showcase": ("app-showcase", "ai-chat-reveal"),
     "media_collage": ("paper-collage-reveal",),
     "chat": ("message-thread-reveal", "chat-thread"),
@@ -51,6 +52,14 @@ def load_catalog() -> dict:
     if not INDEX.exists():
         return {"items": [], "sources": []}
     return json.loads(INDEX.read_text())
+
+
+@lru_cache(maxsize=1)
+def load_profiles() -> dict[str, dict]:
+    if not PROFILES.exists():
+        return {}
+    data = json.loads(PROFILES.read_text())
+    return {str(item.get("name")): item for item in data.get("items", []) if item.get("name")}
 
 
 def catalog_stats() -> dict:
@@ -86,12 +95,19 @@ def recommend(visual_type: str, title: str = "", *, limit: int = 3,
         ]))
         tag_score = len(wanted & haystack) * 5
         text_score = len(title_tokens & haystack) * 2
-        orientation_score = {"portrait": 4, "square": 2, "landscape": 0}.get(item.get("orientation"), 1)
+        profile = load_profiles().get(str(item.get("name")), {})
+        orientation = profile.get("orientation") or item.get("orientation")
+        orientation_score = {"portrait": 8, "overlay": 6, "square": 2, "landscape": -4}.get(orientation, 1)
         component_score = 2 if item.get("type") == "component" else 0
         preferred = PREFERRED.get(visual_type, ())
         preferred_score = (len(preferred) - preferred.index(item.get("name"))) * 20 if item.get("name") in preferred else 0
         score = tag_score + text_score + orientation_score + component_score + preferred_score
+        score += min(8, max(-8, int(profile.get("talking_reel_score") or 0)))
+        if profile.get("runtime", {}).get("webgpu"):
+            score -= 8
+        if profile.get("external_media"):
+            score -= 4
         if score:
-            ranked.append((score, item.get("name", ""), item))
+            ranked.append((score, item.get("name", ""), {**item, "profile": profile}))
     ranked.sort(key=lambda row: (-row[0], row[1]))
     return [item for _, _, item in ranked[:limit]]

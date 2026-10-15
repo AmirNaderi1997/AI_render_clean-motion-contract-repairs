@@ -519,8 +519,9 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
     visual_plan = media.plan_reel(transcript, decisions, faces, source_duration, pictures)
     # The rough cut stays clean: HyperFrames owns the visual beats, while the
     # proven FFmpeg renderer keeps cuts, audio, face framing and Ray captions.
-    clean_decisions = {**decisions, "chips": []} if hyperframes else decisions
-    plan = media.plan_reel(transcript, clean_decisions, faces, source_duration, pictures)
+    clean_decisions = {**decisions, "chips": [], "broll": []} if hyperframes else decisions
+    plan = media.plan_reel(transcript, clean_decisions, faces, source_duration,
+                           {} if hyperframes else pictures)
     _stage(job_dir, "rendering", progress=45)
     out = _next_output(job_dir)
     state = load(job_dir)
@@ -544,8 +545,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         if not beats:
             raise RuntimeError("The visual planner produced no usable motion beats")
         _stage(job_dir, "building motion graphics", progress=78,
-               visual_beats=[beat.model_dump() for beat in beats],
-               catalog_reviewed=447)
+               visual_beats=[beat.model_dump() for beat in beats])
         project = job_dir / "talking_reel_work" / "hyperframes"
         build_project(project, rough, beats, duration=plan.duration)
         _stage(job_dir, "rendering motion graphics", progress=82)

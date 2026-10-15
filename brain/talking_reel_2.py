@@ -39,6 +39,7 @@ media files the creator uploaded. Return ONLY a JSON object:
                    "visual_type": "<one of the visual types above>",
                    "narrative_role": "<hook|value|evidence|contrast|payoff>",
                    "motion_style": "<slam|wipe|assemble|orbit|type_on|count_up|collage>",
+                   "items": ["<2-4 concrete Persian labels actually said in this passage>"],
                    "why": "<short Persian reason this frame advances the story>"}]
 }
 
@@ -51,10 +52,12 @@ Rules:
   are better than constant decoration. Use each uploaded file at most once, where it fits best.
 - "chips": at most 2 lists, only where the speaker lists things (tools, steps, options, costs);
   2-4 items each, Persian, no Latin script unless a product name.
-- "storyboard": REQUIRED. Propose 7-9 short, varied visual beats before rendering. Multiple beats
+- "storyboard": REQUIRED. Propose 5-6 short, varied visual beats before rendering. Multiple beats
   may reference the same long sentence. Start with viewer value, then evidence/contrast, then payoff.
   Never repeat the same visual_type or motion_style consecutively. A beat is a visual world, not a
-  bullet-list slide. Use steps at most once.
+  bullet-list slide. Use steps at most once. Never choose stat without a real number in the speech.
+  Never invent generic labels such as fast/accurate/simple. Keep English only for an actual product
+  name or established term such as SaaS; translate malformed English transcript fragments.
 """
 
 
@@ -166,11 +169,15 @@ def normalize(data: dict, count: int, media_names: list[str]) -> dict:
             continue
         if visual_type not in allowed or (storyboard and visual_type == storyboard[-1]["visual_type"]):
             visual_type = ("kinetic_type", "comparison", "media_collage", "ui_showcase", "stat", "concept")[len(storyboard) % 6]
+        board_items = [str(value).strip() for value in (item or {}).get("items") or [] if str(value).strip()][:4]
+        if visual_type == "stat" and not re.search(r"[۰-۹0-9٪%]", title + " " + " ".join(board_items)):
+            visual_type = "concept"
         storyboard.append({
             "i": k, "title": title, "visual_type": visual_type,
             "narrative_role": str((item or {}).get("narrative_role") or "evidence")[:20],
             "motion_style": str((item or {}).get("motion_style") or "slide")[:20],
             "why": str((item or {}).get("why") or "این بخش را تصویری و قابل‌فهم می‌کند")[:120],
+            "items": board_items,
         })
     # Some transcripts contain only one or two very long sentences.  Build a
     # real multi-beat proposal from their clauses instead of one 30-second card.
@@ -182,16 +189,18 @@ def normalize(data: dict, count: int, media_names: list[str]) -> dict:
         fragments.extend((k, " ".join(p.split()[:6])) for p in (parts or [text]) if p.strip())
     types = ["kinetic_type", "concept", "comparison", "media_collage", "ui_showcase", "stat", "chat", "before_after"]
     motions = ["slam", "assemble", "wipe", "collage", "orbit", "count_up", "type_on", "reveal"]
-    target = min(9, max(7, len(fragments)))
+    target = min(6, max(5, len(fragments)))
     n = 0
     while len(storyboard) < target and fragments:
         k, title = fragments[n % len(fragments)]
         vt = types[len(storyboard) % len(types)]
+        if vt == "stat" and not re.search(r"[۰-۹0-9٪%]", title):
+            vt = "concept"
         storyboard.append({"i": k, "title": title or "نکته مهم", "visual_type": vt,
                            "narrative_role": "hook" if not storyboard else ("payoff" if len(storyboard) == target - 1 else "evidence"),
                            "motion_style": motions[len(storyboard) % len(motions)],
-                           "why": "تبدیل حرف گوینده به یک تصویر کوتاه و متمایز"})
+                           "why": "تبدیل حرف گوینده به یک تصویر کوتاه و متمایز", "items": []})
         n += 1
     return {"hook": hook, "captions": shared["captions"], "drop": shared["drop"],
             "cold_open": shared.get("cold_open"), "broll": sorted(broll, key=lambda b: b["i"]),
-            "chips": chips[:2], "storyboard": storyboard[:9]}
+            "chips": chips[:2], "storyboard": storyboard[:6]}

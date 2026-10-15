@@ -46,7 +46,7 @@ def build_visual_beats(plan, decisions: dict) -> list[VisualBeat]:
     duration = float(getattr(plan, "duration", 0) or 0)
     if not storyboard or duration < 1:
         return []
-    count = min(9, max(7, len(storyboard)))
+    count = min(6, max(5, len(storyboard)))
     storyboard = (storyboard * ((count + len(storyboard) - 1) // len(storyboard)))[:count]
     # Keep room for the speaker between worlds. The first visual starts after
     # the hook and each scene is capped to avoid the old permanent-list look.
@@ -64,22 +64,26 @@ def build_visual_beats(plan, decisions: dict) -> list[VisualBeat]:
         title = " ".join(str(item.get("title") or item.get("label") or "").split())[:80]
         if not title:
             title = " ".join(str(item.get("visual") or "").split()[:5]) or "نکته مهم"
-        raw_items = list(item.get("items") or []) or chips.get(sentence, [])
+        broll_item = next((value for value in decisions.get("broll") or [] if int(value.get("i", -1)) == sentence), {})
+        raw_items = list(item.get("items") or []) or chips.get(sentence, []) or list(broll_item.get("items") or [])
         values = [" ".join(str(value).split())[:35] for value in raw_items if str(value).strip()]
         visual_type = _visual_type(title, values, str(item.get("visual_type") or ""))
+        if visual_type == "stat" and not re.search(r"[۰-۹0-9٪%]", title + " " + " ".join(values)):
+            visual_type = "concept"
+        if visual_type == "before_after" and (" یا " in title or set(values) & {"محصول فیزیکی", "محصول دیجیتال"}):
+            visual_type = "comparison"
         if beats and visual_type == beats[-1].visual_type:
             visual_type = fallback_types[n % len(fallback_types)]
         motion_style = str(item.get("motion_style") or fallback_motions[n % len(fallback_motions)])
         if beats and motion_style == beats[-1].motion_style:
             motion_style = fallback_motions[n % len(fallback_motions)]
-        matches = recommend(visual_type, title, limit=3, exclude=used_refs)
-        refs = [match["name"] for match in matches]
-        if refs:
-            used_refs.add(refs[0])
+        # Catalog search informs the choreography vocabulary, but a reference
+        # is recorded only when its actual registry code is installed/wired.
+        refs: list[str] = []
         beats.append(VisualBeat(
             id=f"beat-{sentence}-{n}", start=start, end=end,
             anchor_word=title.split()[0], visual_type=visual_type,
-            title=title, items=values, accent="amber" if n % 2 else "teal",
+            title=title, items=values, accent=("teal", "coral", "blue", "amber", "ink")[n % 5],
             layout="full_frame" if n in {0, 3, count - 1} else "top_panel",
             registry_refs=refs,
             narrative_role=str(item.get("narrative_role") or "evidence"),
@@ -91,13 +95,20 @@ def build_visual_beats(plan, decisions: dict) -> list[VisualBeat]:
 
 def _beat_markup(beat: VisualBeat) -> str:
     title = html.escape(beat.title)
-    if beat.visual_type == "steps" and beat.items:
+    if beat.registry_refs and beat.registry_refs[0] == "hw-pipeline":
+        body = (f'<div class="registry-stage"><div data-composition-id="hw-pipeline" '
+                f'data-composition-src="compositions/hw-pipeline.html" data-start="0" data-duration="{beat.end - beat.start:.3f}" '
+                'data-width="1920" data-height="1080" data-track-index="0"></div></div>')
+    elif beat.visual_type == "steps" and beat.items:
         body = "".join(
             f'<div class="step"><b>{i + 1:02d}</b><span>{html.escape(value)}</span></div>'
             for i, value in enumerate(beat.items)
         )
     elif beat.visual_type == "comparison":
-        body = '<div class="compare"><span>قبل</span><i></i><span>بعد</span></div>'
+        labels = beat.items[:2] or [value.strip() for value in re.split(r"(?:در برابر| یا )", beat.title) if value.strip()][:2]
+        labels = (labels + ["خدمت", "محصول"])[:2]
+        body = (f'<div class="compare"><div><strong>×۱</strong><span>{html.escape(labels[0])}</span></div>'
+                f'<i><b>→</b></i><div><strong>×∞</strong><span>{html.escape(labels[1])}</span></div></div>')
     elif beat.visual_type == "stat":
         match = re.search(r"[۰-۹0-9]+(?:[٫.][۰-۹0-9]+)?(?:\s*[٪%×x])?", beat.title)
         value = html.escape(match.group(0) if match else beat.title.split()[0])
@@ -105,7 +116,11 @@ def _beat_markup(beat: VisualBeat) -> str:
     elif beat.visual_type == "ui_showcase":
         body = '<div class="ui-stage"><i></i><i></i><i></i><span></span></div>'
     elif beat.visual_type == "media_collage":
-        body = '<div class="collage"><i></i><i></i><i></i><i></i></div>'
+        values = beat.items or ["گوشی", "دوره آموزشی", "پادکست", "نرم‌افزار"]
+        glyphs = ["▣", "▶", "◉", "⌁"]
+        body = '<div class="collage">' + ''.join(
+            f'<div><b>{glyphs[n % 4]}</b><span>{html.escape(value)}</span></div>' for n, value in enumerate(values[:4])
+        ) + '</div>'
     elif beat.visual_type == "chat":
         values = beat.items or ["سؤال دقیق", "پاسخ روشن"]
         body = '<div class="chat-stack">' + ''.join(
@@ -114,16 +129,18 @@ def _beat_markup(beat: VisualBeat) -> str:
     elif beat.visual_type == "map_route":
         body = '<div class="route"><svg viewBox="0 0 800 260"><path d="M70 190 C220 30 410 245 720 65"/><circle cx="70" cy="190" r="18"/><circle cx="720" cy="65" r="18"/></svg></div>'
     elif beat.visual_type == "spec_callout":
-        values = beat.items or ["سریع", "دقیق", "ساده"]
-        body = '<div class="specs">' + ''.join(
-            f'<span><b>{i + 1:02d}</b>{html.escape(value)}</span>' for i, value in enumerate(values[:3])
-        ) + '</div>'
+        values = beat.items or ["Software", "as a", "Service"]
+        body = '<div class="saas-mark"><b>S</b><i></i><div>' + ''.join(
+            f'<span>{html.escape(value)}</span>' for value in values[:3]
+        ) + '</div></div>'
     elif beat.visual_type == "kinetic_type":
         body = f'<div class="kinetic" dir="rtl">{title}</div>'
     elif beat.visual_type == "before_after":
-        body = '<div class="before-after"><span>قبل</span><i></i><span>بعد</span></div>'
+        values = [re.sub(r"^(?:قبل|بعد)\s*[:：-]?\s*", "", value).strip() for value in beat.items[:2]]
+        values = (values + ["خودت خدمت می‌دهی", "نرم‌افزار می‌فروشد"])[:2]
+        body = f'<div class="before-after"><span><small>وابسته به زمان</small>{html.escape(values[0])}</span><i></i><span><small>مقیاس‌پذیر</small>{html.escape(values[1])}</span></div>'
     else:
-        body = '<div class="concept"><i></i><i></i><i></i><span></span></div>'
+        body = '<div class="concept"><div><i></i><small>×۱</small></div><div><i></i><i></i><i></i><i></i><small>×۴</small></div><div class="many"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><small>×۱۶</small></div></div>'
     return (
         f'<section id="{beat.id}" data-motion="{html.escape(beat.motion_style)}" class="visual-beat {beat.visual_type} {beat.accent} {beat.layout} clip" '
         f'data-start="{beat.start:.3f}" data-duration="{beat.end - beat.start:.3f}" data-track-index="2">'
@@ -163,7 +180,7 @@ def _timeline_script(beats: list[VisualBeat]) -> str:
                 f'{{opacity:1,y:0,duration:.28,stagger:.09,ease:"power2.out"}}, {beat.start + .16:.3f});'
             )
         elif beat.visual_type in {"ui_showcase", "media_collage"}:
-            child = ".ui-stage i" if beat.visual_type == "ui_showcase" else ".collage i"
+            child = ".ui-stage i" if beat.visual_type == "ui_showcase" else ".collage div"
             lines.append(
                 f'tl.fromTo("#{beat.id} {child}", {{opacity:0}}, '
                 f'{{opacity:1,duration:.32,stagger:.08,ease:"power1.out"}}, {beat.start + .14:.3f});'
@@ -200,21 +217,21 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
     except OSError:
         shutil.copy2(base_video, video)
     shutil.copy2(RAY, assets / "ray-extrabold.ttf")
+    (project_dir / "hyperframes.json").write_text(json.dumps({
+        "$schema": "https://hyperframes.heygen.com/schema/hyperframes.json",
+        "media": {"autoProxy": True},
+    }, indent=2))
+    from .registry_runtime import wire_registry
+    wire_registry(project_dir, beats)
     visual_library = []
     for beat in beats:
         value = beat.model_dump()
-        if not value["registry_refs"]:
-            value["registry_refs"] = [match["name"] for match in recommend(beat.visual_type, beat.title)]
         visual_library.append(value)
     metadata = {
         "id": "ai-render-talking-2", "name": "AI Render Talking 2",
         "visual_library": visual_library,
     }
     (project_dir / "meta.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
-    (project_dir / "hyperframes.json").write_text(json.dumps({
-        "$schema": "https://hyperframes.heygen.com/schema/hyperframes.json",
-        "media": {"autoProxy": True},
-    }, indent=2))
     cards = "\n".join(_beat_markup(beat) for beat in beats)
     document = f'''<!doctype html>
 <html lang="fa"><head><meta charset="UTF-8"><meta name="viewport" content="width=1080,height=1920">
@@ -224,24 +241,26 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
 *{{box-sizing:border-box}}html,body{{margin:0;width:1080px;height:1920px;overflow:hidden;background:#080b0c}}
 #root{{position:relative;width:100%;height:100%;overflow:hidden;font-family:Ray,sans-serif}}
 .base{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}}
-.visual-beat{{position:absolute;left:42px;right:42px;top:72px;height:720px;padding:62px 58px;border-radius:42px;overflow:hidden;background:#f3f0e8;color:#151a1b;box-shadow:0 28px 80px #0007;direction:rtl}}
-.visual-beat.full_frame{{inset:0;height:1920px;border-radius:0;background:#efe9dc;display:grid;align-items:center}}
+.visual-beat{{--bg:#f3f0e8;--fg:#151a1b;position:absolute;left:42px;right:42px;top:72px;height:720px;padding:62px 58px;border-radius:42px;overflow:hidden;background:var(--bg);color:var(--fg);box-shadow:0 28px 80px #0007;direction:rtl}}
+.visual-beat.full_frame{{inset:0;height:1920px;border-radius:0;display:grid;align-items:center}}
 .visual-beat.full_frame .beat-inner{{padding:240px 86px}}.visual-beat.full_frame h2{{font-size:108px;max-width:920px}}
 .beat-inner{{position:absolute;inset:0;padding:62px 58px;opacity:0}}
-.visual-beat:after{{content:"";position:absolute;inset:0;border:2px solid #ffffff80;border-radius:42px;pointer-events:none}}
-.ghost{{position:absolute;left:-20px;top:8px;font-size:190px;opacity:.06;white-space:nowrap;direction:rtl}}.eyebrow{{font-size:25px;color:#5a6263;margin-bottom:25px;text-transform:uppercase}}h2{{font-size:66px;line-height:1.28;margin:0;max-width:870px;letter-spacing:-.02em}}
-.teal{{--accent:#157a7b}}.amber{{--accent:#c77a25}}.stat{{font-size:150px;color:var(--accent);margin-top:58px;line-height:1}}
+.visual-beat:after{{content:"";position:absolute;inset:0;border:2px solid color-mix(in srgb,var(--fg) 12%,transparent);border-radius:42px;pointer-events:none}}
+.ghost{{position:absolute;left:-20px;top:8px;font-size:190px;opacity:.045;white-space:nowrap;direction:rtl}}.eyebrow{{font-size:22px;color:color-mix(in srgb,var(--fg) 55%,transparent);margin-bottom:25px;letter-spacing:.08em}}h2{{font-size:66px;line-height:1.28;margin:0;max-width:870px;letter-spacing:-.02em}}
+.teal{{--accent:#19a58f;--bg:#eaf5ef;--fg:#102b27}}.amber{{--accent:#ffb000;--bg:#fff4ce;--fg:#32240b}}.coral{{--accent:#ff6047;--bg:#2a1110;--fg:#fff2e8}}.blue{{--accent:#72a7ff;--bg:#0c2340;--fg:#edf5ff}}.ink{{--accent:#d4ff42;--bg:#131619;--fg:#f4f5ef}}.stat{{font-size:150px;color:var(--accent);margin-top:58px;line-height:1}}
 .meter{{height:18px;background:#d8d4ca;border-radius:12px;margin-top:34px;overflow:hidden;direction:ltr}}.meter i{{display:block;width:78%;height:100%;background:var(--accent);transform-origin:left}}
 .step{{display:flex;align-items:center;gap:24px;margin-top:27px;font-size:40px}}.step b{{display:grid;place-items:center;width:72px;height:72px;border-radius:22px;background:var(--accent);color:white;font-size:28px}}.step span{{border-bottom:2px solid #151a1b20;padding:10px 0;flex:1}}
-.compare{{display:flex;align-items:center;justify-content:space-between;margin-top:105px;font-size:62px;color:var(--accent)}}.compare i{{width:210px;height:4px;background:var(--accent);position:relative}}.compare i:after{{content:"";position:absolute;right:0;top:-11px;border:13px solid transparent;border-left:0;border-right-color:var(--accent)}}
-.concept{{height:320px;position:relative;margin-top:40px}}.concept i{{position:absolute;width:110px;height:110px;border-radius:50%;border:16px solid var(--accent)}}.concept i:nth-child(1){{right:40px;top:80px}}.concept i:nth-child(2){{right:310px;top:10px}}.concept i:nth-child(3){{right:565px;top:120px}}.concept span{{position:absolute;right:140px;top:135px;width:510px;height:5px;background:var(--accent);transform:rotate(-4deg);transform-origin:right}}
+.compare{{display:grid;grid-template-columns:1fr 120px 1fr;align-items:center;gap:18px;margin-top:70px;text-align:center}}.compare>div{{height:220px;border:3px solid currentColor;border-radius:34px;display:grid;place-items:center;padding:20px}}.compare strong{{display:block;font:900 80px/1 Ray;color:var(--accent)}}.compare span{{font-size:31px}}.compare i{{font-style:normal;color:var(--accent);font-size:74px}}.compare i b{{font-weight:900}}
+.concept{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:30px;align-items:end;height:300px;margin-top:38px;direction:ltr}}.concept>div{{display:flex;flex-wrap:wrap;align-content:flex-end;justify-content:center;gap:10px;padding:24px;border-bottom:5px solid var(--accent);min-height:130px}}.concept>div:nth-child(2){{min-height:205px}}.concept>div:nth-child(3){{min-height:280px}}.concept i{{display:block;width:45px;height:45px;border-radius:12px;background:var(--accent)}}.concept small{{width:100%;font:900 32px Ray;color:var(--fg);text-align:center}}
 .ui-stage{{position:relative;height:360px;margin-top:28px;perspective:900px}}.ui-stage i{{position:absolute;width:250px;height:300px;border-radius:26px;background:#171c1d;border:4px solid #fff;box-shadow:0 24px 45px #0005}}.ui-stage i:nth-child(1){{right:70px;transform:rotate(7deg)}}.ui-stage i:nth-child(2){{right:320px;top:22px;transform:scale(1.08)}}.ui-stage i:nth-child(3){{right:570px;transform:rotate(-7deg)}}.ui-stage span{{position:absolute;right:365px;top:75px;width:160px;height:16px;background:var(--accent);box-shadow:0 45px #ffffff30,0 90px #ffffff30}}
-.collage{{position:relative;height:340px;margin-top:28px}}.collage i{{position:absolute;width:255px;height:190px;border-radius:22px;background:#202627;border:4px solid #fff;box-shadow:0 22px 35px #0004}}.collage i:nth-child(1){{right:40px;top:20px;transform:rotate(6deg)}}.collage i:nth-child(2){{right:245px;top:100px;transform:rotate(-5deg)}}.collage i:nth-child(3){{right:455px;top:5px;transform:rotate(4deg)}}.collage i:nth-child(4){{right:640px;top:120px;transform:rotate(-7deg)}}
+.collage{{display:grid;grid-template-columns:1fr 1fr;gap:18px;height:350px;margin-top:28px;direction:rtl}}.collage div{{display:grid;grid-template-columns:74px 1fr;align-items:center;gap:15px;padding:18px 22px;border-radius:24px;background:color-mix(in srgb,var(--fg) 8%,transparent);border:2px solid color-mix(in srgb,var(--fg) 22%,transparent)}}.collage b{{display:grid;place-items:center;width:64px;height:64px;border-radius:18px;background:var(--accent);color:var(--bg);font-size:34px}}.collage span{{font-size:30px}}
 .chat-stack{{display:flex;flex-direction:column;gap:18px;margin-top:40px}}.bubble{{max-width:72%;padding:20px 28px;border-radius:28px;font-size:34px}}.bubble.b0{{align-self:flex-start;background:#e1ddd3}}.bubble.b1{{align-self:flex-end;background:var(--accent);color:#fff}}
 .route{{height:300px;margin-top:25px}}.route svg{{width:100%;height:100%;overflow:visible}}.route path{{fill:none;stroke:var(--accent);stroke-width:14;stroke-linecap:round;stroke-dasharray:22 22}}.route circle{{fill:#f3f0e8;stroke:var(--accent);stroke-width:12}}
-.specs{{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:48px}}.specs span{{display:flex;flex-direction:column;gap:18px;padding:26px 18px;border:3px solid #151a1b;border-radius:24px;font-size:29px}}.specs b{{font-size:48px;color:var(--accent)}}
+.saas-mark{{display:grid;grid-template-columns:190px 80px 1fr;align-items:center;gap:20px;margin-top:46px;direction:ltr}}.saas-mark>b{{display:grid;place-items:center;width:180px;height:180px;border-radius:48px;background:var(--accent);color:var(--bg);font:900 110px Ray}}.saas-mark>i{{height:5px;background:var(--accent);position:relative}}.saas-mark>i:after{{content:"";position:absolute;right:-2px;top:-11px;border:13px solid transparent;border-left-color:var(--accent)}}.saas-mark>div{{display:flex;flex-direction:column;gap:9px}}.saas-mark span{{font:900 35px/1.2 Ray;color:var(--fg)}}
 .kinetic{{font-size:118px;line-height:1.3;margin-top:55px;color:var(--accent);max-width:900px;min-height:190px;padding-bottom:30px;overflow:hidden}}
-.before-after{{display:grid;grid-template-columns:1fr 10px 1fr;gap:20px;align-items:center;margin-top:75px;font-size:70px;text-align:center}}.before-after i{{height:210px;background:var(--accent);border-radius:9px}}
+.kinetic_type h2{{display:none}}.kinetic_type .kinetic{{font-size:132px;margin-top:160px;max-width:920px}}
+.before-after{{display:grid;grid-template-columns:1fr 90px 1fr;gap:18px;align-items:center;margin-top:65px;font-size:34px;text-align:center}}.before-after span{{height:210px;border-radius:32px;border:3px solid currentColor;display:flex;flex-direction:column;justify-content:center;padding:24px}}.before-after small{{display:block;color:var(--accent);font-size:23px;margin-bottom:15px}}.before-after i{{height:5px;background:var(--accent);position:relative}}.before-after i:after{{content:"→";position:absolute;left:28px;top:-38px;color:var(--accent);font-style:normal;font-size:60px}}
+.registry-stage{{position:relative;width:100%;height:360px;margin-top:26px;overflow:hidden;border-radius:28px;background:#fffdf8}}.registry-stage>[data-composition-src]{{position:absolute;inset:0;width:100%;height:100%}}
 </style></head><body><main id="root" data-composition-id="main" data-start="0" data-duration="{duration:.3f}" data-width="1080" data-height="1920">
 <video id="rough-cut" class="base clip" src="./assets/base.mp4" data-start="0" data-duration="{duration:.3f}" data-track-index="0" data-has-audio="true"></video>
 {cards}</main><script>{_timeline_script(beats)}</script></body></html>'''

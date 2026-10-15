@@ -18,7 +18,7 @@ class VisualBeat(BaseModel):
     title: str = Field(min_length=1, max_length=80)
     items: list[str] = Field(default_factory=list, max_length=4)
     layout: Literal["top_panel", "full_frame"] = "top_panel"
-    accent: Literal["teal", "amber"] = "teal"
+    accent: Literal["teal", "amber", "coral", "blue", "ink"] = "teal"
     registry_refs: list[str] = Field(default_factory=list, max_length=3)
     narrative_role: str = "evidence"
     motion_style: str = "slide"

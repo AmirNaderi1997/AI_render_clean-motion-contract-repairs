@@ -165,7 +165,7 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
       {draft.style === "talking_2" && draft.storyboard && draft.storyboard.length > 0 && (
         <div style={{ marginTop: 18 }}>
           <h3>استوری‌لاین پیشنهادی قبل از رندر</h3>
-          <p className="muted">هر ردیف یک دنیای بصری کوتاه است؛ موتور از میان ۴۴۷ موشن کاتالوگ، مناسب‌ترین قالب‌های غیرتکراری را انتخاب می‌کند.</p>
+          <p className="muted">هر ردیف یک لحظه‌ی بصری کوتاه و مرتبط با حرف گوینده است. کاتالوگ HyperFrames برای طراحی بررسی می‌شود، اما فقط موشنی اجرا می‌شود که واقعاً در رندر پیاده‌سازی شده باشد.</p>
           <div style={{ display: "grid", gap: 10 }}>
             {draft.storyboard.map((beat, index) => (
               <div key={`${beat.i}-${index}`} className="row" style={{ alignItems: "center", padding: 10, border: "1px solid var(--border)", borderRadius: 10 }}>
