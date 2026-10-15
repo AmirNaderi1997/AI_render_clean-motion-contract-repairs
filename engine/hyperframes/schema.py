@@ -11,7 +11,10 @@ class VisualBeat(BaseModel):
     start: float = Field(ge=0, allow_inf_nan=False)
     end: float = Field(gt=0, allow_inf_nan=False)
     anchor_word: str = ""
-    visual_type: Literal["concept", "stat", "comparison", "steps"] = "concept"
+    visual_type: Literal[
+        "concept", "stat", "comparison", "steps", "ui_showcase", "media_collage",
+        "chat", "map_route", "spec_callout", "kinetic_type", "before_after",
+    ] = "concept"
     title: str = Field(min_length=1, max_length=80)
     items: list[str] = Field(default_factory=list, max_length=4)
     layout: Literal["top_panel", "full_frame"] = "top_panel"

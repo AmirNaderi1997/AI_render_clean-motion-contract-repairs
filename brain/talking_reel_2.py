@@ -24,11 +24,14 @@ media files the creator uploaded. Return ONLY a JSON object:
   "drop": [<indices of filler sentences to cut, e.g. an off-topic "yes" at the end>],
   "cold_open": {"i": <index>, "text": "<the most provocative 2-4 second line, word for word>"},
   "broll": [{"i": <sentence index>,
+             "visual_type": "<one of: concept, stat, comparison, steps, ui_showcase,
+                              media_collage, chat, map_route, spec_callout, kinetic_type, before_after>",
              "visual": "<English prompt for one clear visual metaphor made from 2-4 recognizable
                         everyday objects interacting, premium Swiss editorial vector illustration,
                         flat shapes, off-white background, no meaningless abstract geometry, people,
                         faces, hands, 3D render, text, or letters>",
              "label": "<2-4 word Persian title for a text card if no image can be made>",
+             "items": ["<up to 4 short Persian facts, steps, labels or specs used by the visual>"],
              "media": "<one of the uploaded file names that fits this sentence, or empty>"}],
   "chips": [{"i": <sentence index>, "items": ["<1-3 word Persian label>", ...]}]
 }
@@ -88,8 +91,15 @@ def normalize(data: dict, count: int, media_names: list[str]) -> dict:
         media = str(item.get("media") or "").strip()
         media = media if media in media_names and media not in used else ""
         used.add(media)
-        broll.append({"i": k, "visual": _sanitize(str(item.get("visual") or "").strip()),
-                      "label": str(item.get("label") or "").strip(), "media": media})
+        visual_type = str(item.get("visual_type") or "concept").strip()
+        allowed = {"concept", "stat", "comparison", "steps", "ui_showcase", "media_collage",
+                   "chat", "map_route", "spec_callout", "kinetic_type", "before_after"}
+        if visual_type not in allowed:
+            visual_type = "concept"
+        items = [str(value).strip() for value in item.get("items") or [] if str(value).strip()][:4]
+        broll.append({"i": k, "visual_type": visual_type,
+                      "visual": _sanitize(str(item.get("visual") or "").strip()),
+                      "label": str(item.get("label") or "").strip(), "items": items, "media": media})
     chips = []
     for item in data.get("chips") or []:
         k = index((item or {}).get("i"))
@@ -111,6 +121,7 @@ def normalize(data: dict, count: int, media_names: list[str]) -> dict:
             if idea:
                 broll.append({
                     "i": k,
+                    "visual_type": "concept",
                     "visual": "A single restrained symbolic object representing this Persian idea: " + idea,
                     "label": " ".join(idea.split()[:4]),
                     "media": "",
@@ -126,6 +137,7 @@ def normalize(data: dict, count: int, media_names: list[str]) -> dict:
                 if idea:
                     broll.append({
                         "i": k,
+                        "visual_type": "concept",
                         "visual": "A clear editorial metaphor using recognizable objects for this Persian idea: " + idea,
                         "label": " ".join(idea.split()[:4]),
                         "media": "",
