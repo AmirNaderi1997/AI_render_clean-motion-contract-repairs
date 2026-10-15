@@ -86,12 +86,7 @@ def wire_registry(project_dir: Path, beats: list) -> set[str]:
     if collage and _component(project_dir, "paper-collage-reveal", collage.end - collage.start, collage.items):
         collage.registry_refs = ["paper-collage-reveal"]
         wired.add(collage.id)
-    pipeline = next((beat for beat in reversed(beats) if beat.visual_type in {"steps", "before_after"}), None)
-    if pipeline:
-        labels = pipeline.items or ["خدمت", "نرم‌افزار", "فروش خودکار"]
-        if len(labels) == 2:
-            labels = [labels[0], "نرم‌افزار", labels[1]]
-        if _pipeline(project_dir, labels, pipeline.end - pipeline.start):
-            pipeline.registry_refs = ["hw-pipeline"]
-            wired.add(pipeline.id)
+    # hw-pipeline is valid standalone but its nested encode can resolve to a
+    # black frame in a short absolute-time host.  Do not expose a render-risky
+    # adapter; the literal before/after world remains deterministic.
     return wired
