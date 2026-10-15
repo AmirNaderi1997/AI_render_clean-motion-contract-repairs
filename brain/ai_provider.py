@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable
 
 from app.config import settings
+from .http_ssl import ssl_context
 from .llm import LLMUsage, _extract_json
 
 log = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ def _post_json(url: str, payload: dict, api_key: str, timeout: float) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=ssl_context()) as response:
             result = json.load(response)
     except urllib.error.HTTPError as exc:
         try:

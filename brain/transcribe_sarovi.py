@@ -28,6 +28,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from .http_ssl import ssl_context
+
 log = logging.getLogger(__name__)
 
 ENDPOINT = "https://api.sarovi.ir/v1/audio/transcriptions"
@@ -131,7 +133,7 @@ def _post(payload: dict) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT, context=ssl_context()) as response:
             result = json.load(response)
     except urllib.error.HTTPError as exc:
         code = "provider_error"

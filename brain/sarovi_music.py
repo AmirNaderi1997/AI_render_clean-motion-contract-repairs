@@ -8,6 +8,8 @@ import os
 import urllib.error
 import urllib.request
 
+from .http_ssl import ssl_context
+
 ENDPOINT = "https://api.sarovi.ir/v1/studio/audio"
 MODEL = "google/lyria-3-clip-preview"
 MAX_AUDIO_BYTES = 25_000_000
@@ -32,7 +34,7 @@ def generate_clip(prompt: str) -> bytes:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=300) as response:
+        with urllib.request.urlopen(request, timeout=300, context=ssl_context()) as response:
             result = json.load(response)
     except urllib.error.HTTPError as exc:
         code = "provider_error"

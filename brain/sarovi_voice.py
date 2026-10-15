@@ -10,6 +10,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from .http_ssl import ssl_context
 from .tts import TTSResult, _get_audio_duration
 
 ENDPOINT = "https://api.sarovi.ir/v1/studio/audio"
@@ -40,7 +41,7 @@ def generate_narration(text: str, output_dir: Path, instructions: str | None = N
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=300) as response:
+        with urllib.request.urlopen(request, timeout=300, context=ssl_context()) as response:
             result = json.load(response)
     except urllib.error.HTTPError as exc:
         code = "provider_error"
