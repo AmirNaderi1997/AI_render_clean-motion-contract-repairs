@@ -27,7 +27,7 @@ from typing import Callable, Optional
 from ..localize import _ass_time, _rounded_rect, measure_text_boxes, probe_fps, probe_video
 from ..render_ass import ass_burner_ffmpeg, subtitles_filter
 from . import talking_1 as base
-from .talking_1 import (W, H, _colour, _esc, _median, _spaced, cold_open_span, eval_fps, fonts_bundle,
+from .talking_1 import (W, H, _colour, _esc, _median, cold_open_span, eval_fps, fonts_bundle,
                         music_bed, persian_digits, render_outro, speech_ranges, track_faces, vignette_png)
 
 log = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ MIN_PIECE, MAX_PIECE = 1.8, 3.0   # cut rhythm (seconds)
 PICTURE_ZOOM = 0.07            # slow push on the picture over a shot
 MUSIC_DB = -15.0
 LOUDNESS = -14.0
-FONT = "Ray ExtraBlack"
+FONT = "Vazirmatn"
 CHIP_COLOUR = "#8A9298"         # glassy grey chips
 
 
@@ -107,12 +107,13 @@ def _face(faces, a, b) -> tuple[float, float]:
 
 
 def _chunks(text: str) -> list[tuple[str, str]]:
-    """Calmer 3-4 word caption chunks: (lead phrase, accented keyword)."""
+    """Readable 2-3 word caption chunks: (lead phrase, accented keyword)."""
     words = [w for w in re.sub(r"[.،,!?؟]+", " ", text).split() if w]
+    groups = [words[k:k + 3] for k in range(0, len(words), 3)]
+    if len(groups) > 1 and len(groups[-1]) == 1:
+        groups[-2].extend(groups.pop())
     out = []
-    while words:
-        take = min(4, len(words))
-        group, words = words[:take], words[take:]
+    for group in groups:
         out.append((" ".join(group[:-1]), group[-1]))
     return out
 
@@ -185,7 +186,8 @@ def plan_reel(transcript: dict, decisions: dict, faces: list[tuple[float, float,
         k = shot_group[0].slot
         start, end = shot_group[0].out_start, shot_group[-1].out_start + shot_group[-1].length
         if k in chip_lists:
-            chips.append({"start": start, "end": end, "items": [persian_digits(i) for i in chip_lists[k]]})
+            chips.append({"start": start, "end": min(end, start + 3.2),
+                          "items": [persian_digits(i) for i in chip_lists[k]]})
         elif k in broll and not shot_group[0].picture:
             cards.append({"start": start, "end": end, "text": persian_digits(broll[k].get("label") or "")})
     hook = None
@@ -214,27 +216,15 @@ def _timed_chunks(text: str, s0: float, s1: float, words: list[dict], out_time) 
     if not spoken:
         return []
     chunks = _chunks(persian_digits(text))
-    total = sum(len(lead) + len(key) + 1 for lead, key in chunks) or 1
-    chars = [len(w["w"]) + 1 for w in spoken]
-    csum = [0]
-    for c in chars:
-        csum.append(csum[-1] + c)
-
-    def time_at(share: float) -> float:
-        target = share * csum[-1]
-        for j, w in enumerate(spoken):
-            if csum[j + 1] >= target:
-                frac = (target - csum[j]) / max(1, chars[j])
-                return float(w["start"]) + frac * (float(w["end"]) - float(w["start"]))
-        return float(spoken[-1]["end"])
-
-    out, done = [], 0
-    for lead, key in chunks:
-        a = time_at(done / total)
-        done += len(lead) + len(key) + 1
-        b = time_at(done / total)
-        out.append({"start": out_time(a), "end": out_time(b), "lead": lead, "key": key})
-    return [c for c in out if c["end"] - c["start"] > 0.04]
+    out = []
+    for index, (lead, key) in enumerate(chunks):
+        first = min(len(spoken) - 1, round(index * len(spoken) / len(chunks)))
+        last = min(len(spoken) - 1, max(first, round((index + 1) * len(spoken) / len(chunks)) - 1))
+        a = max(s0, float(spoken[first]["start"]) - 0.04)
+        b = min(s1, float(spoken[last]["end"]) + 0.10)
+        if b - a >= 0.20:
+            out.append({"start": out_time(a), "end": out_time(b), "lead": lead, "key": key})
+    return out
 
 
 # --- pictures -----------------------------------------------------------------------
@@ -286,10 +276,10 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
         return any(a <= t < b for a, b in split_spans)
 
     minimal = plan.theme == "minimal"
-    key_size, lead_size = ((int(H * 0.046), int(H * 0.034)) if minimal
-                           else (int(H * 0.052), int(H * 0.034)))
+    key_size, lead_size = ((int(H * 0.036), int(H * 0.036)) if minimal
+                           else (int(H * 0.038), int(H * 0.029)))
     hook_end = plan.hook["end"] if plan.hook else 0.0
-    for c in plan.captions:
+    for caption_index, c in enumerate(plan.captions):
         if c["end"] <= hook_end:
             continue
         start = max(c["start"], hook_end)
@@ -297,18 +287,21 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
         pop = "\\fad(70,70)" if minimal else "\\fscx108\\fscy108\\t(0,120,\\fscx100\\fscy100)"
         if minimal:
             phrase = " ".join(part for part in (c["lead"], c["key"]) if part)
+            if caption_index > 0 and caption_index % 5 == 0:
+                events.append(f"Dialogue: 5,{_ass_time(start)},{_ass_time(c['end'])},emph,,0,0,0,,"
+                              f"{{\\an5\\q2\\pos({W / 2:.0f},{H * 0.62:.0f})"
+                              f"\\fscx112\\fscy112\\t(0,150,\\fscx100\\fscy100)\\fad(90,120)}}{_esc(c['key'])}")
+                continue
             events.append(f"Dialogue: 4,{_ass_time(start)},{_ass_time(c['end'])},key,,0,0,0,,"
-                          f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f}){pop}}}{_spaced(_esc(phrase))}")
+                          f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f}){pop}}}{_esc(phrase)}")
             continue
-        if c["lead"]:
-            events.append(f"Dialogue: 4,{_ass_time(start)},{_ass_time(c['end'])},lead,,0,0,0,,"
-                          f"{{\\an2\\q2\\pos({W / 2:.0f},{y - key_size * 0.55:.0f}){pop}}}{_esc(c['lead'])}")
+        phrase = " ".join(part for part in (c["lead"], c["key"]) if part)
         events.append(f"Dialogue: 4,{_ass_time(start)},{_ass_time(c['end'])},key,,0,0,0,,"
-                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y + key_size * 0.08:.0f}){pop}}}{_esc(c['key'])}")
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f}){pop}}}{_esc(phrase)}")
     if plan.hook and minimal:
         y = H * 0.69
         events.append(f"Dialogue: 5,{_ass_time(plan.hook['start'] + 0.1)},{_ass_time(plan.hook['end'])},hook,,0,0,0,,"
-                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f})\\fad(180,180)}}{_spaced(_esc(plan.hook['text']))}")
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f})\\fad(180,180)}}{_esc(plan.hook['text'])}")
     elif plan.hook:
         # The hook builds word by word on one line at chest height.
         words = plan.hook["text"].split()
@@ -318,11 +311,11 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
             t1 = plan.hook["start"] + 0.1 + (k + 1) * 0.3 if k + 1 < len(words) else plan.hook["end"]
             pop = "\\fscx125\\fscy125\\t(0,150,\\fscx100\\fscy100)" if k == 0 else ""
             events.append(f"Dialogue: 5,{_ass_time(t0)},{_ass_time(t1)},hook,,0,0,0,,"
-                          f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f}){pop}}}{_spaced(_esc(' '.join(words[:k + 1])))}")
-    chip_size = int(H * 0.046)
+                          f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f}){pop}}}{_esc(' '.join(words[:k + 1]))}")
+    chip_size = int(H * 0.032)
     for chip in plan.chips:
         items = chip["items"]
-        inks = measure_text_boxes([(_spaced(_esc(i)), chip_size) for i in items], W, H, FONT, fonts_dir)
+        inks = measure_text_boxes([(_esc(i), chip_size) for i in items], W, H, FONT, fonts_dir)
         pitch = chip_size * 1.85
         step = min(0.45, (chip["end"] - chip["start"]) * 0.5 / max(1, len(items)))
         for k, (item, (iw, ia, ib)) in enumerate(zip(items, inks)):
@@ -335,22 +328,24 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
                                         (bottom - top) / 2, extra=f"\\1a&H38&{fade}"))
             events.append(f"Dialogue: 3,{_ass_time(t0)},{_ass_time(chip['end'])},chip,,0,0,0,,"
                           f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f}){fade}\\fscx120\\fscy120\\t(0,150,\\fscx100\\fscy100)}}"
-                          f"{_spaced(_esc(item))}")
+                          f"{_esc(item)}")
     for card in plan.cards:
         cw, chh = card_size()
         events.append(_rounded_rect(2, card["start"], card["end"], CARD_MARGIN, CARD_MARGIN, CARD_MARGIN + cw,
                                     CARD_MARGIN + chh, "#123A40", CARD_RADIUS))
         events.append(f"Dialogue: 3,{_ass_time(card['start'])},{_ass_time(card['end'])},card,,0,0,0,,"
-                      f"{{\\an5\\q2\\pos({W / 2:.0f},{SPLIT_Y / 2:.0f})\\fad(150,0)}}{_spaced(_esc(card['text']))}")
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{SPLIT_Y / 2:.0f})\\fad(150,0)}}{_esc(card['text'])}")
 
     white, black = "&H00FFFFFF", "&H00000000"
     soft = "&H64000000"
     styles = [
-        f"Style: key,{FONT},{key_size},{white if minimal else _colour(YELLOW).replace('&H', '&H00', 1)[:-1]},&H000000FF,{soft},{soft},"
-        "-1,0,0,0,100,100,0,0,1,3,2,5,0,0,0,-1",
-        f"Style: lead,{FONT},{lead_size},{white},&H000000FF,{soft},{soft},-1,0,0,0,100,100,0,0,1,2,1,2,0,0,0,-1",
-        f"Style: hook,{FONT},{int(H * (0.052 if minimal else 0.062))},{white if minimal else _colour(YELLOW).replace('&H', '&H00', 1)[:-1]},&H000000FF,{soft},"
-        f"{soft},-1,0,0,0,100,100,0,0,1,3,2,5,0,0,0,-1",
+        f"Style: key,{FONT},{key_size},{white},&H000000FF,{soft},{soft},"
+        "-1,0,0,0,100,100,0,0,1,0.8,1.4,5,0,0,0,-1",
+        f"Style: lead,{FONT},{lead_size},{white},&H000000FF,{soft},{soft},-1,0,0,0,100,100,0,0,1,0.7,1.2,2,0,0,0,-1",
+        f"Style: hook,{FONT},{int(H * (0.041 if minimal else 0.046))},{white if minimal else _colour(YELLOW).replace('&H', '&H00', 1)[:-1]},&H000000FF,{soft},"
+        f"{soft},-1,0,0,0,100,100,0,0,1,0.8,1.5,5,0,0,0,-1",
+        f"Style: emph,{FONT},{int(H * 0.052)},{_colour(YELLOW).replace('&H', '&H00', 1)[:-1]},&H000000FF,{soft},{soft},"
+        "-1,0,0,0,100,100,0,0,1,0.6,1.8,5,0,0,0,-1",
         f"Style: chip,{FONT},{chip_size},{white},&H000000FF,{black},&H80000000,-1,0,0,0,100,100,0,0,1,0,1,5,0,0,0,-1",
         f"Style: card,{FONT},{int(H * 0.05)},{white},&H000000FF,{black},&H80000000,-1,0,0,0,100,100,0,0,1,0,2,5,0,0,0,-1",
         "Style: plain,Arial,10,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",

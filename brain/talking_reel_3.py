@@ -9,7 +9,10 @@ from __future__ import annotations
 from . import talking_reel_2 as split
 
 SYSTEM_PROMPT = split.SYSTEM_PROMPT.replace(
-    "concrete\n                        subject, clean modern editorial or 3D style, no text or letters in the image",
+    "one clear visual metaphor made from 2-4 recognizable\n"
+    "                        everyday objects interacting, premium Swiss editorial vector illustration,\n"
+    "                        flat shapes, off-white background, no meaningless abstract geometry, people,\n"
+    "                        faces, hands, 3D render, text, or letters",
     "one concrete object as a premium minimalist still-life photograph, restrained charcoal and warm\n"
     "                        ivory palette, soft directional light, generous negative space, real material\n"
     "                        texture, no people, faces, hands, screens, text, letters, surrealism, or 3D render",

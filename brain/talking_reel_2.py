@@ -24,9 +24,10 @@ media files the creator uploaded. Return ONLY a JSON object:
   "drop": [<indices of filler sentences to cut, e.g. an off-topic "yes" at the end>],
   "cold_open": {"i": <index>, "text": "<the most provocative 2-4 second line, word for word>"},
   "broll": [{"i": <sentence index>,
-             "visual": "<English prompt for one restrained visual metaphor: a single object or simple
-                        geometric composition, premium minimalist editorial illustration, flat shapes,
-                        off-white background, no people, faces, hands, 3D render, text, or letters>",
+             "visual": "<English prompt for one clear visual metaphor made from 2-4 recognizable
+                        everyday objects interacting, premium Swiss editorial vector illustration,
+                        flat shapes, off-white background, no meaningless abstract geometry, people,
+                        faces, hands, 3D render, text, or letters>",
              "label": "<2-4 word Persian title for a text card if no image can be made>",
              "media": "<one of the uploaded file names that fits this sentence, or empty>"}],
   "chips": [{"i": <sentence index>, "items": ["<1-3 word Persian label>", ...]}]
@@ -36,9 +37,9 @@ Rules:
 - One caption entry for EVERY sentence that is not dropped. Fix every speech-to-text mistake from
   context, keep the colloquial wording, remove hesitation sounds and repeats, keep English terms
   in Latin script, Persian digits for numbers, never add or summarise.
-- "broll": pick only 25-35% of the sentences: the strongest concrete ideas, spaced apart by at least
-  one sentence. Fewer excellent visuals are better than constant decoration. Use each uploaded file
-  at most once, where it fits best.
+- "broll": REQUIRED. Pick 3-5 of the strongest concrete ideas (roughly 25-35% of the sentences),
+  spaced apart by at least one sentence. Never return an empty broll list. Fewer excellent visuals
+  are better than constant decoration. Use each uploaded file at most once, where it fits best.
 - "chips": at most 2 lists, only where the speaker lists things (tools, steps, options, costs);
   2-4 items each, Persian, no Latin script unless a product name.
 """
@@ -95,6 +96,40 @@ def normalize(data: dict, count: int, media_names: list[str]) -> dict:
         items = [str(v).strip() for v in (item or {}).get("items") or [] if str(v).strip()][:4]
         if k is not None and len(items) >= 2:
             chips.append({"i": k, "items": items})
+    # If a model ignores the required visual list, select a few spaced ideas
+    # instead of rendering a repetitive wall of text.
+    if len(broll) < min(3, max(1, count // 2)):
+        blocked = {item["i"] for item in broll} | {item["i"] for item in chips}
+        candidates = [k for k in range(count) if k not in shared["drop"] and k not in blocked]
+        target = min(count, max(3, (count + 2) // 3))
+        for k in candidates:
+            if len(broll) >= target:
+                break
+            if any(abs(k - item["i"]) < 2 for item in broll):
+                continue
+            idea = str(shared["captions"].get(k) or shared["captions"].get(str(k)) or "").strip()
+            if idea:
+                broll.append({
+                    "i": k,
+                    "visual": "A single restrained symbolic object representing this Persian idea: " + idea,
+                    "label": " ".join(idea.split()[:4]),
+                    "media": "",
+                })
+        if len(broll) < target:
+            used = {item["i"] for item in broll}
+            for k in candidates:
+                if len(broll) >= target:
+                    break
+                if k in used:
+                    continue
+                idea = str(shared["captions"].get(k) or shared["captions"].get(str(k)) or "").strip()
+                if idea:
+                    broll.append({
+                        "i": k,
+                        "visual": "A clear editorial metaphor using recognizable objects for this Persian idea: " + idea,
+                        "label": " ".join(idea.split()[:4]),
+                        "media": "",
+                    })
     hook = str(data.get("hook") or "").strip()
     if not hook:
         raise RuntimeError("the LLM returned no hook")

@@ -362,7 +362,7 @@ def resolve_pictures(job_dir: Path, decisions: dict, style: str) -> tuple[dict[i
                 # Include the renderer/prompt revision in the cache key so an
                 # improved visual direction never silently reuses the old,
                 # low-quality AI pictures.
-                cache_material = f"minimal-v2|{style}|{provider_name}|{slot['visual']}"
+                cache_material = f"minimal-v3|{style}|{provider_name}|{slot['visual']}"
                 key = hashlib.sha256(cache_material.encode()).hexdigest()[:16]
                 entry.update(source="ai", file=str(job_dir / "talking2_broll" / f"ai_{key}.png"))
                 wanted_ai.append((_visual_prompt(slot["visual"], style), Path(entry["file"]), provider_name))
@@ -424,8 +424,9 @@ def _visual_prompt(subject: str, style: str) -> str:
         )
     else:
         direction = (
-            "Use a flat editorial illustration with two or three geometric shapes, off-white "
-            "background, charcoal linework, and one muted teal or amber accent. No gradients or 3D. "
+            "Use a Swiss-style flat editorial illustration built from two to four recognizable "
+            "everyday objects, off-white background, charcoal linework, and one muted teal or amber "
+            "accent. Communicate the idea immediately; avoid meaningless abstract geometry. No gradients or 3D. "
         )
     return shared + direction + "Concept to communicate: " + subject.strip()
 
@@ -470,6 +471,16 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
                  "hook": load(job_dir).get("hook2") or decisions["hook"]}
     _stage(job_dir, "finding pictures", progress=25)
     pictures, slots = resolve_pictures(job_dir, decisions, style)
+    if style in {"talking_2", "talking_3"} and decisions.get("broll"):
+        required = min(2, len(decisions["broll"]))
+        if len(pictures) < required:
+            raise RuntimeError("Enough AI visuals were not generated. Check the image provider, then analyze and render again.")
+        # A failed image slot should return to the real speaker, never become
+        # an unattractive text-card substitute.
+        decisions = {
+            **decisions,
+            "broll": [item for item in decisions["broll"] if item["i"] in pictures],
+        }
     _stage(job_dir, "tracking the face", progress=35, slots=slots)
     faces = _faces(job_dir, video, media)
     plan = media.plan_reel(transcript, decisions, faces, float(transcript.get("duration") or 0)

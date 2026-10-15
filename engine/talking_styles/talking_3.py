@@ -23,7 +23,7 @@ from typing import Callable, Optional
 from ..localize import _ass_time, measure_text_boxes, probe_fps, probe_video
 from ..render_ass import ass_burner_ffmpeg, subtitles_filter
 from . import talking_2 as split
-from .talking_1 import (W, H, _esc, _spaced, eval_fps, fonts_bundle, music_bed, persian_digits, render_outro,
+from .talking_1 import (W, H, _esc, eval_fps, fonts_bundle, music_bed, persian_digits, render_outro,
                         track_faces, vignette_png)
 from .talking_2 import SPLIT_Y, ReelPlan, Shot, speaker_crop
 
@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 __all__ = ["track_faces", "plan_reel", "render", "probe_video"]
 
 FONT = "Ray ExtraBlack"
-CAPTION_FONT = "Ray ExtraBold"
+CAPTION_FONT = "Vazirmatn"
 ACCENT_FONT = "IRAN Kharazmi"
 ACCENT_COLOUR = "&H00A8D8F0"      # warm cream for the calligraphic accent (ASS BGR)
 PICTURE_ZOOM = 0.08
@@ -68,15 +68,14 @@ def plan_reel(transcript: dict, decisions: dict, faces, duration: float,
         if start >= (plan.hook or {}).get("end", 0) + 0.5:
             titles.append({"start": start, "end": min(plan.duration, start + 2.4), "text": persian_digits(title["text"])})
     plan.titles = titles
-    # Every other picture group is a floating card; a group of 2+ shots opens full frame.
+    # Unlike style 2, every generated visual is a full-screen cinematic
+    # cutaway. This keeps the two styles unmistakably different.
     plan.card_pictures, plan.full_pictures = set(), set()
-    for k, group in enumerate(split._groups(main)):
+    for group in split._groups(main):
         if not group[0].picture:
             continue
-        if k % 2:
-            plan.card_pictures.add(group[0].picture)
-        if len(group) >= 2:
-            plan.full_pictures.add(id(group[0]))
+        plan.full_pictures.update(id(shot) for shot in group)
+    plan.chips = []
     return plan
 
 
@@ -165,13 +164,13 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
         text = f"{c['lead']} {c['key']}".strip()
         y = SPLIT_Y if on_split(start) else H * 0.79
         events.append(f"Dialogue: 4,{_ass_time(start)},{_ass_time(c['end'])},cap,,0,0,0,,"
-                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f})\\fad(60,60)}}{_spaced(_esc(text))}")
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.0f})\\fad(90,90)}}{_esc(text)}")
 
     def editorial(t0: float, t1: float, text: str, y: float) -> None:
         words = text.split()
         accent, main = (words[0], " ".join(words[1:])) if len(words) >= 2 else ("", text)
         size = int(H * 0.085)
-        width = measure_text_boxes([(_spaced(_esc(main)), size)], W, H, FONT, fonts_dir)[0][0]
+        width = measure_text_boxes([(_esc(main), size)], W, H, FONT, fonts_dir)[0][0]
         size = min(size, int(size * W * 0.86 / max(1, width)))
         slide = f"\\fad(260,300)\\move({W / 2:.0f},{y + 40:.0f},{W / 2:.0f},{y:.0f},0,420)"
         if accent:
@@ -179,7 +178,7 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
                           f"{{\\an2\\q2\\fad(260,300)\\move({W / 2:.0f},{y - size * 0.95 + 30:.0f},{W / 2:.0f},"
                           f"{y - size * 0.95:.0f},80,500)}}{_esc(accent)}")
         events.append(f"Dialogue: 6,{_ass_time(t0 + 0.12)},{_ass_time(t1)},title,,0,0,0,,"
-                      f"{{\\an8\\q2{slide}\\fs{size}\\fscx88}}{_spaced(_esc(main))}")
+                      f"{{\\an8\\q2{slide}\\fs{size}\\fscx88}}{_esc(main)}")
 
     if plan.hook:
         editorial(plan.hook["start"] + 0.1, plan.hook["end"], plan.hook["text"],
@@ -190,7 +189,7 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
     chip_size = int(H * 0.04)
     for chip in plan.chips:
         items = chip["items"]
-        inks = measure_text_boxes([(_spaced(_esc(i)), chip_size) for i in items], W, H, FONT, fonts_dir)
+        inks = measure_text_boxes([(_esc(i), chip_size) for i in items], W, H, FONT, fonts_dir)
         step = min(0.45, (chip["end"] - chip["start"]) * 0.5 / max(1, len(items)))
         for k, (item, (iw, ia, ib)) in enumerate(zip(items, inks)):
             y = SPLIT_Y / 2 + (k - (len(items) - 1) / 2) * chip_size * 1.9
@@ -201,13 +200,13 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
             events.append(_rounded_rect(2, t0, chip["end"], W / 2 - half, top, W / 2 + half, bottom, "#FFFFFF",
                                         (bottom - top) / 2, extra="\\1a&HD8&\\fad(150,0)"))
             events.append(f"Dialogue: 3,{_ass_time(t0)},{_ass_time(chip['end'])},chip,,0,0,0,,"
-                          f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f})\\fad(150,0)}}{_spaced(_esc(item))}")
+                          f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f})\\fad(150,0)}}{_esc(item)}")
 
     white = "&H00FFFFFF"
     soft = "&H70000000"
     styles = [
-        f"Style: cap,{CAPTION_FONT},{int(H * 0.044)},{white},&H000000FF,{soft},{soft},"
-        "-1,0,0,0,100,100,0,0,1,2.5,1.2,5,0,0,0,-1",
+        f"Style: cap,{CAPTION_FONT},{int(H * 0.035)},{white},&H000000FF,{soft},{soft},"
+        "-1,0,0,0,100,100,0,0,1,0.7,1.5,5,0,0,0,-1",
         f"Style: title,{FONT},{int(H * 0.07)},{white},&H000000FF,{soft},&H80000000,"
         "-1,0,0,0,100,100,0,0,1,0,3,8,0,0,0,-1",
         f"Style: accent,{ACCENT_FONT},{int(H * 0.058)},{ACCENT_COLOUR},&H000000FF,{soft},&H80000000,"
