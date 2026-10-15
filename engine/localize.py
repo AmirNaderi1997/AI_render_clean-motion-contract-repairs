@@ -42,7 +42,7 @@ END_CARD_SECONDS = 3.5
 END_CARD_BG, END_CARD_GRID = "#141414", "#262626"
 END_CARD_BOX, END_CARD_HIGHLIGHT = "#2A2A2A", "#F2C230"
 END_CARD_LINES = ("عدد {n} رو کامنت کن تا قدم به قدم و رایگان", "یادت بدم بیزینس آنلاین خودت رو بسازی")
-END_CARD_FONT = "Ray ExtraBold"
+END_CARD_FONT = "Ray ExtraBlack"
 TEXT_COLOUR = "#FFFFFF"
 DEFAULT_TITLE_Y = 0.09          # fraction of frame height
 DEFAULT_CAPTION_Y = 0.56
@@ -637,29 +637,26 @@ def _rounded_rect(layer: int, t0: float, t1: float, x0: float, y0: float, x1: fl
 
 def end_card_events(cta_number: str, t0: float, t1: float, W: int, H: int, *,
                     fonts_dir: Optional[Path] = None, radius: float = 16.0) -> list[str]:
-    """CTA box and text of the end card: two lines, the ask in gold."""
+    """Large, aligned two-line CTA with no text background."""
     n = cta_number.strip() or "31"
     lines = [line.format(n=n) for line in END_CARD_LINES]
-    base = size = int(H * 0.036)
+    base = size = int(H * 0.050)
     inks = measure_text_boxes([(l, size) for l in lines], W, H, END_CARD_FONT, fonts_dir)
     widest = max(w for w, _, _ in inks)
-    if widest > W * 0.8:   # keep the box within ~85% of the width
-        size = int(size * W * 0.8 / widest)
+    if widest > W * 0.90:
+        size = int(size * W * 0.90 / widest)
         inks = [(int(w * size / base), int(a * size / base), int(b * size / base)) for w, a, b in inks]
         widest = max(w for w, _, _ in inks)
     pitch = 1.45 * size
     cy = H * 0.47
     anchors = [cy - pitch / 2, cy + pitch / 2]
-    top = anchors[0] + inks[0][1] - 0.75 * size
-    bottom = anchors[1] + inks[1][2] + 0.75 * size
-    half = widest / 2 + 0.6 * size
     fade = "\\fad(350,0)"
     gold = f"\\1c&H{_ass_colour(END_CARD_HIGHLIGHT)[4:]}&"
     white = f"\\1c&H{_ass_colour(TEXT_COLOUR)[4:]}&"
     # Line 1: "عدد" stays white, the ask from the number on is gold.
     head, _, rest = lines[0].partition(" ")
     first = f"{_escape(head)}{WORD_SPACE}{{{gold}}}{_escape(rest)}"
-    events = [_rounded_rect(5, t0, t1, W / 2 - half, top, W / 2 + half, bottom, END_CARD_BOX, radius, fade)]
+    events = []
     for text, y in ((first, anchors[0]), (_escape(lines[1]), anchors[1])):
         events.append(f"Dialogue: 6,{_ass_time(t0)},{_ass_time(t1)},card,,0,0,0,,"
                       f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f})\\fs{size}{white}{fade}}}{text}")
@@ -746,21 +743,18 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     # must hide a large English caption, instead of the box padding out.
     base_size, min_size, max_size = int(H * 0.031), int(H * 0.024), int(H * 0.052)
     max_text_w = W * MAX_TEXT_FRACTION
-    title_text = (state.get("title") or "").strip()
+    title_text = "" if state.get("title_layout") else (state.get("title") or "").strip()
     texts = [(line["fa"], base_size) for line, _, _ in windows] + ([(title_text, base_size)] if title_text else [])
     layouts = layout_texts(texts, W, H, font, fonts_dir, max_w=max_text_w, min_size=min_size)
     flat = [(l, size) for lines, _, size in layouts for l in lines]
     inks = iter(measure_text_boxes(flat, W, H, font, fonts_dir))
     ink_rows = [[next(inks)[1:] for _ in lines] for lines, _, _ in layouts]
 
-    # Caption windows found at analysis place the captions; the English
-    # regions (each fitted to its own words) are what gets covered.
+    # The matched caption windows define both placement and coverage. This
+    # avoids turning unrelated UI or headline text into giant black panels.
     captions = [c for line in state.get("lines", []) for c in (line.get("covers") or [])]
     row_y = caption_row(state) * H
-    # Short off-row detections are usually OCR noise; the caption row and
-    # anything on screen for half a second or more is real overlay text.
-    covers = [r for r in state.get("english_regions") or []
-              if r["end"] - r["start"] >= 0.45 or abs(r["box"]["cy"] * H - row_y) < H * 0.06]
+    covers = list(captions)
     if source_duration < duration:
         # The source's last frame is held; so is the text burned into it.
         covers, captions = ([{**c, "end": duration} if c["end"] >= source_duration - 0.4 else c for c in group]
@@ -1016,7 +1010,8 @@ def render(
     # Emoji and logo belong to the source part; the end card has its own logo.
     only_source = f":enable='lt(t,{source_duration:.3f})'" if end_card else ""
     ty = ((state.get("title_layout") or {}).get("box") or {}).get("cy", DEFAULT_TITLE_Y) * H
-    emoji = render_emoji_png(state.get("title_emojis", ""), work_dir / "emoji.png", int(H * 0.045))
+    emoji_text = "" if state.get("title_layout") else state.get("title_emojis", "")
+    emoji = render_emoji_png(emoji_text, work_dir / "emoji.png", int(H * 0.045))
     if emoji:
         inputs += ["-i", str(emoji)]
         y = max(0, int(ty - H * 0.034 / 2 - H * 0.009 - H * 0.05))

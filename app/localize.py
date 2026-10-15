@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 _lock = threading.Lock()
 _running: set[str] = set()
+DEFAULT_LOCALIZE_MUSIC = "assets/music/motivational_piano_beat.mp3"
 
 EDITABLE_LINE_FIELDS = {"fa", "kind"}
 
@@ -97,7 +98,7 @@ def create(user_id: str, filename: str, src, cta_number: str, music: Optional[st
         "id": project_id, "user_id": str(user_id), "name": name,
         "source": f"raw/{name}", "created_at": time.time(),
         "cta_number": (cta_number or "").strip() or DEFAULT_CTA_NUMBER,
-        "music": music or None,
+        "music": music or DEFAULT_LOCALIZE_MUSIC,
         "voice_provider": default_voice_provider(),
         "status": "queued", "stage": "", "message": "", "progress": 0,
         "title": "", "title_emojis": "", "title_layout": None, "lines": [],
@@ -338,7 +339,7 @@ def _render(project_id: str) -> None:
     media.render(
         video, style, placements, out, work_dir=root / "work",
         fonts_dir=PROJECT_ROOT / "presets" / "fonts",
-        music=resolve_music(state.get("music")),
+        music=resolve_music(state.get("music") or DEFAULT_LOCALIZE_MUSIC),
         logo=logo if logo.is_file() else None,
         on_progress=progress,
     )

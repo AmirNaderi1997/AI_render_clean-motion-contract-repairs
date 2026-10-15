@@ -113,7 +113,12 @@ For "speech" lines write natural spoken colloquial Persian (محاوره‌ای)
 - the English comes from speech recognition and can contain mistakes; fix obvious ones from context
   (e.g. "$2 .33" for a price people pay online after "$1" means $233, "Close your store link" means "Post your store link")
 
-Also write "title": a short Persian hook for a fixed headline at the top of the video.
+Also write "tutorial_start_i": the line index where the actual instructional
+steps begin. Lines before it are the opening hook/demo and must keep their
+original audio. If the video teaches from the first line, use that first index.
+
+Also write "title": a short Persian hook based on the video's first visible or
+spoken source headline, for a fixed headline at the top of the video.
 It sits above the whole video, so it must make people stop scrolling without
 explaining the steps: 4-7 words, about the product or the opportunity, no prices,
 no numbers, grammatical and natural. Good examples:
@@ -124,7 +129,7 @@ Translate only the items in "lines"; "full_script_for_context" is the whole vide
 When "write_title" is false, return "title" and "title_emojis" as "".
 
 Output schema:
-{"title": str, "title_emojis": str, "lines": [{"i": int, "kind": "speech"|"lyrics"|"cta", "fa": str}]}
+{"title": str, "title_emojis": str, "tutorial_start_i": int, "lines": [{"i": int, "kind": "speech"|"lyrics"|"cta", "fa": str}]}
 "fa" is "" for lyrics and cta lines."""
 
 
@@ -180,6 +185,7 @@ def translate(lines: list[dict]) -> tuple[dict, dict]:
         merged["lines"].extend(item for item in data.get("lines", []) if isinstance(item, dict))
         if offset == 0:
             merged["title"], merged["title_emojis"] = data.get("title"), data.get("title_emojis")
+            merged["tutorial_start_i"] = data.get("tutorial_start_i")
         model = getattr(usage, "model", model)
         cost += float(usage.cost_estimate)
     return merged, {"model": model, "cost_usd": cost}
@@ -188,11 +194,22 @@ def translate(lines: list[dict]) -> tuple[dict, dict]:
 def apply_translation(lines: list[dict], data: dict, cta_number: str) -> tuple[list[dict], str, str]:
     """Merge LLM output into lines; returns (lines, title, title_emojis)."""
     by_index = {int(item.get("i", -1)): item for item in data.get("lines", []) if isinstance(item, dict)}
+    try:
+        tutorial_start = int(data.get("tutorial_start_i"))
+    except (TypeError, ValueError):
+        tutorial_start = lines[0]["i"] if lines else 0
+    valid_indices = {line["i"] for line in lines}
+    if tutorial_start not in valid_indices:
+        tutorial_start = lines[0]["i"] if lines else 0
     out = []
     for line in lines:
         item = by_index.get(line["i"], {})
         kind = item.get("kind") if item.get("kind") in {"speech", "lyrics", "cta"} else "speech"
         fa = str(item.get("fa") or "").strip()
+        # The established lyrics path preserves source audio and suppresses
+        # overlays without changing voice generation or clip placement.
+        if line["i"] < tutorial_start:
+            kind, fa = "lyrics", ""
         if kind == "speech" and not fa:
             kind = "lyrics"
         out.append({**line, "kind": kind, "fa": fa})
