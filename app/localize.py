@@ -24,7 +24,6 @@ log = logging.getLogger(__name__)
 
 LOCALIZE_ROOT = (Path(settings.LOCALIZE_DIR).expanduser() if settings.LOCALIZE_DIR
                  else Path(settings.JOBS_DIR).expanduser().parent / "localize_jobs")
-DEFAULT_LOCALIZE_MUSIC = "assets/music/motivational_piano_beat.mp3"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Voice and transcription helpers read provider keys from os.environ, which
 # pydantic settings do not populate; load .env so a render right after a
@@ -98,7 +97,7 @@ def create(user_id: str, filename: str, src, cta_number: str, music: Optional[st
         "id": project_id, "user_id": str(user_id), "name": name,
         "source": f"raw/{name}", "created_at": time.time(),
         "cta_number": (cta_number or "").strip() or DEFAULT_CTA_NUMBER,
-        "music": music or DEFAULT_LOCALIZE_MUSIC,
+        "music": music or None,
         "voice_provider": default_voice_provider(),
         "status": "queued", "stage": "", "message": "", "progress": 0,
         "title": "", "title_emojis": "", "title_layout": None, "lines": [],
@@ -169,7 +168,7 @@ def update(project_id: str, changes: dict) -> dict:
             edit = edits.get(line["i"])
             if not edit:
                 continue
-            if edit.get("kind") in {"intro", "speech", "lyrics", "cta"}:
+            if edit.get("kind") in {"speech", "lyrics", "cta"}:
                 line["kind"] = edit["kind"]
             if "fa" in edit and line["kind"] == "speech":
                 line["fa"] = str(edit["fa"] or "").strip()
@@ -302,7 +301,7 @@ def _render(project_id: str) -> None:
     video = root / state["source"]
     _stage(project_id, "generating voice")
     clips = {}
-    spoken = [l for l in state["lines"] if l["kind"] not in {"intro", "lyrics"} and l.get("fa")]
+    spoken = [l for l in state["lines"] if l["kind"] != "lyrics" and l.get("fa")]
     provider = state.get("voice_provider") or text.default_voice_provider()
     text.check_voice_budget([l["fa"] for l in spoken], provider, root / "tts")
     if provider == "elevenlabs":
@@ -339,7 +338,7 @@ def _render(project_id: str) -> None:
     media.render(
         video, style, placements, out, work_dir=root / "work",
         fonts_dir=PROJECT_ROOT / "presets" / "fonts",
-        music=resolve_music(state.get("music") or DEFAULT_LOCALIZE_MUSIC),
+        music=resolve_music(state.get("music")),
         logo=logo if logo.is_file() else None,
         on_progress=progress,
     )

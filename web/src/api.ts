@@ -249,7 +249,7 @@ export interface LocalizeLine {
   end: number;
   en: string;
   fa: string;
-  kind: "intro" | "speech" | "lyrics" | "cta";
+  kind: "speech" | "lyrics" | "cta";
 }
 
 export interface TalkingReelState {
