@@ -27,7 +27,7 @@ from typing import Callable, Optional
 from ..localize import _ass_time, _rounded_rect, measure_text_boxes, probe_fps, probe_video
 from ..render_ass import ass_burner_ffmpeg, subtitles_filter
 from . import talking_1 as base
-from .talking_1 import (W, H, _colour, _esc, _median, cold_open_span, eval_fps, fonts_bundle,
+from .talking_1 import (W, H, _colour, _esc as _base_esc, _median, _spaced, cold_open_span, eval_fps, fonts_bundle,
                         music_bed, persian_digits, render_outro, speech_ranges, track_faces, vignette_png)
 
 log = logging.getLogger(__name__)
@@ -45,6 +45,11 @@ MUSIC_DB = -15.0
 LOUDNESS = -14.0
 FONT = "Ray ExtraBlack"
 CHIP_COLOUR = "#8A9298"         # glassy grey chips
+
+
+def _esc(text: str) -> str:
+    """ASS-safe Persian with visible Ray word spacing."""
+    return _spaced(_base_esc(text))
 
 
 @dataclass

@@ -52,12 +52,13 @@ Rules:
   are better than constant decoration. Use each uploaded file at most once, where it fits best.
 - "chips": at most 2 lists, only where the speaker lists things (tools, steps, options, costs);
   2-4 items each, Persian, no Latin script unless a product name.
-- "storyboard": REQUIRED. Propose 5-6 short, varied visual beats before rendering. Multiple beats
+- "storyboard": REQUIRED. Propose 4-5 short, varied visual beats before rendering. Multiple beats
   may reference the same long sentence. Start with viewer value, then evidence/contrast, then payoff.
   Never repeat the same visual_type or motion_style consecutively. A beat is a visual world, not a
   bullet-list slide. Use steps at most once. Never choose stat without a real number in the speech.
   Never invent generic labels such as fast/accurate/simple. Keep English only for an actual product
-  name or established term such as SaaS; translate malformed English transcript fragments.
+  name or established term such as SaaS; translate malformed English transcript fragments. Every
+  title must be a concise, faithful phrase from the same caption; never invent a new claim.
 """
 
 
@@ -189,7 +190,7 @@ def normalize(data: dict, count: int, media_names: list[str]) -> dict:
         fragments.extend((k, " ".join(p.split()[:6])) for p in (parts or [text]) if p.strip())
     types = ["kinetic_type", "concept", "comparison", "media_collage", "ui_showcase", "stat", "chat", "before_after"]
     motions = ["slam", "assemble", "wipe", "collage", "orbit", "count_up", "type_on", "reveal"]
-    target = min(6, max(5, len(fragments)))
+    target = min(5, max(4, len(fragments)))
     n = 0
     while len(storyboard) < target and fragments:
         k, title = fragments[n % len(fragments)]
@@ -203,4 +204,4 @@ def normalize(data: dict, count: int, media_names: list[str]) -> dict:
         n += 1
     return {"hook": hook, "captions": shared["captions"], "drop": shared["drop"],
             "cold_open": shared.get("cold_open"), "broll": sorted(broll, key=lambda b: b["i"]),
-            "chips": chips[:2], "storyboard": storyboard[:6]}
+            "chips": chips[:2], "storyboard": storyboard[:5]}

@@ -6,15 +6,14 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageStat
 
-from .catalog import recommend
-
-
 def review_render(video: Path, beats: list, work_dir: Path) -> dict:
     problems: list[str] = []
-    if len(beats) < 5:
-        problems.append("fewer than five visual worlds")
-    if any(beat.end - beat.start > 5.2 for beat in beats):
+    if len(beats) < 4:
+        problems.append("fewer than four visual worlds")
+    if any(beat.end - beat.start > 2.5 for beat in beats):
         problems.append("a visual remains on screen too long")
+    if any(beat.layout != "full_frame" for beat in beats):
+        problems.append("a visual overlay can cover the speaker's face")
     if any(a.visual_type == b.visual_type for a, b in zip(beats, beats[1:])):
         problems.append("consecutive scenes repeat the same visual grammar")
     primaries = [beat.registry_refs[0] for beat in beats if beat.registry_refs]
@@ -46,13 +45,11 @@ def improve_beats(beats: list) -> list:
     """Diversify a failed board before the single automatic retry."""
     types = ["kinetic_type", "concept", "comparison", "media_collage", "ui_showcase", "stat", "chat", "before_after"]
     motions = ["slam", "assemble", "wipe", "collage", "orbit", "count_up", "type_on", "reveal"]
-    used: set[str] = set()
     for index, beat in enumerate(beats):
         beat.visual_type = types[index % len(types)]
         beat.motion_style = motions[index % len(motions)]
-        beat.layout = "full_frame" if index % 3 == 0 else "top_panel"
-        refs = recommend(beat.visual_type, beat.title, limit=3, exclude=used)
-        beat.registry_refs = [item["name"] for item in refs]
-        if beat.registry_refs:
-            used.add(beat.registry_refs[0])
+        beat.layout = "full_frame"
+        # build_project will install and record only adapters that are truly
+        # mounted.  Never advertise a catalog result as used code here.
+        beat.registry_refs = []
     return beats

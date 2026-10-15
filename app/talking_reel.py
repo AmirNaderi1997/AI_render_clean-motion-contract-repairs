@@ -541,7 +541,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
     if hyperframes:
         from engine.hyperframes import build_project, build_visual_beats, render_project
 
-        beats = build_visual_beats(visual_plan, decisions)
+        beats = build_visual_beats(visual_plan, decisions, transcript)
         if not beats:
             raise RuntimeError("The visual planner produced no usable motion beats")
         _stage(job_dir, "building motion graphics", progress=78,

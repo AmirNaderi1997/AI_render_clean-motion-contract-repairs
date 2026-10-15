@@ -30,7 +30,16 @@ def _visual_type(title: str, items: list[str], requested: str = "") -> str:
     return "concept"
 
 
-def build_visual_beats(plan, decisions: dict) -> list[VisualBeat]:
+def _out_time(plan, source_time: float) -> float | None:
+    """Map a source transcript timestamp to the edited output timeline."""
+    matches = [shot for shot in plan.shots if float(shot.src_in) <= source_time <= float(shot.src_out)]
+    if not matches:
+        return None
+    shot = matches[-1]  # prefer the main edit over an earlier cold-open duplicate
+    return float(shot.out_start) + source_time - float(shot.src_in)
+
+
+def build_visual_beats(plan, decisions: dict, transcript: dict | None = None) -> list[VisualBeat]:
     """Turn the approved storyboard into short, varied output-time worlds.
 
     Story beats deliberately do not inherit sentence duration: Persian speech
@@ -46,20 +55,50 @@ def build_visual_beats(plan, decisions: dict) -> list[VisualBeat]:
     duration = float(getattr(plan, "duration", 0) or 0)
     if not storyboard or duration < 1:
         return []
-    count = min(6, max(5, len(storyboard)))
-    storyboard = (storyboard * ((count + len(storyboard) - 1) // len(storyboard)))[:count]
-    # Keep room for the speaker between worlds. The first visual starts after
-    # the hook and each scene is capped to avoid the old permanent-list look.
-    usable_start = min(3.0, duration * .08)
-    step = max(3.1, (duration - usable_start - 1.0) / count)
+    count = min(5, len(storyboard))
+    # Keep the ending/payoff when a model returns too many beats.  Taking the
+    # first five used to silently discard the conclusion and overrepresent the
+    # hook.
+    if len(storyboard) > count:
+        # First cover distinct spoken sentences.  Fill remaining slots across
+        # the unused ideas, always preserving the payoff at the end.
+        chosen: list[int] = []
+        seen_sentences: set[int] = set()
+        for index, item in enumerate(storyboard):
+            sentence = int(item.get("i", 0))
+            if sentence not in seen_sentences:
+                chosen.append(index)
+                seen_sentences.add(sentence)
+        for index in [len(storyboard) - 1] + [round(i * (len(storyboard) - 1) / (count - 1)) for i in range(count)]:
+            if index not in chosen:
+                chosen.append(index)
+            if len(chosen) >= count:
+                break
+        storyboard = [storyboard[i] for i in sorted(chosen[:count])]
+    else:
+        storyboard = storyboard[:count]
+    sentences = list((transcript or {}).get("sentences") or [])
+    per_sentence: dict[int, list[int]] = {}
+    for n, item in enumerate(storyboard):
+        per_sentence.setdefault(int(item.get("i", 0)), []).append(n)
     used_refs: set[str] = set()
     fallback_types = ["kinetic_type", "concept", "comparison", "media_collage", "ui_showcase", "stat", "chat", "before_after"]
     fallback_motions = ["slam", "assemble", "wipe", "collage", "orbit", "count_up", "type_on", "reveal"]
     beats: list[VisualBeat] = []
     for n, item in enumerate(storyboard):
         sentence = int(item["i"])
-        start = usable_start + n * step
-        scene_duration = min(4.8, max(2.35, step * .72))
+        siblings = per_sentence.get(sentence, [n])
+        rank = siblings.index(n)
+        start = None
+        if 0 <= sentence < len(sentences):
+            source = sentences[sentence]
+            a, b = float(source.get("start") or 0), float(source.get("end") or a)
+            source_anchor = a + (b - a) * ((rank + 1) / (len(siblings) + 1))
+            start = _out_time(plan, source_anchor)
+        if start is None:
+            start = 3.0 + n * max(4.0, (duration - 4.0) / max(1, count))
+        scene_duration = 2.15
+        start = max(1.2, min(duration - scene_duration - .35, start - scene_duration * .42))
         end = min(duration - .35, start + scene_duration)
         title = " ".join(str(item.get("title") or item.get("label") or "").split())[:80]
         if not title:
@@ -83,22 +122,51 @@ def build_visual_beats(plan, decisions: dict) -> list[VisualBeat]:
         beats.append(VisualBeat(
             id=f"beat-{sentence}-{n}", start=start, end=end,
             anchor_word=title.split()[0], visual_type=visual_type,
-            title=title, items=values, accent=("teal", "coral", "blue", "amber", "ink")[n % 5],
-            layout="full_frame" if n in {0, 3, count - 1} else "top_panel",
+            title=title, items=values, accent=("ink", "teal")[n % 2],
+            layout="full_frame",
             registry_refs=refs,
             narrative_role=str(item.get("narrative_role") or "evidence"),
             motion_style=motion_style,
             why=str(item.get("why") or ""),
         ))
-    return beats
+    # Output edits may repeat a source range (cold open) or collapse adjacent
+    # anchors.  Enforce one readable visual at a time after source-to-output
+    # mapping so motion cards can never stack or flash over each other.
+    beats.sort(key=lambda beat: beat.start)
+    previous_end = .4
+    for beat in beats:
+        length = beat.end - beat.start
+        beat.start = max(beat.start, previous_end + .70)
+        beat.end = min(duration - .35, beat.start + length)
+        if beat.end - beat.start < 1.45:
+            beat.start = max(previous_end + .35, beat.end - 1.45)
+        previous_end = beat.end
+    return [beat for beat in beats if beat.end - beat.start >= 1.2]
 
 
 def _beat_markup(beat: VisualBeat) -> str:
     title = html.escape(beat.title)
-    if beat.registry_refs and beat.registry_refs[0] == "hw-pipeline":
+    if beat.registry_refs and beat.registry_refs[0] == "caption-kinetic-slam":
+        body = (f'<div class="registry-stage"><div data-composition-id="caption-kinetic-slam" '
+                f'data-composition-src="compositions/components/caption-kinetic-slam.html" data-start="{beat.start:.3f}" '
+                f'data-duration="{beat.end - beat.start:.3f}" data-width="1080" data-height="1920" data-track-index="0"></div></div>')
+    elif beat.registry_refs and beat.registry_refs[0] == "comparison-split":
+        body = (f'<div class="registry-stage"><div data-composition-id="comparison-split" '
+                f'data-composition-src="compositions/components/comparison-split.html" data-start="{beat.start:.3f}" '
+                f'data-duration="{beat.end - beat.start:.3f}" data-width="1080" data-height="1920" data-track-index="0"></div></div>')
+    elif beat.registry_refs and beat.registry_refs[0] == "paper-collage-reveal":
+        values = beat.items or ["گوشی", "دوره آموزشی", "پادکست", "نرم‌افزار"]
+        slot = '<div class="registry-collage-content">' + ''.join(
+            f'<span>{html.escape(value)}</span>' for value in values[:4]
+        ) + '</div>'
+        body = (f'<template data-slot="paper-collage-reveal-content">{slot}</template>'
+                f'<div class="registry-stage"><div data-composition-id="paper-collage-reveal" '
+                f'data-composition-src="compositions/components/paper-collage-reveal.html" data-start="{beat.start:.3f}" '
+                f'data-duration="{beat.end - beat.start:.3f}" data-width="1080" data-height="1920" data-track-index="0"></div></div>')
+    elif beat.registry_refs and beat.registry_refs[0] == "hw-pipeline":
         body = (f'<div class="registry-stage"><div data-composition-id="hw-pipeline" '
-                f'data-composition-src="compositions/hw-pipeline.html" data-start="0" data-duration="{beat.end - beat.start:.3f}" '
-                'data-width="1920" data-height="1080" data-track-index="0"></div></div>')
+                f'data-composition-src="compositions/hw-pipeline.html" data-start="{beat.start:.3f}" data-duration="{beat.end - beat.start:.3f}" '
+                'data-width="1080" data-height="1920" data-track-index="0"></div></div>')
     elif beat.visual_type == "steps" and beat.items:
         body = "".join(
             f'<div class="step"><b>{i + 1:02d}</b><span>{html.escape(value)}</span></div>'
@@ -142,7 +210,7 @@ def _beat_markup(beat: VisualBeat) -> str:
     else:
         body = '<div class="concept"><div><i></i><small>×۱</small></div><div><i></i><i></i><i></i><i></i><small>×۴</small></div><div class="many"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><small>×۱۶</small></div></div>'
     return (
-        f'<section id="{beat.id}" data-motion="{html.escape(beat.motion_style)}" class="visual-beat {beat.visual_type} {beat.accent} {beat.layout} clip" '
+        f'<section id="{beat.id}" data-motion="{html.escape(beat.motion_style)}" class="visual-beat {beat.visual_type} {beat.accent} {beat.layout} {"registry-beat" if beat.registry_refs else ""} clip" '
         f'data-start="{beat.start:.3f}" data-duration="{beat.end - beat.start:.3f}" data-track-index="2">'
         f'<div class="beat-inner"><div class="ghost">{html.escape(beat.anchor_word)}</div><div class="eyebrow">{html.escape(beat.narrative_role)}</div><h2 dir="rtl">{title}</h2>{body}</div></section>'
     )
@@ -247,7 +315,7 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
 .beat-inner{{position:absolute;inset:0;padding:62px 58px;opacity:0}}
 .visual-beat:after{{content:"";position:absolute;inset:0;border:2px solid color-mix(in srgb,var(--fg) 12%,transparent);border-radius:42px;pointer-events:none}}
 .ghost{{position:absolute;left:-20px;top:8px;font-size:190px;opacity:.045;white-space:nowrap;direction:rtl}}.eyebrow{{font-size:22px;color:color-mix(in srgb,var(--fg) 55%,transparent);margin-bottom:25px;letter-spacing:.08em}}h2{{font-size:66px;line-height:1.28;margin:0;max-width:870px;letter-spacing:-.02em}}
-.teal{{--accent:#19a58f;--bg:#eaf5ef;--fg:#102b27}}.amber{{--accent:#ffb000;--bg:#fff4ce;--fg:#32240b}}.coral{{--accent:#ff6047;--bg:#2a1110;--fg:#fff2e8}}.blue{{--accent:#72a7ff;--bg:#0c2340;--fg:#edf5ff}}.ink{{--accent:#d4ff42;--bg:#131619;--fg:#f4f5ef}}.stat{{font-size:150px;color:var(--accent);margin-top:58px;line-height:1}}
+.teal{{--accent:#15977f;--bg:#f1efe7;--fg:#14221f}}.amber,.coral,.blue,.ink{{--accent:#d4ff42;--bg:#111513;--fg:#f4f1e8}}.stat{{font-size:150px;color:var(--accent);margin-top:58px;line-height:1}}
 .meter{{height:18px;background:#d8d4ca;border-radius:12px;margin-top:34px;overflow:hidden;direction:ltr}}.meter i{{display:block;width:78%;height:100%;background:var(--accent);transform-origin:left}}
 .step{{display:flex;align-items:center;gap:24px;margin-top:27px;font-size:40px}}.step b{{display:grid;place-items:center;width:72px;height:72px;border-radius:22px;background:var(--accent);color:white;font-size:28px}}.step span{{border-bottom:2px solid #151a1b20;padding:10px 0;flex:1}}
 .compare{{display:grid;grid-template-columns:1fr 120px 1fr;align-items:center;gap:18px;margin-top:70px;text-align:center}}.compare>div{{height:220px;border:3px solid currentColor;border-radius:34px;display:grid;place-items:center;padding:20px}}.compare strong{{display:block;font:900 80px/1 Ray;color:var(--accent)}}.compare span{{font-size:31px}}.compare i{{font-style:normal;color:var(--accent);font-size:74px}}.compare i b{{font-weight:900}}
@@ -260,7 +328,11 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
 .kinetic{{font-size:118px;line-height:1.3;margin-top:55px;color:var(--accent);max-width:900px;min-height:190px;padding-bottom:30px;overflow:hidden}}
 .kinetic_type h2{{display:none}}.kinetic_type .kinetic{{font-size:132px;margin-top:160px;max-width:920px}}
 .before-after{{display:grid;grid-template-columns:1fr 90px 1fr;gap:18px;align-items:center;margin-top:65px;font-size:34px;text-align:center}}.before-after span{{height:210px;border-radius:32px;border:3px solid currentColor;display:flex;flex-direction:column;justify-content:center;padding:24px}}.before-after small{{display:block;color:var(--accent);font-size:23px;margin-bottom:15px}}.before-after i{{height:5px;background:var(--accent);position:relative}}.before-after i:after{{content:"→";position:absolute;left:28px;top:-38px;color:var(--accent);font-style:normal;font-size:60px}}
-.registry-stage{{position:relative;width:100%;height:360px;margin-top:26px;overflow:hidden;border-radius:28px;background:#fffdf8}}.registry-stage>[data-composition-src]{{position:absolute;inset:0;width:100%;height:100%}}
+.registry-beat .beat-inner{{position:absolute;inset:0;padding:0!important}}.registry-beat .ghost,.registry-beat .eyebrow,.registry-beat h2{{display:none}}
+.registry-beat .registry-stage{{position:absolute;inset:0;width:100%;height:100%;margin:0;overflow:hidden;border-radius:0;background:#080b0c}}
+.registry-stage>[data-composition-src]{{position:absolute;inset:0;width:100%;height:100%}}
+.registry-collage-content{{width:100%;height:100%;padding:230px 90px;display:grid;grid-template-columns:1fr 1fr;gap:28px;background:#0b1010;direction:rtl}}
+.registry-collage-content span{{display:grid;place-items:center;padding:32px;border:2px solid #d9ff4f;border-radius:30px;color:#f7f5ed;background:#151b1b;font:76px/1.15 Ray;text-align:center}}
 </style></head><body><main id="root" data-composition-id="main" data-start="0" data-duration="{duration:.3f}" data-width="1080" data-height="1920">
 <video id="rough-cut" class="base clip" src="./assets/base.mp4" data-start="0" data-duration="{duration:.3f}" data-track-index="0" data-has-audio="true"></video>
 {cards}</main><script>{_timeline_script(beats)}</script></body></html>'''
