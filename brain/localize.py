@@ -97,6 +97,7 @@ _SYSTEM = """You localize short English social videos (dropshipping / ecommerce
 tutorials) for a Persian-speaking Instagram audience. Return JSON only.
 
 For every input line decide its kind:
+- "intro": the opening hook, meme, reaction clip, or product tease before the actual tutorial/instructions begin. Keep its original audio and add no Persian voice or caption.
 - "lyrics": song lyrics, singing, chants or background vocals that are not the narrator explaining something. These keep the original audio and get no Persian line.
 - "cta": the closing call to action (e.g. "comment G for a free DM", "follow for more").
 - "speech": everything else the narrator says.
@@ -113,10 +114,10 @@ For "speech" lines write natural spoken colloquial Persian (محاوره‌ای)
 - the English comes from speech recognition and can contain mistakes; fix obvious ones from context
   (e.g. "$2 .33" for a price people pay online after "$1" means $233, "Close your store link" means "Post your store link")
 
-Also write "title": a short Persian hook for a fixed headline at the top of the video.
-It sits above the whole video, so it must make people stop scrolling without
-explaining the steps: 4-7 words, about the product or the opportunity, no prices,
-no numbers, grammatical and natural. Good examples:
+Also write "title": a short Persian equivalent inspired primarily by the first
+spoken/on-screen hook of the source video, not a generic summary of the tutorial.
+It appears only during the opening: 4-7 words, no prices or numbers, grammatical
+and natural. Good examples:
 "این محصول این روزا حسابی ترند شده", "همه دارن اینو میخرن", "این محصول داره میترکونه".
 And "title_emojis": one or two emojis that fit the hook (e.g. "🔥😯").
 
@@ -124,8 +125,8 @@ Translate only the items in "lines"; "full_script_for_context" is the whole vide
 When "write_title" is false, return "title" and "title_emojis" as "".
 
 Output schema:
-{"title": str, "title_emojis": str, "lines": [{"i": int, "kind": "speech"|"lyrics"|"cta", "fa": str}]}
-"fa" is "" for lyrics and cta lines."""
+{"title": str, "title_emojis": str, "lines": [{"i": int, "kind": "intro"|"speech"|"lyrics"|"cta", "fa": str}]}
+"fa" is "" for intro, lyrics and cta lines."""
 
 
 CHUNK_LINES = 6
@@ -191,12 +192,12 @@ def apply_translation(lines: list[dict], data: dict, cta_number: str) -> tuple[l
     out = []
     for line in lines:
         item = by_index.get(line["i"], {})
-        kind = item.get("kind") if item.get("kind") in {"speech", "lyrics", "cta"} else "speech"
+        kind = item.get("kind") if item.get("kind") in {"intro", "speech", "lyrics", "cta"} else "speech"
         fa = str(item.get("fa") or "").strip()
         if kind == "speech" and not fa:
             kind = "lyrics"
         out.append({**line, "kind": kind, "fa": fa})
-    spoken = [line for line in out if line["kind"] != "lyrics"]
+    spoken = [line for line in out if line["kind"] not in {"intro", "lyrics"}]
     if spoken and not any(line["kind"] == "cta" for line in out):
         spoken[-1]["kind"] = "cta"
     for line in out:

@@ -34,7 +34,7 @@ BOX_STYLES = {
     "blue": ("#1565C0", "#FFFFFF"),
     "green": ("#2E7D32", "#FFFFFF"),
 }
-PAD_X, PAD_Y = 0.25, 0.09       # box padding, as a fraction of the font size
+PAD_X, PAD_Y = 0.18, 0.06       # restrained box padding, as a fraction of font size
 LINE_PITCH = 1.05               # line spacing of two-line captions, x font size
 MAX_TEXT_FRACTION = 0.88        # widest text, as a fraction of the frame width
 # End card shown after the source ends (instead of a frozen last frame).
@@ -42,7 +42,7 @@ END_CARD_SECONDS = 3.5
 END_CARD_BG, END_CARD_GRID = "#141414", "#262626"
 END_CARD_BOX, END_CARD_HIGHLIGHT = "#2A2A2A", "#F2C230"
 END_CARD_LINES = ("عدد {n} رو کامنت کن تا قدم به قدم و رایگان", "یادت بدم بیزینس آنلاین خودت رو بسازی")
-END_CARD_FONT = "Ray ExtraBold"
+END_CARD_FONT = "Ray ExtraBlack"
 TEXT_COLOUR = "#FFFFFF"
 DEFAULT_TITLE_Y = 0.09          # fraction of frame height
 DEFAULT_CAPTION_Y = 0.56
@@ -389,7 +389,7 @@ def detect_layout(video: Path, lines: list[dict], words: Optional[list[dict]] = 
         (float(wd["start"]), _norm(str(wd.get("w", ""))))
         for wd in (words or []) if len(_norm(str(wd.get("w", "")))) >= 2
     ]
-    first_speech = next((l["start"] for l in lines if l.get("kind") != "lyrics"), duration)
+    first_speech = next((l["start"] for l in lines if l.get("kind") not in {"intro", "lyrics"}), duration)
     caption_windows: list[dict] = []
     title_frames: list[tuple[float, dict]] = []
     half = 0.5 / SAMPLE_FPS
@@ -640,26 +640,23 @@ def end_card_events(cta_number: str, t0: float, t1: float, W: int, H: int, *,
     """CTA box and text of the end card: two lines, the ask in gold."""
     n = cta_number.strip() or "31"
     lines = [line.format(n=n) for line in END_CARD_LINES]
-    base = size = int(H * 0.036)
+    base = size = int(H * 0.055)
     inks = measure_text_boxes([(l, size) for l in lines], W, H, END_CARD_FONT, fonts_dir)
     widest = max(w for w, _, _ in inks)
-    if widest > W * 0.8:   # keep the box within ~85% of the width
-        size = int(size * W * 0.8 / widest)
+    if widest > W * 0.9:
+        size = int(size * W * 0.9 / widest)
         inks = [(int(w * size / base), int(a * size / base), int(b * size / base)) for w, a, b in inks]
         widest = max(w for w, _, _ in inks)
     pitch = 1.45 * size
     cy = H * 0.47
     anchors = [cy - pitch / 2, cy + pitch / 2]
-    top = anchors[0] + inks[0][1] - 0.75 * size
-    bottom = anchors[1] + inks[1][2] + 0.75 * size
-    half = widest / 2 + 0.6 * size
     fade = "\\fad(350,0)"
     gold = f"\\1c&H{_ass_colour(END_CARD_HIGHLIGHT)[4:]}&"
     white = f"\\1c&H{_ass_colour(TEXT_COLOUR)[4:]}&"
     # Line 1: "عدد" stays white, the ask from the number on is gold.
     head, _, rest = lines[0].partition(" ")
     first = f"{_escape(head)}{WORD_SPACE}{{{gold}}}{_escape(rest)}"
-    events = [_rounded_rect(5, t0, t1, W / 2 - half, top, W / 2 + half, bottom, END_CARD_BOX, radius, fade)]
+    events = []
     for text, y in ((first, anchors[0]), (_escape(lines[1]), anchors[1])):
         events.append(f"Dialogue: 6,{_ass_time(t0)},{_ass_time(t1)},card,,0,0,0,,"
                       f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f})\\fs{size}{white}{fade}}}{text}")
@@ -725,7 +722,7 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
 
     # Persian lines and their on-screen windows (never overlapping).
     by_index = {p["i"]: p for p in placements}
-    shown = [l for l in state.get("lines", []) if l.get("kind") != "lyrics" and l.get("fa")
+    shown = [l for l in state.get("lines", []) if l.get("kind") not in {"intro", "lyrics"} and l.get("fa")
              and (by_index.get(l["i"]) or l)["start"] < end_all]
     windows = []
     for k, line in enumerate(shown):
@@ -744,9 +741,13 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     # Large bold text (about 70-80 px at 1080 wide) in a box that hugs it.
     # The text grows (up to about 100 px at 1080 wide) to fill a box that
     # must hide a large English caption, instead of the box padding out.
-    base_size, min_size, max_size = int(H * 0.031), int(H * 0.024), int(H * 0.052)
-    max_text_w = W * MAX_TEXT_FRACTION
-    title_text = (state.get("title") or "").strip()
+    base_size, min_size, max_size = int(H * 0.024), int(H * 0.020), int(H * 0.032)
+    max_text_w = W * 0.76
+    # A source-owned headline has priority. Adding another language around a
+    # large creator title is fragile (and often collides with "Me:" or other
+    # hook copy), so keep the suggestion editable in state but do not burn it
+    # into videos that already have a detected opening title.
+    title_text = "" if state.get("title_layout") else (state.get("title") or "").strip()
     texts = [(line["fa"], base_size) for line, _, _ in windows] + ([(title_text, base_size)] if title_text else [])
     layouts = layout_texts(texts, W, H, font, fonts_dir, max_w=max_text_w, min_size=min_size)
     flat = [(l, size) for lines, _, size in layouts for l in lines]
@@ -808,6 +809,10 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
         margin = H * 0.01
         need_half, need_top, need_bottom = 0.0, cy, cy
         hit: set[int] = set()
+        # Never grow Persian captions into giant panels just to erase every
+        # source glyph. The localized line is a compact subtitle; existing
+        # creator text remains part of the original video design.
+        absorb = (0.0, 0.0)
         grew = True
         while grew:
             grew = False
@@ -853,11 +858,16 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
 
     title_box = (state.get("title_layout") or {}).get("box")
     title_y = (title_box or {}).get("cy", DEFAULT_TITLE_Y) * H
+    if title_box and title_text:
+        title_layout_lines, _, title_size = layouts[-1]
+        title_h = (len(title_layout_lines) * LINE_PITCH + 2 * PAD_Y) * title_size
+        title_y = (title_box.get("cy", DEFAULT_TITLE_Y) + title_box.get("h", 0.04) / 2) * H + H * 0.018 + title_h / 2
+        title_y = min(H * 0.34, title_y)
     title_bottom = 0.0
     if title_text:
-        # Constant for the whole video; it absorbs the English title.
-        title_end = (state.get("title_layout") or {}).get("end", 3.0)
-        _, title_bottom = place(1, 0, end_all, title_y, len(layouts) - 1, title_style,
+        # Opening-only and below the source title; never cover its typography.
+        title_end = min(end_all, max(1.0, float((state.get("title_layout") or {}).get("end", 3.0))))
+        _, title_bottom = place(1, 0, title_end, title_y, len(layouts) - 1, title_style,
                                 absorb=(0.0, title_end))
         title_bottom += H * 0.01
 
@@ -1015,12 +1025,15 @@ def render(
     last = "v0"
     # Emoji and logo belong to the source part; the end card has its own logo.
     only_source = f":enable='lt(t,{source_duration:.3f})'" if end_card else ""
-    ty = ((state.get("title_layout") or {}).get("box") or {}).get("cy", DEFAULT_TITLE_Y) * H
-    emoji = render_emoji_png(state.get("title_emojis", ""), work_dir / "emoji.png", int(H * 0.045))
+    title_layout = state.get("title_layout") or {}
+    ty = (title_layout.get("box") or {}).get("cy", DEFAULT_TITLE_Y) * H
+    show_added_title = bool((state.get("title") or "").strip()) and not title_layout
+    emoji = render_emoji_png(state.get("title_emojis", ""), work_dir / "emoji.png", int(H * 0.045)) if show_added_title else None
     if emoji:
         inputs += ["-i", str(emoji)]
         y = max(0, int(ty - H * 0.034 / 2 - H * 0.009 - H * 0.05))
-        vf.append(f"[{last}][{n}:v]overlay=x=(W-w)/2:y={y}{only_source}[v{n}]")
+        title_end = min(source_duration, max(1.0, float(title_layout.get("end", 3.0))))
+        vf.append(f"[{last}][{n}:v]overlay=x=(W-w)/2:y={y}:enable='between(t,0,{title_end:.3f})'[v{n}]")
         last, n = f"v{n}", n + 1
     if logo and logo.is_file():
         inputs += ["-i", str(logo)]

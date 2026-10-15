@@ -20,6 +20,7 @@ const STAGE_LABELS: Record<string, string> = {
   rendering: "رندر ویدیو",
 };
 const KIND_LABELS: Record<LocalizeLine["kind"], string> = {
+  intro: "مقدمه؛ صدای اصلی",
   speech: "دوبله",
   lyrics: "صدای اصلی",
   cta: "CTA",
@@ -65,7 +66,7 @@ function MusicSelect({ value, onChange, disabled }: { value: string | null; onCh
 function NewProject({ onCreated }: { onCreated: (p: LocalizeProject) => void }) {
   const [file, setFile] = React.useState<File | null>(null);
   const [cta, setCta] = React.useState("31");
-  const [music, setMusic] = React.useState<string | null>(null);
+  const [music, setMusic] = React.useState<string | null>("assets/music/motivational_piano_beat.mp3");
   const [progress, setProgress] = React.useState<number | null>(null);
   const [error, setError] = React.useState("");
 
