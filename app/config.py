@@ -70,6 +70,8 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
+    # Visual Composer v2: FFmpeg rough cut + deterministic HyperFrames motion.
+    TALKING_HYPERFRAMES_ENABLED: bool = False
 
     @model_validator(mode="after")
     def validate_production_hosts(self):

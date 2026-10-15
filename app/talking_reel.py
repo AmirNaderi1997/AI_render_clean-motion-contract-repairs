@@ -450,6 +450,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
     """The split-screen styles ("صحبتی ۲", "صحبتی ۳"): pictures on top, the speaker below."""
     from importlib import import_module
 
+    from app.config import settings
     from engine.talking_reel import get_style
 
     brain_name, decisions_key, default_music = SPLIT_STYLES[style]
@@ -469,9 +470,24 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         save(job_dir, state)
     decisions = {**decisions, "captions": {int(k): v for k, v in decisions["captions"].items()},
                  "hook": load(job_dir).get("hook2") or decisions["hook"]}
-    _stage(job_dir, "finding pictures", progress=25)
-    pictures, slots = resolve_pictures(job_dir, decisions, style)
-    if style in {"talking_2", "talking_3"} and decisions.get("broll"):
+    hyperframes = style == "talking_2" and settings.TALKING_HYPERFRAMES_ENABLED
+    _stage(job_dir, "planning visual beats" if hyperframes else "finding pictures", progress=25)
+    if hyperframes:
+        # A neutral placeholder makes the proven style-2 renderer place the
+        # speaker in the lower half. HyperFrames paints over the upper card,
+        # so motion graphics never cover the speaker's face.
+        from PIL import Image
+
+        placeholder = job_dir / "talking_reel_work" / "motion_placeholder.png"
+        placeholder.parent.mkdir(parents=True, exist_ok=True)
+        if not placeholder.is_file():
+            Image.new("RGB", (1080, 1080), "#F3F0E8").save(placeholder)
+        pictures = {int(item["i"]): str(placeholder) for item in decisions.get("broll") or []}
+        slots = [{"i": item["i"], "source": "motion", "status": "planned"}
+                 for item in decisions.get("broll") or []]
+    else:
+        pictures, slots = resolve_pictures(job_dir, decisions, style)
+    if not hyperframes and style in {"talking_2", "talking_3"} and decisions.get("broll"):
         required = min(2, len(decisions["broll"]))
         if len(pictures) < required:
             raise RuntimeError("Enough AI visuals were not generated. Check the image provider, then analyze and render again.")
@@ -483,21 +499,40 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         }
     _stage(job_dir, "tracking the face", progress=35, slots=slots)
     faces = _faces(job_dir, video, media)
-    plan = media.plan_reel(transcript, decisions, faces, float(transcript.get("duration") or 0)
-                           or media.probe_video(video)[2], pictures)
+    source_duration = float(transcript.get("duration") or 0) or media.probe_video(video)[2]
+    visual_plan = media.plan_reel(transcript, decisions, faces, source_duration, pictures)
+    # The rough cut stays clean: HyperFrames owns the visual beats, while the
+    # proven FFmpeg renderer keeps cuts, audio, face framing and Ray captions.
+    clean_decisions = {**decisions, "chips": []} if hyperframes else decisions
+    plan = media.plan_reel(transcript, clean_decisions, faces, source_duration, pictures)
     _stage(job_dir, "rendering", progress=45)
     out = _next_output(job_dir)
     state = load(job_dir)
 
     def progress(pct: int) -> None:
-        _stage(job_dir, "rendering", progress=45 + int(pct * 0.55))
+        ceiling = 30 if hyperframes else 55
+        _stage(job_dir, "rendering rough cut" if hyperframes else "rendering",
+               progress=45 + int(pct * ceiling / 100))
 
     # The talking_1 default bed does not suit every style; an explicit choice wins.
     music = state.get("music")
     if music in (None, DEFAULT_MUSIC) and state.get("music") is not None:
         music = default_music
-    media.render(video, plan, out, work_dir=job_dir / "talking_reel_work",
+    rough = job_dir / "talking_reel_work" / "hyperframes_base.mp4" if hyperframes else out
+    media.render(video, plan, rough, work_dir=job_dir / "talking_reel_work",
                  music=resolve_music(music), cta=state.get("cta") or "", on_progress=progress)
+    if hyperframes:
+        from engine.hyperframes import build_project, build_visual_beats, render_project
+
+        beats = build_visual_beats(visual_plan, decisions)
+        if not beats:
+            raise RuntimeError("The visual planner produced no usable motion beats")
+        _stage(job_dir, "building motion graphics", progress=78,
+               visual_beats=[beat.model_dump() for beat in beats])
+        project = job_dir / "talking_reel_work" / "hyperframes"
+        build_project(project, rough, beats, duration=plan.duration)
+        _stage(job_dir, "rendering motion graphics", progress=82)
+        render_project(project, out)
     state = load(job_dir)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",
                  duration=round(plan.duration, 2), shots=len(plan.shots))
