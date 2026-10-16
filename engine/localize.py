@@ -34,7 +34,7 @@ BOX_STYLES = {
     "blue": ("#1565C0", "#FFFFFF"),
     "green": ("#2E7D32", "#FFFFFF"),
 }
-PAD_X, PAD_Y = 0.25, 0.09       # box padding, as a fraction of the font size
+PAD_X, PAD_Y = 0.12, 0.04       # tight box padding, as a fraction of the font size
 LINE_PITCH = 1.05               # line spacing of two-line captions, x font size
 MAX_TEXT_FRACTION = 0.88        # widest text, as a fraction of the frame width
 # End card shown after the source ends (instead of a frozen last frame).
@@ -865,7 +865,7 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     text_colour = _ass_colour(TEXT_COLOUR)
     caption_style = BOX_STYLES.get(state.get("caption_box") or "", BOX_STYLES["black"])
     title_style = BOX_STYLES.get(state.get("title_box") or "", caption_style)
-    cover_pad = int(H * 0.006)
+    cover_pad = int(H * 0.003)
     radius = 13 * W / 1080
     source_duration = source_duration if source_duration is not None else duration
     end_all = max(0.01, (end_card_at if end_card_at is not None else duration) - 0.02)
@@ -935,8 +935,9 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
               *, absorb: tuple[float, float], floor: float = 0.0, reach: float = 0.0) -> tuple[float, float]:
         """Draw exactly one subtitle box at every instant.
 
-        Its geometry is the union of the Persian text and the visual caption
-        present in that frame. There is never a second cover-only rectangle.
+        Its geometry is fixed for the complete Persian caption window. The
+        text grows to fill the source-caption cover, so the card cannot pulse
+        as the underlying English words animate or change.
         """
         lines, widths, layout_size = layouts[item]
         lines_ink = ink_rows[item]
@@ -949,38 +950,26 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
         box_colour, text_col = style
         relevant = [c for c in covers if c["end"] > absorb[0] and c["start"] < absorb[1]
                     and abs(c["box"]["cy"] * H - cy) < H * 0.08 + reach]
-        points = {t0, t1}
-        for c in relevant:
-            points.add(max(t0, c["start"]))
-            points.add(min(t1, c["end"]))
-        points = sorted(p for p in points if t0 <= p <= t1)
-        overall_top, overall_bottom = H, 0.0
-        for a, b in zip(points, points[1:]):
-            if b - a < 0.005:
-                continue
-            middle = (a + b) / 2
-            active = [c for c in relevant if c["start"] <= middle < c["end"]]
-            segment_y = _median([c["box"]["cy"] for c in active]) * H if active else cy
-            half, top, bottom, anchors = extents(layout_size)
-            # Re-centre the text block on the visual caption in this frame.
-            delta = segment_y - cy
-            top, bottom = top + delta, bottom + delta
-            anchors = [y + delta for y in anchors]
-            if active:
-                glyph_h = max(c["box"]["h"] * H for c in active)
-                pad_x = max(cover_pad, glyph_h * 0.65)
-                x0 = min((c["box"]["cx"] - c["box"]["w"] / 2) * W for c in active) - pad_x
-                x1 = max((c["box"]["cx"] + c["box"]["w"] / 2) * W for c in active) + pad_x
-                y0 = min((c["box"]["cy"] - c["box"]["h"] / 2) * H for c in active) - cover_pad
-                y1 = max((c["box"]["cy"] + c["box"]["h"] / 2) * H for c in active) + cover_pad
-                half = max(half, W / 2 - x0, x1 - W / 2)
-                top, bottom = min(top, y0), max(bottom, y1)
-            top = max(floor, top)
-            rect(layer, a, b, W / 2 - half, top, W / 2 + half, bottom, box_colour)
-            for line, y in zip(lines, anchors):
-                text(layer + 1, a, b, y, line, layout_size, text_col)
-            overall_top, overall_bottom = min(overall_top, top), max(overall_bottom, bottom)
-        return overall_top, overall_bottom
+        size = layout_size
+        if relevant and max(widths) > 0:
+            source_width = max(c["box"]["w"] * W for c in relevant)
+            # Fill the card horizontally while retaining a small safety inset.
+            wanted = int(layout_size * max(1.0, (source_width - 2 * cover_pad) / max(widths)))
+            size = min(max_size, wanted)
+
+        half, top, bottom, anchors = extents(size)
+        if relevant:
+            x0 = min((c["box"]["cx"] - c["box"]["w"] / 2) * W for c in relevant) - cover_pad
+            x1 = max((c["box"]["cx"] + c["box"]["w"] / 2) * W for c in relevant) + cover_pad
+            y0 = min((c["box"]["cy"] - c["box"]["h"] / 2) * H for c in relevant) - cover_pad
+            y1 = max((c["box"]["cy"] + c["box"]["h"] / 2) * H for c in relevant) + cover_pad
+            half = max(half, W / 2 - x0, x1 - W / 2)
+            top, bottom = min(top, y0), max(bottom, y1)
+        top = max(floor, top)
+        rect(layer, t0, t1, W / 2 - half, top, W / 2 + half, bottom, box_colour)
+        for line, y in zip(lines, anchors):
+            text(layer + 1, t0, t1, y, line, size, text_col)
+        return top, bottom
 
     title_box = (state.get("title_layout") or {}).get("box")
     title_y = (title_box or {}).get("cy", DEFAULT_TITLE_Y) * H
@@ -1116,19 +1105,24 @@ def render(
     voice_end = max((p["end"] for p in placements), default=0.0) + 0.5
     end_card = state.get("end_card", True)
     if end_card:
-        # Cut to the end card when the source ends; the CTA voice runs on.
+        # Cut before the source's own CTA appears. The clean Persian end card
+        # replaces it, so English COMMENT / FREE DM text never remains visible.
+        cta_indices = {line["i"] for line in state.get("lines", []) if line.get("kind") == "cta"}
+        card_at = min((p["start"] for p in placements if p["i"] in cta_indices), default=source_duration)
+        card_at = min(source_duration, max(0.0, card_at))
         card_seconds = float(state.get("end_card_seconds") or END_CARD_SECONDS)
-        duration = max(source_duration + card_seconds, voice_end)
+        duration = max(card_at + card_seconds, voice_end)
     else:
         # A Persian CTA can outrun the English one; hold the last frame for it.
         duration = max(source_duration, voice_end)
-    hold = max(0.0, duration - source_duration)
+        card_at = source_duration
+    hold = max(0.0, duration - card_at)
     work_dir.mkdir(parents=True, exist_ok=True)
     ass = work_dir / "localized.ass"
     font_file = (fonts_dir / "RAY-EXTRABLACK.TTF") if fonts_dir else None
     ass_text = plan_overlays(state, placements, W, H, duration, font_file=font_file,
                              fonts_dir=fonts_dir, source_duration=source_duration,
-                             end_card_at=source_duration if end_card else None)
+                             end_card_at=card_at if end_card else None)
     ass.write_text(ass_text, encoding="utf-8")
 
     inputs = ["-i", str(video)]
@@ -1137,7 +1131,7 @@ def render(
     if end_card:
         card = render_end_card(work_dir / "end_card.png", W, H, logo)
         inputs += ["-loop", "1", "-framerate", f"{fps}", "-t", f"{hold:.3f}", "-i", str(card)]
-        vf = [f"[0:v]scale={W}:{H}:flags=lanczos,setsar=1,fps={fps},format=yuv420p[src]",
+        vf = [f"[0:v]trim=duration={card_at:.3f},setpts=PTS-STARTPTS,scale={W}:{H}:flags=lanczos,setsar=1,fps={fps},format=yuv420p[src]",
               f"[1:v]scale={W}:{H},setsar=1,fps={fps},format=yuv420p[card]",
               "[src][card]concat=n=2:v=1:a=0[base]"]
         n = 2
@@ -1148,7 +1142,7 @@ def render(
     vf.append(f"[{last}]{subtitles_filter(ass, fonts_dir)}[v0]")
     last = "v0"
     # Emoji and logo belong to the source part; the end card has its own logo.
-    only_source = f":enable='lt(t,{source_duration:.3f})'" if end_card else ""
+    only_source = f":enable='lt(t,{card_at:.3f})'" if end_card else ""
     ty = ((state.get("title_layout") or {}).get("box") or {}).get("cy", DEFAULT_TITLE_Y) * H
     emoji_text = "" if state.get("title_layout") else state.get("title_emojis", "")
     emoji = render_emoji_png(emoji_text, work_dir / "emoji.png", int(H * 0.045))
