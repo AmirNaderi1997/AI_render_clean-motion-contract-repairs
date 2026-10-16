@@ -574,7 +574,9 @@ def source_colour_filter(video: Path) -> str:
         return "null"
     return (
         "zscale=transfer=linear:npl=100,format=gbrpf32le,"
-        "zscale=primaries=bt709,tonemap=mobius:param=0.3:desat=0,"
+        # This shoulder closely matches the browser's SDR presentation of
+        # iPhone HLG. Mobius left faces and pale clothes visibly overexposed.
+        "zscale=primaries=bt709,tonemap=hable:desat=0,"
         "zscale=transfer=bt709:matrix=bt709:range=tv,format=yuv420p"
     )
 
@@ -866,7 +868,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
     vf.append("".join(f"[v{k}][a{k}]" for k in range(n)) + f"concat=n={n}:v=1:a=1[cv][ca]")
-    vignette_alpha = max(0.0, min(1.0, float(grade_settings.get("vignette", 50)) / 50))
+    vignette_alpha = max(0.0, min(1.0, float(grade_settings.get("vignette", 50)) / 100))
     vf.append(f"[1:v]format=rgba,colorchannelmixer=aa={vignette_alpha:.3f}[vig]")
     content = "vmain" if outro else "vout"
     windows = "+".join(f"between(t,{n['start']:.3f},{n['end']:.3f})" for n in plan.notes)
@@ -897,7 +899,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     else:
         vf.append("[cpad]loudnorm=I=-16:TP=-1:LRA=9,aresample=48000[aout]")
     cmd = [ffmpeg, "-hide_banner", "-y", *inputs, "-filter_complex", ";".join(vf),
-           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "19", "-preset", "medium",
+           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "17", "-preset", "slow",
+           "-profile:v", "high", "-pix_fmt", "yuv420p",
            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
            "-progress", "pipe:1", "-nostats", str(out)]

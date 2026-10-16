@@ -322,7 +322,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     vf.append(f"[{nxt}:v]format=rgba[seam]")
     nxt += 1
     inputs += ["-loop", "1", "-framerate", fps, "-i", str(vignette_png(work_dir / "vignette.png"))]
-    vignette_alpha = max(0.0, min(1.0, float(gs.get("vignette", 50)) / 50))
+    vignette_alpha = max(0.0, min(1.0, float(gs.get("vignette", 50)) / 100))
     vf.append(f"[{nxt}:v]format=rgba,colorchannelmixer=aa={vignette_alpha:.3f}[vig]")
     nxt += 1
     split_times = "+".join(f"between(t,{s.out_start:.3f},{s.out_start + s.length:.3f})" for s in plan.shots
@@ -348,7 +348,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     else:
         vf.append(f"[cpad]{loud}")
     cmd = [ffmpeg, "-hide_banner", "-y", *inputs, "-filter_complex", ";".join(vf),
-           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "19", "-preset", "medium",
+           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "17", "-preset", "slow",
+           "-profile:v", "high", "-pix_fmt", "yuv420p",
            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
            "-progress", "pipe:1", "-nostats", str(out)]
