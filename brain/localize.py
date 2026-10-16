@@ -103,6 +103,8 @@ For every input line decide its kind:
 
 For "speech" lines write natural spoken colloquial Persian (محاوره‌ای), like a creator talking to a friend:
 - keep brand, site and tool names in Latin script exactly as written (AliExpress, dropship.io, Shopify, Meta Ads, Higgs Field)
+- preserve every quantity and price exactly; convert spoken English number words
+  to the same Persian digits ("twenty-nine dollars" -> "۲۹ دلار"), never guess or shorten them
 - write prices and numbers as digits
 - max_chars is a hard limit (the narrator speaks fast and the voice must fit the line's seconds);
   aim for 70-100% of it
@@ -113,12 +115,17 @@ For "speech" lines write natural spoken colloquial Persian (محاوره‌ای)
 - the English comes from speech recognition and can contain mistakes; fix obvious ones from context
   (e.g. "$2 .33" for a price people pay online after "$1" means $233, "Close your store link" means "Post your store link")
 
-Also write "tutorial_start_i": the line index where the actual instructional
-steps begin. Lines before it are the opening hook/demo and must keep their
-original audio. If the video teaches from the first line, use that first index.
+Also write "tutorial_start_i": the line index where the explanatory/tutorial
+narration begins. This is the first factual explanation of the product,
+opportunity or method — not merely the first imperative step. For example,
+"That exact product can be purchased ..." starts the tutorial before the later
+instruction "Pull up dropship.io". Reactions, skits and demo-only hooks before
+it keep their original audio. If teaching starts immediately, use the first index.
 
-Also write "title": a short Persian hook based on the video's first visible or
-spoken source headline, for a fixed headline at the top of the video.
+Also write "title": a short, natural Persian adaptation of "source_headline"
+when it is supplied. Preserve that headline's actual subject and idea; never
+replace it with a generic ecommerce hook. Only fall back to the spoken opening
+when source_headline is empty.
 It sits above the whole video, so it must make people stop scrolling without
 explaining the steps: 4-7 words, about the product or the opportunity, no prices,
 no numbers, grammatical and natural. Good examples:
@@ -156,7 +163,7 @@ def _chat_with_fallback(system: str, request: str) -> tuple[dict, object]:
     raise RuntimeError("translation failed: " + "; ".join(errors)[-400:])
 
 
-def translate(lines: list[dict]) -> tuple[dict, dict]:
+def translate(lines: list[dict], source_headline: str = "") -> tuple[dict, dict]:
     """Translate lines with the configured LLM. Returns (result, usage).
 
     Lines go in chunks of ``CHUNK_LINES`` so each request is short; every
@@ -179,7 +186,8 @@ def translate(lines: list[dict]) -> tuple[dict, dict]:
     model, cost = "", 0.0
     for offset in range(0, len(payload), CHUNK_LINES):
         chunk = payload[offset:offset + CHUNK_LINES]
-        request = json.dumps({"full_script_for_context": script, "lines": chunk,
+        request = json.dumps({"full_script_for_context": script, "source_headline": source_headline,
+                              "lines": chunk,
                               "write_title": offset == 0}, ensure_ascii=False)
         data, usage = _chat_with_fallback(_SYSTEM, request)
         merged["lines"].extend(item for item in data.get("lines", []) if isinstance(item, dict))
@@ -201,6 +209,19 @@ def apply_translation(lines: list[dict], data: dict, cta_number: str) -> tuple[l
     valid_indices = {line["i"] for line in lines}
     if tutorial_start not in valid_indices:
         tutorial_start = lines[0]["i"] if lines else 0
+    # LLMs sometimes choose the first imperative instruction and skip the
+    # factual explanation immediately before it. Rewind through the same
+    # continuous narration block, but never into short reaction lines.
+    by_pos = {line["i"]: pos for pos, line in enumerate(lines)}
+    pos = by_pos.get(tutorial_start, 0)
+    while pos > 0:
+        prev, current = lines[pos - 1], lines[pos]
+        if len(prev.get("words") or prev.get("en", "").split()) < 5:
+            break
+        if float(current["start"]) - float(prev["end"]) > 2.5:
+            break
+        tutorial_start = prev["i"]
+        pos -= 1
     out = []
     for line in lines:
         item = by_index.get(line["i"], {})

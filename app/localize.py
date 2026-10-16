@@ -272,12 +272,15 @@ def _analyze(project_id: str) -> None:
     if not lines:
         raise RuntimeError("no speech found in the video")
 
+    _stage(project_id, "finding captions")
+    scan = media.ocr_video(video)
+    headline = media.source_headline(scan)
+
     _stage(project_id, "translating")
-    data, usage = text.translate(lines)
+    data, usage = text.translate(lines, source_headline=headline)
     lines, title, emojis = text.apply_translation(lines, data, state["cta_number"])
 
     _stage(project_id, "finding captions")
-    scan = media.ocr_video(video)
     title_layout, layout = media.detect_layout(video, lines, transcript.get("words"), scan=scan)
     english = media.english_regions(scan)
     for line, item in zip(lines, layout):
@@ -287,7 +290,8 @@ def _analyze(project_id: str) -> None:
     state.update(
         status="ready", stage="", message="",
         language=transcript.get("language"), asr_engine=engine,
-        title=title, title_emojis=emojis, title_layout=title_layout, lines=lines, english_regions=english,
+        title=title, title_emojis=emojis, source_headline=headline,
+        title_layout=title_layout, lines=lines, english_regions=english,
         cost_usd=round(state.get("cost_usd", 0.0) + asr_cost + usage["cost_usd"], 4),
     )
     save(state)

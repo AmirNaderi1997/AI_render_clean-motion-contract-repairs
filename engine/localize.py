@@ -368,6 +368,42 @@ def english_regions(scan: dict) -> list[dict]:
             for r in sorted(regions, key=lambda r: r["start"])]
 
 
+def source_headline(scan: dict) -> str:
+    """Read the prominent opening headline for title generation.
+
+    Only large Latin text in the upper opening area is considered, so laptop
+    UI text and the later tutorial captions do not become the suggested hook.
+    """
+    w, h = scan["w"], scan["h"]
+    candidates: list[str] = []
+    for t, tokens in scan.get("frames", []):
+        if t > min(6.0, float(scan.get("duration") or 0.0)):
+            break
+        top = [tok for tok in tokens if not tok.get("outlined") and _latin(tok.get("text", ""))
+               and tok["h"] >= 0.018 * h and tok["y"] + tok["h"] < 0.24 * h]
+        rows: list[list[dict]] = []
+        for tok in sorted(top, key=lambda item: (item["y"], item["x"])):
+            row = next((r for r in rows if abs((tok["y"] + tok["h"] / 2)
+                       - _median([x["y"] + x["h"] / 2 for x in r])) < 0.7 * max(tok["h"], _median([x["h"] for x in r]))), None)
+            if row is None:
+                rows.append([tok])
+            else:
+                row.append(tok)
+        useful = []
+        for row in rows:
+            box = _union(row)
+            text = " ".join(tok["text"].strip() for tok in sorted(row, key=lambda item: item["x"]) if tok["text"].strip())
+            if box and box["w"] >= 0.18 * w and len(re.findall(r"[A-Za-z]", text)) >= 8:
+                useful.append((box["y"], text))
+        if useful:
+            candidates.append(" ".join(text for _, text in sorted(useful)))
+    if not candidates:
+        return ""
+    # The earliest readable frame is the cleanest representation of the
+    # opening headline; movement later in the hook splits glyphs into noise.
+    return candidates[0][:180]
+
+
 def detect_layout(video: Path, lines: list[dict], words: Optional[list[dict]] = None,
                   scan: Optional[dict] = None) -> tuple[Optional[dict], list[dict]]:
     """Find the burned-in English title and captions.
@@ -743,7 +779,7 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     # must hide a large English caption, instead of the box padding out.
     base_size, min_size, max_size = int(H * 0.031), int(H * 0.024), int(H * 0.052)
     max_text_w = W * MAX_TEXT_FRACTION
-    title_text = "" if state.get("title_layout") else (state.get("title") or "").strip()
+    title_text = (state.get("title") or "").strip()
     texts = [(line["fa"], base_size) for line, _, _ in windows] + ([(title_text, base_size)] if title_text else [])
     layouts = layout_texts(texts, W, H, font, fonts_dir, max_w=max_text_w, min_size=min_size)
     flat = [(l, size) for lines, _, size in layouts for l in lines]
@@ -783,13 +819,7 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
 
     def place(layer: int, t0: float, t1: float, cy: float, item: int, style: tuple[str, str],
               *, absorb: tuple[float, float], floor: float = 0.0, reach: float = 0.0) -> tuple[float, float]:
-        """Draw one box that hugs its text and still hides the English it touches.
-
-        English blocks on the text's row during ``absorb`` must disappear
-        under this box. The text grows first, up to ``max_size`` and ``MAX_TEXT_FRACTION`` of
-        the width, so the box stays tight; only English larger than that
-        stretches the box. Returns the box's (top, bottom).
-        """
+        """Draw a tight text box and time-matched covers for source captions."""
         lines, widths, layout_size = layouts[item]
         lines_ink = ink_rows[item]
 
@@ -798,61 +828,48 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
             anchors, top, bottom = block(lines_ink, size, layout_size, cy)
             return max(widths) * size / layout_size / 2 + pad_x, top - pad_y, bottom + pad_y, anchors
 
-        half, top, bottom, _ = extents(layout_size)
+        half, top, bottom, anchors = extents(layout_size)
         margin = H * 0.01
-        need_half, need_top, need_bottom = 0.0, cy, cy
         hit: set[int] = set()
-        grew = True
-        while grew:
-            grew = False
-            for k, c in enumerate(covers):
-                if k in hit or c["end"] <= absorb[0] or c["start"] >= absorb[1]:
-                    continue
-                bx = c["box"]
-                x0, x1 = (bx["cx"] - bx["w"] / 2) * W - cover_pad, (bx["cx"] + bx["w"] / 2) * W + cover_pad
-                y0, y1 = (bx["cy"] - bx["h"] / 2) * H - cover_pad, (bx["cy"] + bx["h"] / 2) * H + cover_pad
-                # Hide only English on this row: at least half of it inside
-                # the text's band. Text just above or below would stretch
-                # the box for the whole line.
-                band_top = min(top, need_top) - margin - reach
-                band_bottom = max(bottom, need_bottom) + margin + reach
-                inside = min(y1, band_bottom) - max(y0, band_top)
-                if inside < 0.5 * (y1 - y0) or y0 < floor:
-                    continue
-                if x1 < W / 2 - max(half, need_half) - 0.15 * W or x0 > W / 2 + max(half, need_half) + 0.15 * W:
-                    continue
-                hit.add(k)
-                grew = True
-                need_half = max(need_half, W / 2 - x0, x1 - W / 2)
-                need_top, need_bottom = min(need_top, y0), max(need_bottom, y1)
-        # Smallest font (from the base size up) whose box already hides it all.
-        limit = min(max_size, int(layout_size * max_text_w / max(1, max(widths))))
+        for k, c in enumerate(covers):
+            if c["end"] <= absorb[0] or c["start"] >= absorb[1]:
+                continue
+            bx = c["box"]
+            y0, y1 = (bx["cy"] - bx["h"] / 2) * H - cover_pad, (bx["cy"] + bx["h"] / 2) * H + cover_pad
+            band_top, band_bottom = top - margin - reach, bottom + margin + reach
+            if min(y1, band_bottom) - max(y0, band_top) < 0.35 * (y1 - y0) or y0 < floor:
+                continue
+            hit.add(k)
         size = layout_size
-        for candidate in range(layout_size, max(layout_size, limit) + 1):
-            size = candidate
-            half, top, bottom, _ = extents(size)
-            if half >= need_half and top <= need_top and bottom >= need_bottom:
-                break
-        half, top, bottom, anchors = extents(size)
-        half = min(W / 2, max(half, need_half))
-        top, bottom = max(floor, min(top, need_top)), max(bottom, need_bottom)
-        # Centre the text in the (possibly stretched) box.
-        _, ink_top, ink_bottom = block(lines_ink, size, layout_size, cy)
-        offset = (top + bottom) / 2 - (ink_top + ink_bottom) / 2
         box_colour, text_col = style
+        # Each changing English caption gets its own short-lived exact cover;
+        # it no longer inflates the Persian box for the entire sentence.
+        for k in hit:
+            c, bx = covers[k], covers[k]["box"]
+            # Keep the detected width so no English letters remain at the
+            # sides; only cap the noisy vertical union that caused huge margins.
+            cover_w = bx["w"] * W + 2 * cover_pad
+            cover_h = min(bx["h"] * H + 2 * cover_pad, max((bottom - top) * 1.25, H * 0.045))
+            cover_cx, cover_cy = bx["cx"] * W, bx["cy"] * H
+            rect(layer, max(t0, c["start"]), min(t1, c["end"]),
+                 cover_cx - cover_w / 2, max(floor, cover_cy - cover_h / 2),
+                 cover_cx + cover_w / 2, cover_cy + cover_h / 2, box_colour)
         rect(layer, t0, t1, W / 2 - half, top, W / 2 + half, bottom, box_colour)
         for line, y in zip(lines, anchors):
-            text(layer + 1, t0, t1, y + offset, line, size, text_col)
+            text(layer + 1, t0, t1, y, line, size, text_col)
         return top, bottom
 
     title_box = (state.get("title_layout") or {}).get("box")
     title_y = (title_box or {}).get("cy", DEFAULT_TITLE_Y) * H
+    if title_box:
+        title_y = (title_box["cy"] + title_box["h"] / 2) * H + base_size * 0.8
     title_bottom = 0.0
     if title_text:
-        # Constant for the whole video; it absorbs the English title.
-        title_end = (state.get("title_layout") or {}).get("end", 3.0)
-        _, title_bottom = place(1, 0, end_all, title_y, len(layouts) - 1, title_style,
-                                absorb=(0.0, title_end))
+        first_tutorial = next((float(line["start"]) for line in state.get("lines", [])
+                               if line.get("kind") != "lyrics"), 4.0)
+        title_end = min(8.0, max(3.0, first_tutorial - 0.25))
+        _, title_bottom = place(1, 0, title_end, title_y, len(layouts) - 1, title_style,
+                                absorb=(0.0, 0.0))
         title_bottom += H * 0.01
 
     title_floor = title_bottom
