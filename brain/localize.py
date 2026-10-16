@@ -340,8 +340,9 @@ def elevenlabs_characters_left() -> Optional[int]:
         return None
     try:
         import httpx
+        from brain.elevenlabs_transport import url as elevenlabs_url
 
-        data = httpx.get("https://api.elevenlabs.io/v1/user/subscription",
+        data = httpx.get(elevenlabs_url("v1/user/subscription"),
                          headers={"xi-api-key": key}, timeout=15).json()
         return int(data["character_limit"]) - int(data["character_count"])
     except Exception:
@@ -475,12 +476,13 @@ def _elevenlabs_with_timestamps(text: str) -> tuple[bytes, dict]:
     import base64
 
     import httpx
+    from brain.elevenlabs_transport import url as elevenlabs_url
 
     key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
     if not key:
         raise RuntimeError("ElevenLabs API key is not set")
     response = httpx.post(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{tts_voice()}/with-timestamps",
+        elevenlabs_url(f"v1/text-to-speech/{tts_voice()}/with-timestamps"),
         headers={"xi-api-key": key},
         json={"text": text, "model_id": tts_model()},
         timeout=httpx.Timeout(300.0, connect=20.0),

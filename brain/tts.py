@@ -82,8 +82,10 @@ def _generate_elevenlabs(
         raise RuntimeError("ElevenLabs is not configured with API key and voice ID")
     try:
         import httpx
+        from brain.elevenlabs_transport import url as elevenlabs_url
+
         response = httpx.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+            elevenlabs_url(f"v1/text-to-speech/{voice_id}"),
             headers={"xi-api-key": api_key, "accept": "audio/mpeg"},
             json={"text": text, "model_id": model_id},
             # Short connect timeout to fail fast, longer read timeout because

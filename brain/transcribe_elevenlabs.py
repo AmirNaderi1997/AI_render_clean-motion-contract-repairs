@@ -47,13 +47,14 @@ def _normalize_persian(text: str) -> str:
 
 
 def _extract_audio(video: Path, out_dir: Path) -> Path:
-    wav = out_dir / "audio_elevenlabs.wav"
+    # A compact mono MP3 keeps longer uploads below Vercel's request limit.
+    audio = out_dir / "audio_elevenlabs.mp3"
     subprocess.run(
-        ["ffmpeg", "-y", "-i", str(video), "-vn", "-acodec", "pcm_s16le",
-         "-ar", "16000", "-ac", "1", str(wav)],
+        ["ffmpeg", "-y", "-i", str(video), "-vn", "-acodec", "libmp3lame",
+         "-b:a", "32k", "-ar", "16000", "-ac", "1", str(audio)],
         capture_output=True, check=True,
     )
-    return wav
+    return audio
 
 
 def _cache_key(file_digest: str, language: Optional[str], model_id: str,
@@ -148,8 +149,11 @@ def transcribe_elevenlabs(
     try:
         import httpx as _httpx
         from elevenlabs import ElevenLabs
+        from brain.elevenlabs_transport import base_url
+
         client = ElevenLabs(
             api_key=api_key,
+            base_url=base_url(),
             timeout=_httpx.Timeout(_READ_TIMEOUT, connect=_CONNECT_TIMEOUT),
         )
 
