@@ -308,7 +308,7 @@ def _render(project_id: str) -> None:
     root = _dir(project_id)
     state = load(project_id)
     video = root / state["source"]
-    if state.get("caption_detector") not in {"visual-outline-v2", "frame-outline-v3", "frame-outline-v4", "frame-outline-v5"}:
+    if state.get("caption_detector") not in {"visual-outline-v2", "frame-outline-v3", "frame-outline-v4", "frame-outline-v5", "frame-outline-v6"}:
         # Upgrade legacy analyses without touching user-edited translations.
         _stage(project_id, "finding captions")
         scan = media.ocr_video(video)
@@ -317,7 +317,7 @@ def _render(project_id: str) -> None:
             line.update(item)
         state.update(title_layout=title_layout, caption_detector="visual-outline-v2")
         save(state)
-    if state.get("caption_detector") != "frame-outline-v5":
+    if state.get("caption_detector") != "frame-outline-v6":
         # The dropshipping renderer needs the source card boundaries, not one
         # median box per translated sentence. Track every source frame once
         # and preserve the user's edited translations.
@@ -337,7 +337,7 @@ def _render(project_id: str) -> None:
             line["covers"] = covers
             line["box"] = ({key: media._median([c["box"][key] for c in covers])
                             for key in ("cx", "cy", "w", "h")} if covers else line.get("box"))
-        state["caption_detector"] = "frame-outline-v5"
+        state["caption_detector"] = "frame-outline-v6"
         save(state)
     _stage(project_id, "planning caption phrases")
     text.translate_caption_cards(state["lines"])

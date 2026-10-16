@@ -37,6 +37,10 @@ BOX_STYLES = {
 PAD_X, PAD_Y = 0.06, 0.025       # compact anti-clipping inset around natural glyph bounds
 LINE_PITCH = 1.05               # line spacing of two-line captions, x font size
 MAX_TEXT_FRACTION = 0.88        # widest text, as a fraction of the frame width
+CAPTION_COVER_PAD_X = 0.012      # safety cover beyond imperfect OCR ink bounds
+CAPTION_COVER_PAD_Y = 0.005
+CAPTION_TEXT_SCALE = 1.08        # slightly larger Persian text inside source cards
+CAPTION_GAP_HOLD = 0.75         # bridge short detector misses such as "$20"
 # End card shown after the source ends (instead of a frozen last frame).
 END_CARD_SECONDS = 3.5
 END_CARD_BG, END_CARD_GRID = "#141414", "#262626"
@@ -780,7 +784,10 @@ def frame_caption_windows(video: Path, state: dict, until: float) -> list[dict]:
             candidates = []
             for row in rows:
                 box = _union(row)
-                if box and len(row) >= 3 and box["w"] >= 0.08 * W:
+                # Short price cards such as "$20" can contain only two
+                # connected outlined components. They are still safe here:
+                # the row is constrained to the established caption band.
+                if box and len(row) >= 2 and box["w"] >= 0.05 * W:
                     candidates.append(box)
             if candidates:
                 box = min(candidates, key=lambda b: abs(b["y"] + b["h"] / 2 - expected_y) - b["w"] * 0.02)
@@ -1153,8 +1160,18 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
                 chunk = cover.get("fa") or chunks[min(len(chunks) - 1, index * len(chunks) // len(source_covers))]
                 windows.append(({**line, "fa": chunk}, max(0, cover["start"]),
                                 min(end_all, cover["end"]), cover))
-        elif state.get("caption_detector") not in {"frame-outline-v4", "frame-outline-v5"}:
+        elif state.get("caption_detector") not in {"frame-outline-v4", "frame-outline-v5", "frame-outline-v6"}:
             windows.append((line, start, stop, None))
+
+    # A stylised number or symbol can evade the colour/outline detector for
+    # a handful of frames. Keep the following card active through short gaps
+    # so the burned English caption can never flash on its own.
+    for index in range(1, len(windows)):
+        previous = windows[index - 1]
+        current = windows[index]
+        gap = current[1] - previous[2]
+        if (0 < gap <= CAPTION_GAP_HOLD and previous[3] is not None and current[3] is not None):
+            windows[index] = (current[0], previous[2], current[2], current[3])
 
     # Large bold text (about 70-80 px at 1080 wide) in a box that hugs it.
     # The text grows (up to about 100 px at 1080 wide) to fill a box that
@@ -1218,11 +1235,13 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
         x = W / 2
         if source_box:
             geometry = source_box["box"]
-            target_w, target_h = geometry["w"] * W, geometry["h"] * H
+            target_w = min(W, geometry["w"] * W + 2 * CAPTION_COVER_PAD_X * W)
+            target_h = min(H, geometry["h"] * H + 2 * CAPTION_COVER_PAD_Y * H)
             fit = source_box.get("fit_box", geometry)
             _, ink_top, ink_bottom = block(lines_ink, layout_size, layout_size, cy)
             ink_h = max(1.0, ink_bottom - ink_top)
-            draw_size = max(1, int(layout_size * min(fit["w"] * W / max(1, max(widths)), fit["h"] * H / ink_h)))
+            draw_size = max(1, int(layout_size * CAPTION_TEXT_SCALE * min(
+                fit["w"] * W / max(1, max(widths)), fit["h"] * H / ink_h)))
             x, cy = geometry["cx"] * W, geometry["cy"] * H
             _, _, _, anchors = extents(draw_size)
             left, right = x - target_w / 2, x + target_w / 2
@@ -1299,6 +1318,14 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
                                                     + max((b["cy"] + b["h"] / 2) for b in rows)) / 2 * H)
         geometries = source_box.get("frames", []) if source_box else []
         if geometries:
+            # When the detector missed a short preceding card (commonly a
+            # price such as "$20"), the window was extended backwards above.
+            # Its per-frame geometry naturally starts later, so explicitly
+            # hold the first known box over that leading safety interval.
+            first_start = min(t1, geometries[0]["start"])
+            if first_start > t0:
+                place(3, t0, first_start, line_y, k, caption_style, absorb=(t0, first_start),
+                      source_box={"box": geometries[0]["box"], "fit_box": source_box["box"]})
             for frame in geometries:
                 left, right = max(t0, frame["start"]), min(t1, frame["end"])
                 if right > left:
