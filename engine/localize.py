@@ -890,7 +890,7 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     # Large bold text (about 70-80 px at 1080 wide) in a box that hugs it.
     # The text grows (up to about 100 px at 1080 wide) to fill a box that
     # must hide a large English caption, instead of the box padding out.
-    base_size, min_size = int(H * 0.028), int(H * 0.023)
+    base_size, min_size = int(H * 0.032), int(H * 0.025)
     max_text_w = W * MAX_TEXT_FRACTION
     title_text = (state.get("title") or "").strip()
     texts = [(line["fa"], base_size) for line, _, _ in windows] + ([(title_text, base_size)] if title_text else [])
@@ -1080,7 +1080,7 @@ def clean_source_captions(video: Path, state: dict, out: Path, until: float) -> 
 
     covers = [c for line in state.get("lines", []) for c in (line.get("covers") or [])
               if float(c["start"]) < until]
-    signature = hashlib.sha256(("glyph-inpaint-v2" + json.dumps(covers, sort_keys=True)).encode()).hexdigest()[:12]
+    signature = hashlib.sha256(("glyph-inpaint-v3" + json.dumps(covers, sort_keys=True)).encode()).hexdigest()[:12]
     cached = out.with_name(f"source_without_captions_{signature}.mp4")
     if cached.is_file() and cached.stat().st_size > 0:
         return cached
@@ -1119,15 +1119,15 @@ def clean_source_captions(video: Path, state: dict, out: Path, until: float) -> 
                 mask = np.zeros((H, W), np.uint8)
                 for cover in active:
                     box = cover["box"]
-                    pad = max(4, round(H * 0.004))
+                    pad = max(3, round(H * 0.0025))
                     x0 = max(0, round((box["cx"] - box["w"] / 2) * W) - pad)
                     x1 = min(W, round((box["cx"] + box["w"] / 2) * W) + pad)
                     y0 = max(0, round((box["cy"] - box["h"] / 2) * H) - pad)
                     y1 = min(H, round((box["cy"] + box["h"] / 2) * H) + pad)
                     mask[y0:y1, x0:x1] = (caption_ink[y0:y1, x0:x1].astype(np.uint8) * 255)
-                mask = cv2.dilate(mask, np.ones((9, 9), np.uint8))
+                mask = cv2.dilate(mask, np.ones((5, 5), np.uint8))
                 if cv2.countNonZero(mask):
-                    frame = cv2.inpaint(frame, mask, 4, cv2.INPAINT_TELEA)
+                    frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
             writer.write(frame)
             frame_index += 1
     finally:
