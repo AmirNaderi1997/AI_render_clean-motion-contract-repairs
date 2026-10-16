@@ -458,6 +458,55 @@ def visual_caption_windows(scan: dict, first_speech: float) -> list[dict]:
     return windows
 
 
+def region_caption_windows(scan: dict, first_speech: float) -> list[dict]:
+    """Recover the dominant burned-caption row from English OCR regions.
+
+    The outline detector can miss compressed or motion-blurred glyphs while
+    the broader English-region pass still finds their complete text blocks.
+    Keep only the long-lived, centred horizontal band after narration starts;
+    this rejects browser/UI labels elsewhere in tutorial screen recordings.
+    """
+    duration = float(scan.get("duration") or 0.0)
+    candidates = [
+        region for region in english_regions(scan)
+        if region["end"] > first_speech - 0.3
+        and region["start"] < duration
+        and 0.30 <= region["box"]["cy"] <= 0.75
+        and abs(region["box"]["cx"] - 0.5) <= 0.22
+        and region["box"]["w"] >= 0.15
+        and 0.018 <= region["box"]["h"] <= _MAX_CAPTION_H
+    ]
+    if not candidates:
+        return []
+
+    def row_score(item: dict) -> float:
+        cy = item["box"]["cy"]
+        return sum(
+            max(0.0, other["end"] - other["start"]) * min(0.8, other["box"]["w"])
+            for other in candidates if abs(other["box"]["cy"] - cy) <= 0.055
+        )
+
+    anchor_y = max(candidates, key=row_score)["box"]["cy"]
+    return [
+        {**region, "caps": True, "words": [], "visual": True}
+        for region in candidates if abs(region["box"]["cy"] - anchor_y) <= 0.055
+    ]
+
+
+def _covered_seconds(windows: list[dict], start: float, end: float) -> float:
+    spans = sorted((max(start, w["start"]), min(end, w["end"])) for w in windows
+                   if w["end"] > start and w["start"] < end)
+    total, cursor = 0.0, start
+    for left, right in spans:
+        if right <= left:
+            continue
+        left = max(left, cursor)
+        if right > left:
+            total += right - left
+            cursor = right
+    return total
+
+
 def detect_layout(video: Path, lines: list[dict], words: Optional[list[dict]] = None,
                   scan: Optional[dict] = None) -> tuple[Optional[dict], list[dict]]:
     """Find the burned-in English title and captions.
@@ -506,7 +555,16 @@ def detect_layout(video: Path, lines: list[dict], words: Optional[list[dict]] = 
             if box and box["w"] >= 0.12 * w:
                 title_frames.append((t, _normalized(box, w, h)))
     visual_windows = visual_caption_windows(scan, first_speech)
-    caption_windows = visual_windows or _merge_windows(caption_windows)
+    region_windows = region_caption_windows(scan, first_speech)
+    # Prefer the detector that actually covers the tutorial. A few confident
+    # outline hits near the CTA must not suppress the correctly detected row
+    # throughout the rest of the video.
+    visual_coverage = _covered_seconds(visual_windows, first_speech, duration)
+    region_coverage = _covered_seconds(region_windows, first_speech, duration)
+    if region_coverage > max(2.0, visual_coverage * 1.35):
+        caption_windows = region_windows
+    else:
+        caption_windows = visual_windows or _merge_windows(caption_windows)
 
     results: list[dict] = []
     for line in lines:

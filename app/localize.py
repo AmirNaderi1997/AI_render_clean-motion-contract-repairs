@@ -292,7 +292,7 @@ def _analyze(project_id: str) -> None:
         language=transcript.get("language"), asr_engine=engine,
         title=title, title_emojis=emojis, source_headline=headline,
         title_layout=title_layout, lines=lines, english_regions=english,
-        caption_detector="visual-outline-v1",
+        caption_detector="visual-outline-v2",
         cost_usd=round(state.get("cost_usd", 0.0) + asr_cost + usage["cost_usd"], 4),
     )
     save(state)
@@ -305,14 +305,14 @@ def _render(project_id: str) -> None:
     root = _dir(project_id)
     state = load(project_id)
     video = root / state["source"]
-    if state.get("caption_detector") != "visual-outline-v1":
+    if state.get("caption_detector") != "visual-outline-v2":
         # Upgrade legacy analyses without touching user-edited translations.
         _stage(project_id, "finding captions")
         scan = media.ocr_video(video)
         title_layout, layout = media.detect_layout(video, state["lines"], scan=scan)
         for line, item in zip(state["lines"], layout):
             line.update(item)
-        state.update(title_layout=title_layout, caption_detector="visual-outline-v1")
+        state.update(title_layout=title_layout, caption_detector="visual-outline-v2")
         save(state)
     _stage(project_id, "generating voice")
     clips = {}
