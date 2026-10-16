@@ -61,7 +61,10 @@ def save(state: dict) -> dict:
 def public(state: dict) -> dict:
     """State as returned by the API (no internal word timings)."""
     out = {k: v for k, v in state.items() if k not in {"words", "english_regions"}}
-    out["lines"] = [{k: v for k, v in line.items() if k != "words"} for line in state.get("lines", [])]
+    out["lines"] = [{**{k: v for k, v in line.items() if k != "words"},
+                     "covers": [{k: v for k, v in cover.items() if k != "frames"}
+                                for cover in line.get("covers", [])]}
+                    for line in state.get("lines", [])]
     return out
 
 
@@ -305,7 +308,7 @@ def _render(project_id: str) -> None:
     root = _dir(project_id)
     state = load(project_id)
     video = root / state["source"]
-    if state.get("caption_detector") != "visual-outline-v2":
+    if state.get("caption_detector") not in {"visual-outline-v2", "frame-outline-v3", "frame-outline-v4", "frame-outline-v5"}:
         # Upgrade legacy analyses without touching user-edited translations.
         _stage(project_id, "finding captions")
         scan = media.ocr_video(video)
@@ -314,6 +317,31 @@ def _render(project_id: str) -> None:
             line.update(item)
         state.update(title_layout=title_layout, caption_detector="visual-outline-v2")
         save(state)
+    if state.get("caption_detector") != "frame-outline-v5":
+        # The dropshipping renderer needs the source card boundaries, not one
+        # median box per translated sentence. Track every source frame once
+        # and preserve the user's edited translations.
+        _stage(project_id, "tracking caption frames")
+        _, _, source_duration = media.probe_video(video)
+        windows = media.frame_caption_windows(video, state, source_duration)
+        media.read_caption_cards(video, windows)
+        spoken_lines = [line for line in state["lines"] if line.get("kind") != "lyrics" and line.get("fa")]
+        owned = {line["i"]: [] for line in state["lines"]}
+        for window in windows:
+            owner = max(spoken_lines, key=lambda line: max(0, min(window["end"], line["end"])
+                                                          - max(window["start"], line["start"])), default=None)
+            if owner and window["end"] > owner["start"] and window["start"] < owner["end"]:
+                owned[owner["i"]].append(window)
+        for line in state["lines"]:
+            covers = owned[line["i"]]
+            line["covers"] = covers
+            line["box"] = ({key: media._median([c["box"][key] for c in covers])
+                            for key in ("cx", "cy", "w", "h")} if covers else line.get("box"))
+        state["caption_detector"] = "frame-outline-v5"
+        save(state)
+    _stage(project_id, "planning caption phrases")
+    text.translate_caption_cards(state["lines"])
+    save(state)
     _stage(project_id, "generating voice")
     clips = {}
     spoken = [l for l in state["lines"] if l["kind"] != "lyrics" and l.get("fa")]

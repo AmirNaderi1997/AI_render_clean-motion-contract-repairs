@@ -162,6 +162,50 @@ Output schema:
 CHUNK_LINES = 6
 
 
+def translate_caption_cards(lines: list[dict]) -> None:
+    """Localize the visible phrases, keeping manually corrected facts as context."""
+    import hashlib
+
+    pending = []
+    for line in lines:
+        cards = line.get("covers") or []
+        if line.get("kind") in {"lyrics", "cta"} or not cards or not line.get("fa"):
+            continue
+        signature = hashlib.sha256(json.dumps([line["fa"], [c.get("en", "") for c in cards]],
+                                               ensure_ascii=False).encode()).hexdigest()[:16]
+        if line.get("caption_text_signature") == signature and all(c.get("fa") for c in cards):
+            continue
+        pending.append((line, cards, signature))
+    if not pending:
+        return
+    request = [{"i": line["i"], "spoken_en": line.get("en"), "approved_fa": line["fa"],
+                "cards": [{"en": c.get("en", ""), "seconds": round(c["end"] - c["start"], 2),
+                           "max_chars": max(10, round(c["box"]["w"] / max(.01, c["box"]["h"]) * 1.8))}
+                          for c in cards]} for line, cards, _ in pending]
+    system = """Write Persian subtitles for successive visible English caption cards in a video.
+Return JSON {"lines":[{"i":integer,"cards":["Persian phrase", ...]}]}.
+Return exactly one phrase for EACH input card in the same order, never merge cards.
+Use each card's OCR English plus the full English sentence to recover OCR errors.
+The approved_fa is the user's corrected narration: its numbers, names, facts and meaning take precedence.
+Use natural, colloquial Iranian Persian; short meaningful phrases, usually 2-4 words.
+Avoid isolated prepositions such as از / با / برای. No punctuation, padding, decoration or new claims.
+Stay close to max_chars so the phrase fills the original card naturally without stretching the font.
+Each phrase must match ONLY what is visible in its own card; do not put the entire sentence in a card.
+The successive phrases should convey the sentence naturally. Do not change the user's narration."""
+    data, _ = _chat_with_fallback(system, json.dumps(request, ensure_ascii=False))
+    results = {item.get("i"): item.get("cards") for item in data.get("lines", []) if isinstance(item, dict)}
+    validated = []
+    for line, cards, signature in pending:
+        phrases = results.get(line["i"])
+        if not isinstance(phrases, list) or len(phrases) != len(cards) or not all(isinstance(p, str) and p.strip() for p in phrases):
+            raise RuntimeError(f"Caption planner returned an invalid card count for line {line['i']}")
+        validated.append((line, cards, signature, phrases))
+    for line, cards, signature, phrases in validated:
+        for card, phrase in zip(cards, phrases):
+            card["fa"] = phrase.strip().replace("\n", " ")
+        line["caption_text_signature"] = signature
+
+
 def _chat_with_fallback(system: str, request: str) -> tuple[dict, object]:
     """chat_json with retries, then Sarovi: flaky links drop provider calls."""
     from brain.llm import chat_json
@@ -178,6 +222,8 @@ def _chat_with_fallback(system: str, request: str) -> tuple[dict, object]:
             except Exception as exc:
                 errors.append(f"{provider or 'default'}: {exc}")
                 log.warning("translation via %s attempt %d failed: %s", provider or "default", attempt + 1, exc)
+                if re.search(r"\b(?:401|402|403)\b|insufficient[_ ](?:quota|credits)|insufficienttokens", str(exc), re.I):
+                    break
                 time.sleep(2 * (attempt + 1))
     raise RuntimeError("translation failed: " + "; ".join(errors)[-400:])
 

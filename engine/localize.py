@@ -728,6 +728,245 @@ def caption_row(state: dict) -> float:
     return min(0.85, max(floor, y))
 
 
+def frame_caption_windows(video: Path, state: dict, until: float) -> list[dict]:
+    """Track the burned caption box on every source frame.
+
+    Geometry changes open a new window, so successive source cards are not
+    folded into one translated subtitle. No pixels are repaired or blurred.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return []
+
+    cap = cv2.VideoCapture(str(video))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    expected_y = caption_row(state) * H
+    observations: list[Optional[dict]] = []
+    signatures = []
+    frame_index = 0
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok or frame_index / fps >= until:
+                break
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            _, sat, val = cv2.split(hsv)
+            bright = (((val > 205) & (sat < 80)) | ((val > 170) & (sat > 105))).astype(np.uint8)
+            dark = cv2.erode((val < 70).astype(np.uint8), np.ones((3, 3), np.uint8))
+            glyph = bright & (cv2.dilate(dark, np.ones((9, 9), np.uint8)) > 0)
+            count, _, stats, _ = cv2.connectedComponentsWithStats(glyph.astype(np.uint8), 8)
+            parts = []
+            for x, y, w, h, area in stats[1:count]:
+                cy = y + h / 2
+                if (0.018 * H <= h <= 0.05 * H and w < 0.12 * W
+                        and area >= max(8, 0.08 * w * h)
+                        and abs(cy - expected_y) <= 0.035 * H):
+                    parts.append({"x": int(x), "y": int(y), "w": int(w), "h": int(h)})
+
+            rows: list[list[dict]] = []
+            for part in sorted(parts, key=lambda p: (p["y"], p["x"])):
+                pc = part["y"] + part["h"] / 2
+                row = next((r for r in rows if abs(pc - _median([q["y"] + q["h"] / 2 for q in r]))
+                            <= 0.25 * min(part["h"], _median([q["h"] for q in r]))
+                            and 0.8 < part["h"] / _median([q["h"] for q in r]) < 1.25), None)
+                if row is None:
+                    rows.append([part])
+                else:
+                    row.append(part)
+            candidates = []
+            for row in rows:
+                box = _union(row)
+                if box and len(row) >= 3 and box["w"] >= 0.08 * W:
+                    candidates.append(box)
+            if candidates:
+                box = min(candidates, key=lambda b: abs(b["y"] + b["h"] / 2 - expected_y) - b["w"] * 0.02)
+                pad = max(4, round(H * 0.006))  # include the complete black outline
+                box = {"x": max(0, box["x"] - pad), "y": max(0, box["y"] - pad),
+                       "w": min(W, box["w"] + 2 * pad), "h": box["h"] + 2 * pad}
+                observations.append(_normalized(box, W, H))
+                crop = glyph[box["y"]:box["y"] + box["h"], box["x"]:box["x"] + box["w"]]
+                signatures.append(cv2.resize(crop, (128, 20), interpolation=cv2.INTER_AREA) > 0)
+            else:
+                observations.append(None)
+                signatures.append(None)
+            frame_index += 1
+    finally:
+        cap.release()
+
+    # Bridge only one/two-frame detector misses; longer gaps are real gaps.
+    for i, box in enumerate(observations):
+        if box is not None:
+            continue
+        left = next((observations[j] for j in range(i - 1, max(-1, i - 3), -1) if observations[j]), None)
+        right = next((observations[j] for j in range(i + 1, min(len(observations), i + 3)) if observations[j]), None)
+        if left and right and abs(left["cy"] - right["cy"]) < 0.015:
+            observations[i] = left
+
+    raw: list[dict] = []
+    start = 0
+    current: Optional[dict] = None
+    signature = None
+    for i, box in enumerate(observations + [None]):
+        sig = signatures[i] if i < len(signatures) else None
+        shape_same = (signature is None or sig is None or
+                      np.count_nonzero(signature & sig) / max(1, np.count_nonzero(signature | sig)) > 0.56)
+        same = bool(current and box
+                    and shape_same
+                    and abs(current["cy"] - box["cy"]) < 0.012
+                    and abs(current["cx"] - box["cx"]) < 0.025
+                    and abs(current["w"] - box["w"]) < 0.10 * max(current["w"], box["w"])
+                    and abs(current["h"] - box["h"]) < 0.20 * max(current["h"], box["h"]))
+        if current is not None and not same:
+            raw.append({"start": start / fps, "end": i / fps, "box": current,
+                        "frames": [{"start": j / fps, "end": (j + 1) / fps, "box": observations[j]}
+                                   for j in range(start, i) if observations[j]]})
+            for frame in raw[-1]["frames"]:
+                j = round(frame["start"] * fps)
+                if signatures[j] is not None:
+                    frame["shape"] = np.packbits(signatures[j]).tobytes().hex()
+            current = None
+        if box is not None:
+            if current is None:
+                current, start, signature = dict(box), i, sig
+            else:
+                current = {k: current[k] * 0.8 + box[k] * 0.2 for k in ("cx", "cy", "w", "h")}
+
+    merged: list[dict] = []
+    for item in raw:
+        if merged and item["start"] - merged[-1]["end"] <= 1 / fps and item["end"] - item["start"] < 0.20:
+            merged[-1]["end"] = item["end"]
+            merged[-1]["frames"].extend(item["frames"])
+        else:
+            merged.append(item)
+    return [{"start": round(x["start"], 3), "end": round(x["end"], 3),
+             "box": {k: round(v, 5) for k, v in x["box"].items()},
+             "frames": x["frames"],
+             "caps": True, "words": [], "visual": True} for x in merged]
+
+
+def read_caption_cards(video: Path, windows: list[dict]) -> None:
+    """OCR only the detected caption crop, once per visible source card."""
+    import cv2
+    import numpy as np
+    from concurrent.futures import ThreadPoolExecutor
+
+    cap = cv2.VideoCapture(str(video))
+    crops = []
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            for i, window in enumerate(windows):
+                cap.set(cv2.CAP_PROP_POS_MSEC, (window["start"] + window["end"]) * 500)
+                ok, frame = cap.read()
+                if not ok:
+                    crops.append(None)
+                    continue
+                H, W = frame.shape[:2]
+                b = window["box"]
+                x0, x1 = max(0, round((b["cx"] - b["w"] / 2) * W)), min(W, round((b["cx"] + b["w"] / 2) * W))
+                y0, y1 = max(0, round((b["cy"] - b["h"] / 2) * H)), min(H, round((b["cy"] + b["h"] / 2) * H))
+                crop = frame[y0:y1, x0:x1]
+                _, sat, val = cv2.split(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
+                mask = (((val > 200) & (sat < 90)) | ((val > 170) & (sat > 110))).astype(np.uint8) * 255
+                path = Path(tmp) / f"card_{i}.png"
+                cv2.imwrite(str(path), cv2.resize(255 - mask, None, fx=3, fy=3))
+                crops.append(path)
+        finally:
+            cap.release()
+
+        def read(path):
+            if path is None:
+                return ""
+            result = subprocess.run(["tesseract", str(path), "-", "--psm", "7"],
+                                    capture_output=True, text=True, errors="replace", timeout=15)
+            return " ".join(result.stdout.split())[:160]
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for window, text in zip(windows, pool.map(read, crops)):
+                window["en"] = text
+    # Font entrance/outline changes can split identical words into adjacent
+    # geometry runs. Rejoin those runs while retaining every frame's own box.
+    merged = []
+    for item in windows:
+        prev = merged[-1] if merged else None
+        a, b = _norm(prev.get("en", "")) if prev else "", _norm(item.get("en", ""))
+        if (prev and a and b and item["start"] - prev["end"] <= 0.04
+                and difflib.SequenceMatcher(None, a, b).ratio() >= 0.92
+                and abs(prev["box"]["w"] - item["box"]["w"]) < 0.12 * max(prev["box"]["w"], item["box"]["w"])):
+            prev["end"] = item["end"]
+            prev["frames"].extend(item.get("frames", []))
+            if len(b) > len(a):
+                prev["en"] = item["en"]
+        else:
+            merged.append(item)
+    windows[:] = merged
+    _refine_card_boundaries(windows)
+
+
+def _refine_card_boundaries(windows: list[dict]) -> None:
+    """Assign transition frames to the neighbouring card whose glyphs match.
+
+    Short geometry runs are noisy during entrances. Their frame-level ink
+    remains valid, but assigning them blindly to the preceding phrase would
+    delay subtitle changes by several frames.
+    """
+    import numpy as np
+
+    def shape(frame):
+        encoded = frame.get("shape")
+        return np.unpackbits(np.frombuffer(bytes.fromhex(encoded), dtype=np.uint8)) if encoded else None
+
+    refs = []
+    for card in windows:
+        frames = card.get("frames", [])
+        refs.append(frames[len(frames) // 2] if frames else {"box": card["box"]})
+    assigned = [[] for _ in windows]
+    for index, card in enumerate(windows):
+        for frame in card.get("frames", []):
+            glyphs = shape(frame)
+            candidates = [index]
+            if index > 0 and frame["start"] - card["start"] < 0.35:
+                candidates.append(index - 1)
+            if index + 1 < len(windows) and card["end"] - frame["end"] < 0.35:
+                candidates.append(index + 1)
+
+            def distance(candidate):
+                ref = refs[candidate]
+                a, b = frame["box"], ref["box"]
+                geometry = abs(a["w"] - b["w"]) / max(.01, a["w"], b["w"])
+                template = shape(ref)
+                if glyphs is None or template is None:
+                    return geometry
+                similarity = np.count_nonzero(glyphs & template) / max(1, np.count_nonzero(glyphs | template))
+                return 1 - similarity + geometry
+
+            best = min(candidates, key=distance)
+            # Require a clear improvement before moving a boundary.
+            owner = best if distance(best) + 0.10 < distance(index) else index
+            assigned[owner].append(frame)
+
+    # Keep ownership monotonic: no one-frame return to a previous phrase.
+    labelled = sorted((f["start"], i, f) for i, group in enumerate(assigned) for f in group)
+    assigned = [[] for _ in windows]
+    owner = 0
+    for position, (_, label, frame) in enumerate(labelled):
+        neighbours = [entry[1] for entry in labelled[max(0, position - 1):position + 2]]
+        label = sorted(neighbours)[len(neighbours) // 2]
+        owner = max(owner, label)
+        assigned[owner].append(frame)
+    kept = []
+    for card, frames in zip(windows, assigned):
+        if not frames:
+            continue
+        card["frames"] = frames
+        card["start"], card["end"] = frames[0]["start"], frames[-1]["end"]
+        kept.append(card)
+    windows[:] = kept
+
+
 WRAP_FRACTION = 0.8             # lines wider than this share of the frame wrap to two
 
 
@@ -845,18 +1084,33 @@ def render_end_card(out: Path, W: int, H: int, logo: Optional[Path]) -> Path:
     return out
 
 
+def _split_caption_text(text: str, count: int, weights: list[float]) -> list[str]:
+    """Split a translation into readable chunks for successive source cards."""
+    words = text.split()
+    count = max(1, min(count, len(words)))
+    if count == 1:
+        return [text.strip()]
+    total = sum(weights[:count]) or float(count)
+    cuts, used = [], 0
+    for i in range(count - 1):
+        target = round(len(words) * sum(weights[:i + 1]) / total)
+        cut = min(len(words) - (count - i - 1), max(used + 1, target))
+        cuts.append(cut)
+        used = cut
+    points = [0, *cuts, len(words)]
+    return [" ".join(words[points[i]:points[i + 1]]) for i in range(count)]
+
+
 def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration: float, *,
                   font: str = "Ray ExtraBlack", font_file: Optional[Path] = None,
                   fonts_dir: Optional[Path] = None, source_duration: Optional[float] = None,
                   end_card_at: Optional[float] = None) -> str:
     """Return the ASS text for the title, captions and the end card.
 
-    Every Persian box (title, captions, CTA) hugs its measured text with a
-    small padding, wrapping to two lines past ``WRAP_FRACTION`` of the
-    frame. Each caption sits on the English caption shown during it and
-    hides the English on its row by growing its text, so the box stays
-    full. There are no other boxes: brief English elsewhere stays visible
-    rather than adding boxes around the caption.
+    Caption timing follows the visible source cards. Each frame uses the
+    detected source ink rectangle, including its stroke, with no padding.
+    Persian glyphs keep their natural proportions and grow to fit the card.
+    Titles and the end card keep their independent layout.
 
     With ``end_card_at`` the video cuts to the end card (see
     ``render_end_card``) at that time: captions stop there and the card's
@@ -885,7 +1139,22 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
             stop = nxt_start if nxt_start - stop < 1.5 else min(stop, nxt_start)
         if k == len(shown) - 1:
             stop = end_all
-        windows.append((line, start, min(stop, end_all)))
+        stop = min(stop, end_all)
+        source_covers = sorted((c for c in (line.get("covers") or [])
+                                if c["end"] > line["start"] and c["start"] < line["end"]),
+                               key=lambda c: c["start"])
+        if source_covers:
+            # One Persian caption per actual source card.  Never combine a
+            # sequence such as GENERATE / VIRAL VIDEOS / FOR YOU into one box.
+            count = min(len(source_covers), max(1, len(line["fa"].split())))
+            chunks = _split_caption_text(line["fa"], count,
+                                          [max(0.05, c["end"] - c["start"]) for c in source_covers])
+            for index, cover in enumerate(source_covers):
+                chunk = cover.get("fa") or chunks[min(len(chunks) - 1, index * len(chunks) // len(source_covers))]
+                windows.append(({**line, "fa": chunk}, max(0, cover["start"]),
+                                min(end_all, cover["end"]), cover))
+        elif state.get("caption_detector") not in {"frame-outline-v4", "frame-outline-v5"}:
+            windows.append((line, start, stop, None))
 
     # Large bold text (about 70-80 px at 1080 wide) in a box that hugs it.
     # The text grows (up to about 100 px at 1080 wide) to fill a box that
@@ -893,7 +1162,7 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     base_size, min_size = int(H * 0.032), int(H * 0.025)
     max_text_w = W * MAX_TEXT_FRACTION
     title_text = (state.get("title") or "").strip()
-    texts = [(line["fa"], base_size) for line, _, _ in windows] + ([(title_text, base_size)] if title_text else [])
+    texts = [(line["fa"], base_size) for line, _, _, _ in windows] + ([(title_text, base_size)] if title_text else [])
     layouts = layout_texts(texts, W, H, font, fonts_dir, max_w=max_text_w, min_size=min_size)
     flat = [(l, size) for lines, _, size in layouts for l in lines]
     inks = iter(measure_text_boxes(flat, W, H, font, fonts_dir))
@@ -914,9 +1183,9 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     def rect(layer: int, t0: float, t1: float, x0: float, y0: float, x1: float, y1: float, colour: str) -> None:
         events.append(_rounded_rect(layer, t0, t1, x0, y0, x1, y1, colour, radius))
 
-    def text(layer: int, t0: float, t1: float, y: float, line: str, size: int, colour: str) -> None:
+    def text(layer: int, t0: float, t1: float, x: float, y: float, line: str, size: int, colour: str) -> None:
         events.append(f"Dialogue: {layer},{_ass_time(t0)},{_ass_time(t1)},caption,,0,0,0,,"
-                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f})\\fs{size}"
+                      f"{{\\an5\\q2\\pos({x:.1f},{y:.1f})\\fs{size}"
                       f"\\fscx100\\fscy100\\1c&H{_ass_colour(colour)[4:]}&}}"
                       + _escape(line))
 
@@ -932,13 +1201,9 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
         return [a + shift for a in anchors], top + shift, bottom + shift
 
     def place(layer: int, t0: float, t1: float, cy: float, item: int, style: tuple[str, str],
-              *, absorb: tuple[float, float], floor: float = 0.0, reach: float = 0.0) -> tuple[float, float]:
-        """Draw exactly one subtitle box at every instant.
-
-        Its geometry is fixed for the complete Persian caption window. The
-        text grows to fill the source-caption cover, so the card cannot pulse
-        as the underlying English words animate or change.
-        """
+              *, absorb: tuple[float, float], floor: float = 0.0, reach: float = 0.0,
+              source_box: Optional[dict] = None) -> tuple[float, float]:
+        """Draw one source-sized card; retain a fixed font size per phrase."""
         lines, widths, layout_size = layouts[item]
         lines_ink = ink_rows[item]
 
@@ -948,15 +1213,30 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
             return max(widths) * size / layout_size / 2 + pad_x, top - pad_y, bottom + pad_y, anchors
 
         box_colour, text_col = style
-        relevant = [c for c in covers if c["end"] > absorb[0] and c["start"] < absorb[1]
-                    and abs(c["box"]["cy"] * H - cy) < H * 0.08 + reach]
-        # Source-caption removal is a separate video-cleanup pass. The Persian
-        # card is therefore sized only from its own natural, unscaled glyphs.
-        half, top, bottom, anchors = extents(layout_size)
-        top = max(floor, top)
-        rect(layer, t0, t1, W / 2 - half, top, W / 2 + half, bottom, box_colour)
+        # Keep natural glyph proportions; use the source's actual ink box.
+        draw_size = layout_size
+        x = W / 2
+        if source_box:
+            geometry = source_box["box"]
+            target_w, target_h = geometry["w"] * W, geometry["h"] * H
+            fit = source_box.get("fit_box", geometry)
+            _, ink_top, ink_bottom = block(lines_ink, layout_size, layout_size, cy)
+            ink_h = max(1.0, ink_bottom - ink_top)
+            draw_size = max(1, int(layout_size * min(fit["w"] * W / max(1, max(widths)), fit["h"] * H / ink_h)))
+            x, cy = geometry["cx"] * W, geometry["cy"] * H
+            _, _, _, anchors = extents(draw_size)
+            left, right = x - target_w / 2, x + target_w / 2
+            top, bottom = cy - target_h / 2, cy + target_h / 2
+        else:
+            half, top, bottom, anchors = extents(layout_size)
+            top = max(floor, top)
+            left, right = W / 2 - half, W / 2 + half
+        if source_box:
+            events.append(_rounded_rect(layer, t0, t1, left, top, right, bottom, box_colour, 0))
+        else:
+            rect(layer, t0, t1, left, top, right, bottom, box_colour)
         for line, y in zip(lines, anchors):
-            text(layer + 1, t0, t1, y, line, layout_size, text_col)
+            text(layer + 1, t0, t1, x, y, line, draw_size, text_col)
         return top, bottom
 
     title_box = (state.get("title_layout") or {}).get("box")
@@ -974,7 +1254,7 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
 
     title_floor = title_bottom
     previous_y = row_y
-    for k, (line, t0, t1) in enumerate(windows):
+    for k, (line, t0, t1, source_box) in enumerate(windows):
         lines, _, size = layouts[k]
         bh = (len(lines) * LINE_PITCH + 2 * PAD_Y) * size
         # Sit on the English caption shown longest during this line
@@ -1017,7 +1297,16 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
             if rows:   # centre on the whole English CTA
                 line_y = max(title_floor + bh / 2, (min((b["cy"] - b["h"] / 2) for b in rows)
                                                     + max((b["cy"] + b["h"] / 2) for b in rows)) / 2 * H)
-        place(3, t0, t1, line_y, k, caption_style, absorb=(t0, t1), floor=title_floor, reach=reach)
+        geometries = source_box.get("frames", []) if source_box else []
+        if geometries:
+            for frame in geometries:
+                left, right = max(t0, frame["start"]), min(t1, frame["end"])
+                if right > left:
+                    place(3, left, right, line_y, k, caption_style, absorb=(left, right),
+                          source_box={"box": frame["box"], "fit_box": source_box["box"]})
+        else:
+            place(3, t0, t1, line_y, k, caption_style, absorb=(t0, t1), floor=title_floor,
+                  reach=reach, source_box=source_box)
 
     if end_card_at is not None:
         events += end_card_events(str(state.get("cta_number") or ""), end_card_at, duration, W, H,
@@ -1073,75 +1362,6 @@ def audio_cut_time(lines: list[dict], placements: list[dict]) -> float:
     return max(0.0, min(p["start"] for p in placements) - 0.15)
 
 
-def clean_source_captions(video: Path, state: dict, out: Path, until: float) -> Path:
-    """Inpaint only burned-caption glyph pixels, preserving the picture around them."""
-    import hashlib
-    import json
-
-    covers = [c for line in state.get("lines", []) for c in (line.get("covers") or [])
-              if float(c["start"]) < until]
-    signature = hashlib.sha256(("glyph-inpaint-v3" + json.dumps(covers, sort_keys=True)).encode()).hexdigest()[:12]
-    cached = out.with_name(f"source_without_captions_{signature}.mp4")
-    if cached.is_file() and cached.stat().st_size > 0:
-        return cached
-    if not covers:
-        return video
-    try:
-        import cv2
-        import numpy as np
-    except ImportError:
-        return video
-
-    cap = cv2.VideoCapture(str(video))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    tmp = out.with_name(f".{out.stem}_{signature}.avi")
-    writer = cv2.VideoWriter(str(tmp), cv2.VideoWriter_fourcc(*"MJPG"), fps, (W, H))
-    frame_index = 0
-    try:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            t = frame_index / fps
-            active = [c for c in covers if float(c["start"]) - 0.05 <= t <= float(c["end"]) + 0.05]
-            if active:
-                hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-                _, sat, val = cv2.split(hsv)
-                bright = ((val > 205) & (sat < 80)) | ((val > 170) & (sat > 105))
-                dark = val < 85
-                near_dark = cv2.dilate(dark.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
-                glyph = bright & near_dark
-                # Include the complete dark stroke connected to each bright
-                # glyph; removing only the white centre leaves black blobs.
-                around_glyph = cv2.dilate(glyph.astype(np.uint8), np.ones((17, 17), np.uint8)) > 0
-                caption_ink = glyph | (dark & around_glyph)
-                mask = np.zeros((H, W), np.uint8)
-                for cover in active:
-                    box = cover["box"]
-                    pad = max(3, round(H * 0.0025))
-                    x0 = max(0, round((box["cx"] - box["w"] / 2) * W) - pad)
-                    x1 = min(W, round((box["cx"] + box["w"] / 2) * W) + pad)
-                    y0 = max(0, round((box["cy"] - box["h"] / 2) * H) - pad)
-                    y1 = min(H, round((box["cy"] + box["h"] / 2) * H) + pad)
-                    mask[y0:y1, x0:x1] = (caption_ink[y0:y1, x0:x1].astype(np.uint8) * 255)
-                mask = cv2.dilate(mask, np.ones((5, 5), np.uint8))
-                if cv2.countNonZero(mask):
-                    frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
-            writer.write(frame)
-            frame_index += 1
-    finally:
-        cap.release()
-        writer.release()
-    subprocess.run([
-        "ffmpeg", "-v", "error", "-y", "-i", str(tmp), "-i", str(video),
-        "-map", "0:v:0", "-map", "1:a?", "-c:v", "libx264", "-crf", "18",
-        "-preset", "medium", "-c:a", "copy", "-shortest", str(cached),
-    ], check=True)
-    tmp.unlink(missing_ok=True)
-    return cached
-
-
 def render(
     video: Path,
     state: dict,
@@ -1182,8 +1402,7 @@ def render(
                              end_card_at=card_at if end_card else None)
     ass.write_text(ass_text, encoding="utf-8")
 
-    picture = clean_source_captions(video, state, work_dir / "source_without_captions.mp4", card_at)
-    inputs = ["-i", str(picture)]
+    inputs = ["-i", str(video)]
     fps = probe_fps(video)
     n = 1
     if end_card:
