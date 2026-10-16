@@ -61,9 +61,28 @@ def _split_commas(words: list[dict]) -> list[list[dict]]:
             balance = abs(_span(left) - _span(right))
             if best is None or balance < best[0]:
                 best = (balance, left, right)
+    if best is None and (_span(words) > 4.5 or len(words) > 12):
+        # ASR often returns two spoken clauses as one sentence without a
+        # comma. Prefer a conjunction near the temporal midpoint, otherwise
+        # split at the most balanced word boundary.
+        candidates = []
+        for idx in range(1, len(words)):
+            left, right = words[:idx], words[idx:]
+            if _span(left) < _SPLIT_MIN_PART_SECONDS or _span(right) < _SPLIT_MIN_PART_SECONDS:
+                continue
+            marker = _norm_split_word(str(words[idx].get("w", ""))) in {"and", "but", "then", "so", "now"}
+            balance = abs(_span(left) - _span(right))
+            candidates.append((0 if marker else 1, balance, left, right))
+        if candidates:
+            _, _, left, right = min(candidates, key=lambda item: (item[0], item[1]))
+            best = (0.0, left, right)
     if best is None:
         return [words]
     return _split_commas(best[1]) + _split_commas(best[2])
+
+
+def _norm_split_word(word: str) -> str:
+    return re.sub(r"[^a-z]", "", word.lower())
 
 
 def split_lines(transcript: dict) -> list[dict]:

@@ -404,6 +404,60 @@ def source_headline(scan: dict) -> str:
     return candidates[0][:180]
 
 
+def visual_caption_windows(scan: dict, first_speech: float) -> list[dict]:
+    """Caption boxes from glyph shape/outline, independent of OCR text.
+
+    Social captions have bright or saturated glyphs with a thick dark outline.
+    The dominant horizontal band after narration starts is the caption row;
+    screen UI and the opening headline occur elsewhere and are rejected.
+    Windows stay frame-local so two changing captions are never unioned.
+    """
+    w, h = scan["w"], scan["h"]
+    half = 0.5 / SAMPLE_FPS
+    samples: list[tuple[float, dict]] = []
+    for t, tokens in scan.get("frames", []):
+        if t < max(0.0, first_speech - 0.6):
+            continue
+        for box in (tok for tok in tokens if tok.get("outlined")):
+            if 0.02 * h <= box["h"] <= 0.09 * h and box["w"] >= 0.05 * w:
+                samples.append((t, box))
+    if not samples:
+        return []
+    anchor = max(samples, key=lambda item: sum(
+        other[1]["w"] for other in samples
+        if abs((other[1]["y"] + other[1]["h"] / 2) - (item[1]["y"] + item[1]["h"] / 2)) < 0.045 * h
+    ))
+    row_y = anchor[1]["y"] + anchor[1]["h"] / 2
+    windows: list[dict] = []
+    for t, _ in scan.get("frames", []):
+        boxes = [box for sample_t, box in samples if sample_t == t
+                 and abs((box["y"] + box["h"] / 2) - row_y) < 0.03 * h]
+        box = _union(boxes)
+        if not box:
+            continue
+        windows.append({
+            "start": max(0.0, t - half), "end": t + half,
+            "box": _normalized(box, w, h), "caps": True, "words": [], "visual": True,
+        })
+    # Carry the nearest reliable geometry across one or two missed samples.
+    # This prevents a one-frame flash of the original caption when a hand or
+    # motion blur temporarily defeats the outline detector.
+    for previous, current in zip(windows, windows[1:]):
+        if current["start"] - previous["end"] <= 0.55:
+            previous_center = (previous["start"] + previous["end"]) / 2
+            current_center = (current["start"] + current["end"]) / 2
+            boundary = (previous_center + current_center) / 2
+            previous["end"] = boundary
+            current["start"] = boundary
+    # Adjacent geometries overlap by half a sample around animated caption
+    # changes. The renderer unions them into the same single box, covering
+    # motion between sampled frames without flashing source letters.
+    for window in windows:
+        window["start"] = max(0.0, window["start"] - half)
+        window["end"] += half
+    return windows
+
+
 def detect_layout(video: Path, lines: list[dict], words: Optional[list[dict]] = None,
                   scan: Optional[dict] = None) -> tuple[Optional[dict], list[dict]]:
     """Find the burned-in English title and captions.
@@ -451,7 +505,8 @@ def detect_layout(video: Path, lines: list[dict], words: Optional[list[dict]] = 
             box = _union(big)
             if box and box["w"] >= 0.12 * w:
                 title_frames.append((t, _normalized(box, w, h)))
-    caption_windows = _merge_windows(caption_windows)
+    visual_windows = visual_caption_windows(scan, first_speech)
+    caption_windows = visual_windows or _merge_windows(caption_windows)
 
     results: list[dict] = []
     for line in lines:
@@ -461,7 +516,8 @@ def detect_layout(video: Path, lines: list[dict], words: Optional[list[dict]] = 
             main = {key: _median([c["box"][key] for c in covers]) for key in ("cx", "cy", "w", "h")}
         results.append({"box": main, "covers": [
             {"start": round(c["start"], 3), "end": round(c["end"], 3), "box": c["box"],
-             "caps": bool(c.get("caps")), "words": c.get("words", [])} for c in covers
+             "caps": bool(c.get("caps")), "words": c.get("words", []),
+             "visual": bool(c.get("visual"))} for c in covers
         ]})
 
     title = None
@@ -819,7 +875,11 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
 
     def place(layer: int, t0: float, t1: float, cy: float, item: int, style: tuple[str, str],
               *, absorb: tuple[float, float], floor: float = 0.0, reach: float = 0.0) -> tuple[float, float]:
-        """Draw a tight text box and time-matched covers for source captions."""
+        """Draw exactly one subtitle box at every instant.
+
+        Its geometry is the union of the Persian text and the visual caption
+        present in that frame. There is never a second cover-only rectangle.
+        """
         lines, widths, layout_size = layouts[item]
         lines_ink = ink_rows[item]
 
@@ -828,36 +888,41 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
             anchors, top, bottom = block(lines_ink, size, layout_size, cy)
             return max(widths) * size / layout_size / 2 + pad_x, top - pad_y, bottom + pad_y, anchors
 
-        half, top, bottom, anchors = extents(layout_size)
-        margin = H * 0.01
-        hit: set[int] = set()
-        for k, c in enumerate(covers):
-            if c["end"] <= absorb[0] or c["start"] >= absorb[1]:
-                continue
-            bx = c["box"]
-            y0, y1 = (bx["cy"] - bx["h"] / 2) * H - cover_pad, (bx["cy"] + bx["h"] / 2) * H + cover_pad
-            band_top, band_bottom = top - margin - reach, bottom + margin + reach
-            if min(y1, band_bottom) - max(y0, band_top) < 0.35 * (y1 - y0) or y0 < floor:
-                continue
-            hit.add(k)
-        size = layout_size
         box_colour, text_col = style
-        # Each changing English caption gets its own short-lived exact cover;
-        # it no longer inflates the Persian box for the entire sentence.
-        for k in hit:
-            c, bx = covers[k], covers[k]["box"]
-            # Keep the detected width so no English letters remain at the
-            # sides; only cap the noisy vertical union that caused huge margins.
-            cover_w = bx["w"] * W + 2 * cover_pad
-            cover_h = min(bx["h"] * H + 2 * cover_pad, max((bottom - top) * 1.25, H * 0.045))
-            cover_cx, cover_cy = bx["cx"] * W, bx["cy"] * H
-            rect(layer, max(t0, c["start"]), min(t1, c["end"]),
-                 cover_cx - cover_w / 2, max(floor, cover_cy - cover_h / 2),
-                 cover_cx + cover_w / 2, cover_cy + cover_h / 2, box_colour)
-        rect(layer, t0, t1, W / 2 - half, top, W / 2 + half, bottom, box_colour)
-        for line, y in zip(lines, anchors):
-            text(layer + 1, t0, t1, y, line, size, text_col)
-        return top, bottom
+        relevant = [c for c in covers if c["end"] > absorb[0] and c["start"] < absorb[1]
+                    and abs(c["box"]["cy"] * H - cy) < H * 0.08 + reach]
+        points = {t0, t1}
+        for c in relevant:
+            points.add(max(t0, c["start"]))
+            points.add(min(t1, c["end"]))
+        points = sorted(p for p in points if t0 <= p <= t1)
+        overall_top, overall_bottom = H, 0.0
+        for a, b in zip(points, points[1:]):
+            if b - a < 0.005:
+                continue
+            middle = (a + b) / 2
+            active = [c for c in relevant if c["start"] <= middle < c["end"]]
+            segment_y = _median([c["box"]["cy"] for c in active]) * H if active else cy
+            half, top, bottom, anchors = extents(layout_size)
+            # Re-centre the text block on the visual caption in this frame.
+            delta = segment_y - cy
+            top, bottom = top + delta, bottom + delta
+            anchors = [y + delta for y in anchors]
+            if active:
+                glyph_h = max(c["box"]["h"] * H for c in active)
+                pad_x = max(cover_pad, glyph_h * 0.65)
+                x0 = min((c["box"]["cx"] - c["box"]["w"] / 2) * W for c in active) - pad_x
+                x1 = max((c["box"]["cx"] + c["box"]["w"] / 2) * W for c in active) + pad_x
+                y0 = min((c["box"]["cy"] - c["box"]["h"] / 2) * H for c in active) - cover_pad
+                y1 = max((c["box"]["cy"] + c["box"]["h"] / 2) * H for c in active) + cover_pad
+                half = max(half, W / 2 - x0, x1 - W / 2)
+                top, bottom = min(top, y0), max(bottom, y1)
+            top = max(floor, top)
+            rect(layer, a, b, W / 2 - half, top, W / 2 + half, bottom, box_colour)
+            for line, y in zip(lines, anchors):
+                text(layer + 1, a, b, y, line, layout_size, text_col)
+            overall_top, overall_bottom = min(overall_top, top), max(overall_bottom, bottom)
+        return overall_top, overall_bottom
 
     title_box = (state.get("title_layout") or {}).get("box")
     title_y = (title_box or {}).get("cy", DEFAULT_TITLE_Y) * H
