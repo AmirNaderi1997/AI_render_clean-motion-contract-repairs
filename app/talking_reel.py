@@ -395,6 +395,7 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
                  work_dir=job_dir / "talking_reel_work", music=resolve_music(state.get("music")),
                  cta=state.get("cta") or "",
                  render_settings=settings,
+                 logo_path=custom_logo(job_dir),
                  on_progress=progress)
     state = load(job_dir)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",
@@ -409,6 +410,11 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 def user_media(job_dir: Path) -> list[Path]:
     folder = job_dir / MEDIA_DIR
     return sorted(p for p in folder.glob("*") if p.suffix.lower() in IMAGE_EXTENSIONS) if folder.is_dir() else []
+
+
+def custom_logo(job_dir: Path) -> Optional[Path]:
+    path = job_dir / "talking_reel_logo.png"
+    return path if path.is_file() else None
 
 
 def _library_pictures() -> list[dict]:
@@ -644,6 +650,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
     rough = job_dir / "talking_reel_work" / "hyperframes_base.mp4" if hyperframes else out
     media.render(video, plan, rough, work_dir=job_dir / "talking_reel_work",
                  music=resolve_music(music), cta=state.get("cta") or "", render_settings=render_settings,
+                 logo_path=custom_logo(job_dir),
                  on_progress=progress)
     if hyperframes:
         from engine.hyperframes import build_project, build_visual_beats, render_project

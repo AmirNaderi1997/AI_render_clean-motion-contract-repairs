@@ -230,15 +230,19 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
 
 def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Optional[Path] = None,
            cta: str = "", render_settings: Optional[dict] = None,
+           logo_path: Optional[Path] = None,
            on_progress: Optional[Callable[[int], None]] = None, **_ignored) -> Path:
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
     settings = render_settings or {}
     gs = settings.get("grade") or {}
-    custom_grade = (GRADE + f",eq=brightness={float(gs.get('brightness', 0)) / 100:.3f}:"
-                    f"contrast={float(gs.get('contrast', 100)) / 100:.3f}:"
-                    f"saturation={float(gs.get('saturation', 100)) / 100:.3f},"
+    brightness = 1 + float(gs.get("brightness", 0)) / 100
+    contrast = float(gs.get("contrast", 100)) / 100
+    custom_grade = (f"lutrgb=r='(val*{brightness:.3f}-128)*{contrast:.3f}+128':"
+                    f"g='(val*{brightness:.3f}-128)*{contrast:.3f}+128':"
+                    f"b='(val*{brightness:.3f}-128)*{contrast:.3f}+128',"
+                    f"hue=s={float(gs.get('saturation', 100)) / 100:.3f},"
                     f"colorbalance=rs={float(gs.get('temperature', 0)) / 500:.3f}:"
                     f"bs={-float(gs.get('temperature', 0)) / 500:.3f}")
     sw, sh, _ = probe_video(video)
@@ -254,7 +258,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     ass.write_text(ass_text, encoding="utf-8")
     logo = settings.get("outro_logo") or {}
     outro, outro_seconds = render_outro(work_dir, cta.strip(), fps, fonts,
-                                        logo_enabled=logo.get("enabled", True), logo_motion=logo.get("motion", "pop"))
+                                        logo_enabled=logo.get("enabled", True), logo_motion=logo.get("motion", "pop"),
+                                        logo_path=logo_path)
     total = plan.duration + outro_seconds
 
     panels: dict[tuple, Path] = {}
@@ -285,7 +290,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     zoom_amount = float(zoom.get("amount", 100)) / 100 if zoom.get("enabled", True) else 0.0
     for k, shot in enumerate(plan.shots):
         frames = max(1, round(shot.length * fps_value))
-        cw, ch, x, y = speaker_crop(shot, sw, sh)
+        cw, ch, x, y = speaker_crop(shot, sw, sh, zoom_amount)
         cut = f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,crop={cw}:{ch}:{x}:{y}"
         push = f"zoompan=z='1.0+{PICTURE_ZOOM * zoom_amount:.4f}*on/{frames}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1"
         if shot.split and id(shot) in plan.full_pictures:

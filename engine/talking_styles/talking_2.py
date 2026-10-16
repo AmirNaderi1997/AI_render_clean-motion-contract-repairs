@@ -373,7 +373,7 @@ GRADE = ("eq=contrast=1.08:saturation=1.12:gamma=0.99,"
 MINIMAL_GRADE = "eq=contrast=1.04:saturation=0.96:gamma=1.01,unsharp=5:5:0.35"
 
 
-def speaker_crop(shot: Shot, sw: int, sh: int) -> tuple[int, int, int, int]:
+def speaker_crop(shot: Shot, sw: int, sh: int, zoom_amount: float = 1.0) -> tuple[int, int, int, int]:
     """Source crop for the speaker: 9:16 full frame (wide/close) or W x SPLIT_Y for the bottom half."""
     if shot.split:
         aspect = W / (H - SPLIT_Y)
@@ -385,11 +385,14 @@ def speaker_crop(shot: Shot, sw: int, sh: int) -> tuple[int, int, int, int]:
         # Face a little below the middle, leaving the seam captions clear of the head.
         y = min(max(0, fy - 0.5 * ch), sh - ch)
         return int(cw) & ~1, int(ch) & ~1, int(x) & ~1, int(y) & ~1
-    return base.crop_for(base.Shot(shot.src_in, shot.src_out, close=shot.close, face=shot.face), sw, sh)
+    close_zoom = 1.0 + (base.CLOSE_ZOOM - 1.0) * zoom_amount
+    return base.crop_for(base.Shot(shot.src_in, shot.src_out, close=shot.close, face=shot.face), sw, sh,
+                         close_zoom=max(1.0, close_zoom))
 
 
 def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Optional[Path] = None,
            cta: str = "", render_settings: Optional[dict] = None,
+           logo_path: Optional[Path] = None,
            on_progress: Optional[Callable[[int], None]] = None, **_ignored) -> Path:
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
@@ -397,10 +400,13 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     sw, sh, _ = probe_video(video)
     settings = render_settings or {}
     gs = settings.get("grade") or {}
-    grade = (MINIMAL_GRADE if plan.theme == "minimal" else GRADE) + (
-        f",eq=brightness={float(gs.get('brightness', 0)) / 100:.3f}:"
-        f"contrast={float(gs.get('contrast', 100)) / 100:.3f}:"
-        f"saturation={float(gs.get('saturation', 100)) / 100:.3f},"
+    brightness = 1 + float(gs.get("brightness", 0)) / 100
+    contrast = float(gs.get("contrast", 100)) / 100
+    grade = (
+        f"lutrgb=r='(val*{brightness:.3f}-128)*{contrast:.3f}+128':"
+        f"g='(val*{brightness:.3f}-128)*{contrast:.3f}+128':"
+        f"b='(val*{brightness:.3f}-128)*{contrast:.3f}+128',"
+        f"hue=s={float(gs.get('saturation', 100)) / 100:.3f},"
         f"colorbalance=rs={float(gs.get('temperature', 0)) / 500:.3f}:"
         f"bs={-float(gs.get('temperature', 0)) / 500:.3f}")
     fps = probe_fps(video)
@@ -416,7 +422,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     ass.write_text(ass_text, encoding="utf-8")
     logo = settings.get("outro_logo") or {}
     outro, outro_seconds = render_outro(work_dir, cta.strip(), fps, fonts,
-                                        logo_enabled=logo.get("enabled", True), logo_motion=logo.get("motion", "pop"))
+                                        logo_enabled=logo.get("enabled", True), logo_motion=logo.get("motion", "pop"),
+                                        logo_path=logo_path)
     total = plan.duration + outro_seconds
 
     panels: dict[str, Path] = {}
@@ -438,7 +445,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     zoom = settings.get("zoom") or {}
     zoom_amount = float(zoom.get("amount", 100)) / 100 if zoom.get("enabled", True) else 0.0
     for k, shot in enumerate(plan.shots):
-        cw, ch, x, y = speaker_crop(shot, sw, sh)
+        cw, ch, x, y = speaker_crop(shot, sw, sh, zoom_amount)
         cut = f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,crop={cw}:{ch}:{x}:{y}"
         if shot.split:
             inputs += ["-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(panel_for(shot))]

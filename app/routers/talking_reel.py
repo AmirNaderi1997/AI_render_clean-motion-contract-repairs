@@ -37,7 +37,10 @@ def _job(request: Request, job_id: str):
 
 @router.get("")
 def status(request: Request, job_id: str):
-    return store.public(store.load(_job(request, job_id).dir))
+    job = _job(request, job_id)
+    result = store.public(store.load(job.dir))
+    result["logo_uploaded"] = store.custom_logo(job.dir) is not None
+    return result
 
 
 @router.patch("")
@@ -102,6 +105,43 @@ def delete_media(request: Request, job_id: str, name: str):
     if not path.is_relative_to((job.dir / store.MEDIA_DIR).resolve()) or not path.is_file():
         raise HTTPException(404, "file not found")
     path.unlink()
+
+
+@router.post("/logo")
+async def upload_logo(request: Request, job_id: str, file: UploadFile = File(...)):
+    """Store a per-job transparent PNG for the talking-reel outro."""
+    from PIL import Image
+
+    job = _job(request, job_id)
+    if Path(file.filename or "").suffix.lower() != ".png":
+        raise HTTPException(422, "the outro logo must be a PNG file")
+    data = await file.read(8 * 1024 * 1024 + 1)
+    if len(data) > 8 * 1024 * 1024:
+        raise HTTPException(422, "the logo PNG must be smaller than 8 MB")
+    path = job.dir / "talking_reel_logo.png"
+    path.write_bytes(data)
+    try:
+        with Image.open(path) as image:
+            image.verify()
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise HTTPException(422, "invalid PNG image")
+    return {"logo_uploaded": True}
+
+
+@router.get("/logo")
+def get_logo(request: Request, job_id: str):
+    path = store.custom_logo(_job(request, job_id).dir)
+    if not path:
+        raise HTTPException(404, "custom logo not uploaded")
+    return FileResponse(path, media_type="image/png")
+
+
+@router.delete("/logo", status_code=204)
+def delete_logo(request: Request, job_id: str):
+    path = store.custom_logo(_job(request, job_id).dir)
+    if path:
+        path.unlink()
 
 
 @router.get("/output")

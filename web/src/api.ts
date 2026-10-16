@@ -277,6 +277,7 @@ export interface TalkingReelState {
   visual_qc?: { passed: boolean; problems: string[]; samples: number; mean_scene_change: number };
   slots?: { i: number; label: string; source: "upload" | "library" | "ai" | "card"; file: string | null }[];
   output: string | null;
+  logo_uploaded?: boolean;
   duration?: number;
   shots?: number;
 }
@@ -811,6 +812,14 @@ export const api = {
   async deleteTalkingReelMedia(jobId: string, name: string): Promise<void> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/media/${encodeURIComponent(name)}`, { method: "DELETE" }));
   },
+  async uploadTalkingReelLogo(jobId: string, file: File): Promise<{ logo_uploaded: boolean }> {
+    const fd = new FormData(); fd.append("file", file);
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/logo`, { method: "POST", body: fd }));
+  },
+  async deleteTalkingReelLogo(jobId: string): Promise<void> {
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/logo`, { method: "DELETE" }));
+  },
+  talkingReelLogoUrl(jobId: string): string { return `${BASE}/jobs/${jobId}/talking-reel/logo`; },
   async talkingReelStyles(): Promise<{ id: string; label: string }[]> {
     return j(await authFetch(`${BASE}/talking-reels/styles`));
   },

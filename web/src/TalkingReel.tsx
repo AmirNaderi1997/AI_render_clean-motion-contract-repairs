@@ -219,6 +219,9 @@ function TimelineReview({ jobId, state, disabled, onChange }: {
 }) {
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const settings = state.render_settings!;
+  const [logoUploaded, setLogoUploaded] = React.useState(!!state.logo_uploaded);
+  const [logoNonce, setLogoNonce] = React.useState(0);
+  const [logoError, setLogoError] = React.useState("");
   const moments = state.timeline || [];
   const setGrade = (key: keyof TalkingRenderSettings["grade"], value: number) =>
     onChange({ ...settings, grade: { ...settings.grade, [key]: value } });
@@ -227,7 +230,8 @@ function TimelineReview({ jobId, state, disabled, onChange }: {
     off.has(id) ? off.delete(id) : off.add(id);
     onChange({ ...settings, disabled_moments: [...off] });
   };
-  const filter = `brightness(${100 + settings.grade.brightness}%) contrast(${settings.grade.contrast}%) saturate(${settings.grade.saturation}%) sepia(${Math.abs(settings.grade.temperature) / 100}) hue-rotate(${settings.grade.temperature < 0 ? 190 : 350}deg)`;
+  const filter = `brightness(${100 + settings.grade.brightness}%) contrast(${settings.grade.contrast}%) saturate(${settings.grade.saturation}%)`;
+  const previewScale = settings.zoom.enabled ? 1 + .4 * settings.zoom.amount / 100 : 1;
   const ranges: { key: keyof TalkingRenderSettings["grade"]; label: string; min: number; max: number; suffix: string }[] = [
     { key: "brightness", label: "نور", min: -30, max: 30, suffix: "" },
     { key: "contrast", label: "کنتراست", min: 50, max: 160, suffix: "%" },
@@ -241,7 +245,10 @@ function TimelineReview({ jobId, state, disabled, onChange }: {
     <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 340px) 1fr", gap: 18, alignItems: "start" }}>
       <div style={{ position: "relative", overflow: "hidden", borderRadius: 12, background: "#111", aspectRatio: "9 / 16", maxHeight: 480 }}>
         <AuthenticatedMedia as="video" ref={videoRef} src={api.rawUrl(jobId)} controls preload="metadata"
-          style={{ width: "100%", height: "100%", objectFit: "cover", filter }} />
+          style={{ width: "100%", height: "100%", objectFit: "cover", filter, transform: `scale(${previewScale})`, transition: "filter .15s, transform .2s" }} />
+        {settings.grade.temperature !== 0 && <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none",
+          background: settings.grade.temperature > 0 ? "#ff8a3d" : "#4b8dff", mixBlendMode: "soft-light",
+          opacity: Math.abs(settings.grade.temperature) / 250 }} />}
         <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none", boxShadow: `inset 0 0 ${settings.grade.vignette * 1.4}px rgba(0,0,0,${settings.grade.vignette / 125})` }} />
       </div>
       <div>
@@ -285,6 +292,25 @@ function TimelineReview({ jobId, state, disabled, onChange }: {
             onChange={e => onChange({ ...settings, outro_logo: { ...settings.outro_logo, motion: e.target.value as TalkingRenderSettings["outro_logo"]["motion"] } })}>
             <option value="pop">Pop + glow</option><option value="fade">Fade</option><option value="slide">Slide</option><option value="none">ثابت</option>
           </select></label>
+        </div>
+        <div style={{ marginTop: 12, padding: 10, border: "1px solid var(--border)", borderRadius: 10 }}>
+          <strong>تصویر لوگوی پایان</strong>
+          <div className="row" style={{ marginTop: 8, alignItems: "center" }}>
+            {logoUploaded && <AuthenticatedMedia as="img" src={`${api.talkingReelLogoUrl(jobId)}?v=${logoNonce}`} alt="لوگوی پایان"
+              style={{ width: 74, height: 74, objectFit: "contain", background: "#171717", borderRadius: 8 }} />}
+            <label className="btn-secondary" style={{ cursor: disabled ? "default" : "pointer" }}>انتخاب PNG جدید
+              <input hidden type="file" accept="image/png" disabled={disabled} onChange={e => {
+                const file = e.target.files?.[0]; e.target.value = ""; if (!file) return;
+                setLogoError(""); api.uploadTalkingReelLogo(jobId, file).then(() => { setLogoUploaded(true); setLogoNonce(n => n + 1); notify("لوگوی پایان عوض شد"); })
+                  .catch(err => setLogoError(friendlyError(err, "upload the outro logo")));
+              }} />
+            </label>
+            {logoUploaded && <button type="button" className="btn-secondary" disabled={disabled} onClick={() => {
+              api.deleteTalkingReelLogo(jobId).then(() => setLogoUploaded(false)).catch(err => setLogoError(friendlyError(err, "remove the outro logo")));
+            }}>برگشت به لوگوی اصلی</button>}
+          </div>
+          <div className="muted">PNG شفاف پیشنهاد می‌شود. این فایل فقط برای همین پروژه ذخیره می‌شود.</div>
+          {logoError && <div className="errors">{logoError}</div>}
         </div>
       </div>
     </div>

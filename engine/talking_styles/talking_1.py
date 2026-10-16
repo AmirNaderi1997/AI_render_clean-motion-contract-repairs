@@ -537,9 +537,9 @@ GRADE = ("eq=contrast=1.10:saturation=1.16:gamma=0.98,"
 BW = "hue=s=0,eq=contrast=1.12:brightness=-0.01"
 
 
-def crop_for(shot: Shot, sw: int, sh: int) -> tuple[int, int, int, int]:
+def crop_for(shot: Shot, sw: int, sh: int, close_zoom: float = CLOSE_ZOOM) -> tuple[int, int, int, int]:
     """(w, h, x, y) of the 9:16 source crop for a shot's framing."""
-    ch = sh / (CLOSE_ZOOM if shot.close else 1.0)
+    ch = sh / (close_zoom if shot.close else 1.0)
     cw = ch * 9 / 16
     if cw > sw:   # a portrait or square source: use the full width instead
         cw, ch = sw, sw * 16 / 9
@@ -653,7 +653,8 @@ def cta_events(cta: str, t0: float, t1: float, fonts_dir: Optional[Path]) -> lis
     return events
 
 
-def logo_frames(out_dir: Path, fps: float, seconds: float = LOGO_SECONDS, motion: str = "pop") -> Path:
+def logo_frames(out_dir: Path, fps: float, seconds: float = LOGO_SECONDS, motion: str = "pop",
+                logo_path: Optional[Path] = None) -> Path:
     """Logo reveal frames: scale up with a soft overshoot, glow, a light sweep, fade out."""
     import math
 
@@ -665,7 +666,7 @@ def logo_frames(out_dir: Path, fps: float, seconds: float = LOGO_SECONDS, motion
     count = max(1, round(seconds * fps))
     if (out_dir / f"logo_{count:04d}.png").is_file():
         return pattern
-    mark = Image.open(LOGO).convert("RGBA")
+    mark = Image.open(logo_path or LOGO).convert("RGBA")
     base_h = int(H * 0.11)
     mark = mark.resize((int(mark.width * base_h / mark.height), base_h), Image.LANCZOS)
     padded = Image.new("RGBA", (mark.width + 160, mark.height + 160), (255, 255, 255, 0))
@@ -714,18 +715,19 @@ def logo_frames(out_dir: Path, fps: float, seconds: float = LOGO_SECONDS, motion
 
 
 def render_outro(work_dir: Path, cta: str, fps: str, fonts: Path, *, logo_enabled: bool = True,
-                 logo_motion: str = "pop") -> tuple[Optional[Path], float]:
+                 logo_motion: str = "pop", logo_path: Optional[Path] = None) -> tuple[Optional[Path], float]:
     """Silent outro clip: optional CTA card, then the logo motion. Returns (path, seconds)."""
     from ..localize import render_end_card
 
     ffmpeg = ass_burner_ffmpeg()
     fps_value = eval_fps(fps)
-    if (not LOGO.is_file() or not logo_enabled) and not cta:
+    active_logo = logo_path if logo_path and logo_path.is_file() else LOGO
+    if (not active_logo.is_file() or not logo_enabled) and not cta:
         return None, 0.0
     parts, inputs, chains = [], [], []
     cta_seconds = CTA_SECONDS if cta else 0.0
     if cta:
-        bg = render_end_card(work_dir / "cta_bg.png", W, H, LOGO if LOGO.is_file() else None)
+        bg = render_end_card(work_dir / "cta_bg.png", W, H, active_logo if active_logo.is_file() else None)
         ass = work_dir / "cta.ass"
         ass.write_text("\n".join([
             "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}", "WrapStyle: 2", "",
@@ -743,9 +745,11 @@ def render_outro(work_dir: Path, cta: str, fps: str, fonts: Path, *, logo_enable
         chains.append(f"[{len(parts)}:v]scale={W}:{H},setsar=1,format=yuv420p,{subtitles_filter(ass, fonts)}[p{len(parts)}]")
         parts.append(f"[p{len(parts)}]")
     logo_seconds = 0.0
-    if LOGO.is_file() and logo_enabled:
+    if active_logo.is_file() and logo_enabled:
         logo_seconds = LOGO_SECONDS
-        pattern = logo_frames(work_dir / f"logo_frames_{logo_motion}", fps_value, motion=logo_motion)
+        logo_key = f"{active_logo.stat().st_mtime_ns:x}"
+        pattern = logo_frames(work_dir / f"logo_frames_{logo_motion}_{logo_key}", fps_value,
+                              motion=logo_motion, logo_path=active_logo)
         inputs += ["-framerate", fps, "-i", str(pattern)]
         chains.append(f"[{len(parts)}:v]setsar=1,format=yuv420p[p{len(parts)}]")
         parts.append(f"[p{len(parts)}]")
@@ -760,6 +764,7 @@ def render_outro(work_dir: Path, cta: str, fps: str, fonts: Path, *, logo_enable
 def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list[str], name: str, title: str,
            work_dir: Path, music: Optional[Path] = None, cta: str = "",
            render_settings: Optional[dict] = None,
+           logo_path: Optional[Path] = None,
            on_progress: Optional[Callable[[int], None]] = None) -> Path:
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
@@ -782,22 +787,26 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     logo = settings.get("outro_logo") or {}
     outro, outro_seconds = render_outro(work_dir, cta.strip(), fps, fonts,
                                         logo_enabled=logo.get("enabled", True),
-                                        logo_motion=logo.get("motion", "pop"))
+                                        logo_motion=logo.get("motion", "pop"), logo_path=logo_path)
     total = plan.duration + outro_seconds
     n = len(plan.shots)
     vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
           f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
     grade_settings = settings.get("grade") or {}
-    custom_grade = (f",eq=brightness={float(grade_settings.get('brightness', 0)) / 100:.3f}:"
-                    f"contrast={float(grade_settings.get('contrast', 100)) / 100:.3f}:"
-                    f"saturation={float(grade_settings.get('saturation', 100)) / 100:.3f},"
+    brightness = 1 + float(grade_settings.get("brightness", 0)) / 100
+    contrast = float(grade_settings.get("contrast", 100)) / 100
+    custom_grade = (f"lutrgb=r='(val*{brightness:.3f}-128)*{contrast:.3f}+128':"
+                    f"g='(val*{brightness:.3f}-128)*{contrast:.3f}+128':"
+                    f"b='(val*{brightness:.3f}-128)*{contrast:.3f}+128',"
+                    f"hue=s={float(grade_settings.get('saturation', 100)) / 100:.3f},"
                     f"colorbalance=rs={float(grade_settings.get('temperature', 0)) / 500:.3f}:"
                     f"bs={-float(grade_settings.get('temperature', 0)) / 500:.3f}")
     zoom_settings = settings.get("zoom") or {}
     zoom_amount = float(zoom_settings.get("amount", 100)) / 100 if zoom_settings.get("enabled", True) else 0.0
     for k, shot in enumerate(plan.shots):
-        cw, ch, x, y = crop_for(shot, sw, sh)
-        look = GRADE + custom_grade + (f",{BW}" if shot.bw else "")
+        close_zoom = 1.0 + (CLOSE_ZOOM - 1.0) * zoom_amount
+        cw, ch, x, y = crop_for(shot, sw, sh, close_zoom=max(1.0, close_zoom))
+        look = custom_grade + (f",{BW}" if shot.bw else "")
         if shot.push and zoom_amount > 0:
             # Slow eased push-in anchored on the face (Ken Burns), rendered
             # from a 1.5x frame so the motion stays smooth.
