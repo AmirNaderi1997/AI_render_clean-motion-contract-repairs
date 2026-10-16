@@ -302,10 +302,10 @@ class ArvanProvider(_ExternalProvider):
             "ARVAN_AI_API_BASE", default=_DEFAULT_ARVAN_URL
         ) or _DEFAULT_ARVAN_URL
         self.model = _config(
-            "ARVAN_AI_MODEL", default="GPT-5.6-Terra"
-        ) or "GPT-5.6-Terra"
+            "ARVAN_AI_MODEL", default="GPT-5.6-Sol"
+        ) or "GPT-5.6-Sol"
 
-    def _chat_json(self, system: str, user: str) -> tuple[dict, LLMUsage]:
+    def _arvan_chat_json(self, system: str, user: str) -> tuple[dict, LLMUsage]:
         started = time.monotonic()
         result = _post_json(
             _endpoint(self.api_url, "chat/completions"),
@@ -337,6 +337,23 @@ class ArvanProvider(_ExternalProvider):
             elapsed_sec=round(time.monotonic() - started, 2),
         )
         return _extract_json(text), usage
+
+    def _chat_json(self, system: str, user: str) -> tuple[dict, LLMUsage]:
+        try:
+            return self._arvan_chat_json(system, user)
+        except Exception as exc:
+            if not _config("GEMINI_API_KEY"):
+                raise
+            log.warning("Arvan AI request failed; using Gemini fallback: %s", exc)
+            from .llm import _gemini_call
+            return _gemini_call(
+                system,
+                user,
+                _config("GEMINI_MODEL", default="gemini-3.5-flash-lite"),
+                16000,
+                0,
+                _timeout_seconds(),
+            )
 
     def generate_plan(self, video_metadata: dict, transcript: dict) -> tuple[dict, LLMUsage]:
         system = str(video_metadata.get("system_prompt") or "Return a valid edit plan as JSON.")

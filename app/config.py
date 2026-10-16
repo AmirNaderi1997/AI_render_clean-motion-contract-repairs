@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     AI_TIMEOUT_SECONDS: int = 60
     AI_CORRECTION_TIMEOUT_SECONDS: int = 45
     LLM_PROVIDER: str = "arvan"
-    LLM_MODEL: str = "GPT-5.6-Terra"
+    LLM_MODEL: str = "GPT-5.6-Sol"
     SAROVI_LLM_MODEL: str = "anthropic/claude-sonnet-5.5"
     # Content Creator can use a dedicated text provider without changing the
     # upload/edit planner used elsewhere in the application.
@@ -45,7 +45,12 @@ class Settings(BaseSettings):
     JARVIS_BASE_URL: str = ""
     ARVAN_AI_API_KEY: str = ""
     ARVAN_AI_API_BASE: str = "https://aiapi.rafiei.co/v1"
-    ARVAN_AI_MODEL: str = "GPT-5.6-Terra"
+    ARVAN_AI_MODEL: str = "GPT-5.6-Sol"
+    GEMINI_API_KEY: str = ""
+    GEMINI_API_BASE: str = "https://generativelanguage.googleapis.com"
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
+    GEMINI_RELAY_SECRET: str = ""
+    VERCEL_AUTOMATION_BYPASS_SECRET: str = ""
     SAROVI_API_URL: str = ""
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = ""
