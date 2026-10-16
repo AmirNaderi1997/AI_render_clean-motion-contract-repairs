@@ -653,7 +653,7 @@ def cta_events(cta: str, t0: float, t1: float, fonts_dir: Optional[Path]) -> lis
     return events
 
 
-def logo_frames(out_dir: Path, fps: float, seconds: float = LOGO_SECONDS) -> Path:
+def logo_frames(out_dir: Path, fps: float, seconds: float = LOGO_SECONDS, motion: str = "pop") -> Path:
     """Logo reveal frames: scale up with a soft overshoot, glow, a light sweep, fade out."""
     import math
 
@@ -682,13 +682,20 @@ def logo_frames(out_dir: Path, fps: float, seconds: float = LOGO_SECONDS) -> Pat
     for k in range(count):
         t = k / fps
         p = min(1.0, t / 0.75)
-        scale = 0.55 + 0.45 * ease_back(p)
+        if motion == "fade" or motion == "none":
+            scale = 1.0
+        elif motion == "slide":
+            scale = 1.0
+        else:
+            scale = 0.55 + 0.45 * ease_back(p)
         alpha = min(1.0, t / 0.3) * (1 - max(0.0, (t - (seconds - 0.45)) / 0.45))
         frame = Image.fromarray(bg.copy()).convert("RGBA")
         size = (max(1, int(mark.width * scale)), max(1, int(mark.height * scale)))
         m = mark.resize(size, Image.LANCZOS)
         g = glow.resize((int(glow.width * scale), int(glow.height * scale)), Image.LANCZOS)
         cx, cy = W // 2, int(H * 0.47)
+        if motion == "slide":
+            cx = int(-m.width / 2 + (W / 2 + m.width / 2) * (1 - (1 - p) ** 3))
         # Light sweep: a bright diagonal band crossing the mark between 0.8 s and 1.5 s.
         sweep = (t - 0.8) / 0.7
         if 0 <= sweep <= 1:
@@ -706,13 +713,14 @@ def logo_frames(out_dir: Path, fps: float, seconds: float = LOGO_SECONDS) -> Pat
     return pattern
 
 
-def render_outro(work_dir: Path, cta: str, fps: str, fonts: Path) -> tuple[Optional[Path], float]:
+def render_outro(work_dir: Path, cta: str, fps: str, fonts: Path, *, logo_enabled: bool = True,
+                 logo_motion: str = "pop") -> tuple[Optional[Path], float]:
     """Silent outro clip: optional CTA card, then the logo motion. Returns (path, seconds)."""
     from ..localize import render_end_card
 
     ffmpeg = ass_burner_ffmpeg()
     fps_value = eval_fps(fps)
-    if not LOGO.is_file() and not cta:
+    if (not LOGO.is_file() or not logo_enabled) and not cta:
         return None, 0.0
     parts, inputs, chains = [], [], []
     cta_seconds = CTA_SECONDS if cta else 0.0
@@ -735,9 +743,9 @@ def render_outro(work_dir: Path, cta: str, fps: str, fonts: Path) -> tuple[Optio
         chains.append(f"[{len(parts)}:v]scale={W}:{H},setsar=1,format=yuv420p,{subtitles_filter(ass, fonts)}[p{len(parts)}]")
         parts.append(f"[p{len(parts)}]")
     logo_seconds = 0.0
-    if LOGO.is_file():
+    if LOGO.is_file() and logo_enabled:
         logo_seconds = LOGO_SECONDS
-        pattern = logo_frames(work_dir / "logo_frames", fps_value)
+        pattern = logo_frames(work_dir / f"logo_frames_{logo_motion}", fps_value, motion=logo_motion)
         inputs += ["-framerate", fps, "-i", str(pattern)]
         chains.append(f"[{len(parts)}:v]setsar=1,format=yuv420p[p{len(parts)}]")
         parts.append(f"[p{len(parts)}]")
@@ -751,6 +759,7 @@ def render_outro(work_dir: Path, cta: str, fps: str, fonts: Path) -> tuple[Optio
 
 def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list[str], name: str, title: str,
            work_dir: Path, music: Optional[Path] = None, cta: str = "",
+           render_settings: Optional[dict] = None,
            on_progress: Optional[Callable[[int], None]] = None) -> Path:
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
@@ -760,25 +769,42 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     work_dir.mkdir(parents=True, exist_ok=True)
     fonts = fonts_bundle(work_dir)
     ass = work_dir / "reel.ass"
-    ass.write_text(build_ass(plan, hook, highlight, name, title, fonts), encoding="utf-8")
+    settings = render_settings or {}
+    ass_text = build_ass(plan, hook, highlight, name, title, fonts)
+    title_color = str(settings.get("title_color") or YELLOW)
+    if re.fullmatch(r"#[0-9A-Fa-f]{6}", title_color):
+        old, new = _colour(YELLOW), _colour(title_color)
+        ass_text = ass_text.replace(old, new).replace(old.replace("&H", "&H00", 1)[:-1], new.replace("&H", "&H00", 1)[:-1])
+    ass.write_text(ass_text, encoding="utf-8")
 
     fps_value = eval_fps(fps)
     vignette = vignette_png(work_dir / "vignette.png")
-    outro, outro_seconds = render_outro(work_dir, cta.strip(), fps, fonts)
+    logo = settings.get("outro_logo") or {}
+    outro, outro_seconds = render_outro(work_dir, cta.strip(), fps, fonts,
+                                        logo_enabled=logo.get("enabled", True),
+                                        logo_motion=logo.get("motion", "pop"))
     total = plan.duration + outro_seconds
     n = len(plan.shots)
     vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
           f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
+    grade_settings = settings.get("grade") or {}
+    custom_grade = (f",eq=brightness={float(grade_settings.get('brightness', 0)) / 100:.3f}:"
+                    f"contrast={float(grade_settings.get('contrast', 100)) / 100:.3f}:"
+                    f"saturation={float(grade_settings.get('saturation', 100)) / 100:.3f},"
+                    f"colorbalance=rs={float(grade_settings.get('temperature', 0)) / 500:.3f}:"
+                    f"bs={-float(grade_settings.get('temperature', 0)) / 500:.3f}")
+    zoom_settings = settings.get("zoom") or {}
+    zoom_amount = float(zoom_settings.get("amount", 100)) / 100 if zoom_settings.get("enabled", True) else 0.0
     for k, shot in enumerate(plan.shots):
         cw, ch, x, y = crop_for(shot, sw, sh)
-        look = GRADE + (f",{BW}" if shot.bw else "")
-        if shot.push:
+        look = GRADE + custom_grade + (f",{BW}" if shot.bw else "")
+        if shot.push and zoom_amount > 0:
             # Slow eased push-in anchored on the face (Ken Burns), rendered
             # from a 1.5x frame so the motion stays smooth.
             frames = max(1, round(shot.length * fps_value))
             ax = min(max((shot.face[0] * sw - x) / cw, 0.2), 0.8)
             ay = min(max((shot.face[1] * sh - y) / ch, 0.2), 0.8)
-            zoom = (f"zoompan=z='1+{PUSH_ZOOM}*(1-cos(PI*min(on/{frames},1)))/2':"
+            zoom = (f"zoompan=z='1+{PUSH_ZOOM * zoom_amount:.4f}*(1-cos(PI*min(on/{frames},1)))/2':"
                     f"x='iw*{ax:.3f}-iw/zoom*{ax:.3f}':y='ih*{ay:.3f}-ih/zoom*{ay:.3f}':"
                     f"d=1:s={W}x{H}:fps={fps}")
             frame = f"scale={W * 3 // 2}:{H * 3 // 2}:flags=lanczos,{zoom}"
@@ -790,7 +816,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
     vf.append("".join(f"[v{k}][a{k}]" for k in range(n)) + f"concat=n={n}:v=1:a=1[cv][ca]")
-    vf.append(f"[1:v]format=rgba[vig]")
+    vignette_alpha = max(0.0, min(1.0, float(grade_settings.get("vignette", 50)) / 50))
+    vf.append(f"[1:v]format=rgba,colorchannelmixer=aa={vignette_alpha:.3f}[vig]")
     content = "vmain" if outro else "vout"
     windows = "+".join(f"between(t,{n['start']:.3f},{n['end']:.3f})" for n in plan.notes)
     emphasis = (f"gblur=sigma=9:enable='{windows}',hue=s=0:enable='{windows}',"

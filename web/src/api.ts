@@ -270,6 +270,8 @@ export interface TalkingReelState {
   hook2?: string;
   captions?: { i: number; text: string }[];
   storyboard?: { i: number; title: string; visual_type: string; narrative_role?: string; motion_style?: string; why?: string }[];
+  timeline?: { id: string; sentence: number; title: string; kind: "key_moment"; order: number }[];
+  render_settings?: TalkingRenderSettings;
   visual_beats?: { title: string; visual_type: string; start: number; end: number; registry_refs?: string[] }[];
   catalog_reviewed?: number;
   visual_qc?: { passed: boolean; problems: string[]; samples: number; mean_scene_change: number };
@@ -277,6 +279,18 @@ export interface TalkingReelState {
   output: string | null;
   duration?: number;
   shots?: number;
+}
+
+export interface TalkingRenderSettings {
+  grade: { brightness: number; contrast: number; saturation: number; temperature: number; vignette: number };
+  zoom: { enabled: boolean; amount: number };
+  key_moments_enabled: boolean;
+  first_key_moment_enabled: boolean;
+  first_key_moment_sentence: number | null;
+  key_moment_effect: "grayscale_title" | "title_only" | "grayscale" | "none";
+  title_color: string;
+  outro_logo: { enabled: boolean; motion: "pop" | "fade" | "slide" | "none" };
+  disabled_moments: string[];
 }
 
 export interface TalkingReelSummary {
@@ -774,7 +788,7 @@ export const api = {
   async getTalkingReel(jobId: string): Promise<TalkingReelState> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel`));
   },
-  async editTalkingReel(jobId: string, body: Partial<Pick<TalkingReelState, "hook" | "hook2" | "hook_highlight" | "name" | "title" | "music" | "cta" | "style" | "captions" | "storyboard">>): Promise<TalkingReelState> {
+  async editTalkingReel(jobId: string, body: Partial<Pick<TalkingReelState, "hook" | "hook2" | "hook_highlight" | "name" | "title" | "music" | "cta" | "style" | "captions" | "storyboard" | "render_settings">>): Promise<TalkingReelState> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel`, {
       method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
     }));

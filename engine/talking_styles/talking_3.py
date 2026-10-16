@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Callable, Optional
@@ -228,18 +229,32 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
 # --- render -------------------------------------------------------------------------
 
 def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Optional[Path] = None,
-           cta: str = "", on_progress: Optional[Callable[[int], None]] = None, **_ignored) -> Path:
+           cta: str = "", render_settings: Optional[dict] = None,
+           on_progress: Optional[Callable[[int], None]] = None, **_ignored) -> Path:
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
+    settings = render_settings or {}
+    gs = settings.get("grade") or {}
+    custom_grade = (GRADE + f",eq=brightness={float(gs.get('brightness', 0)) / 100:.3f}:"
+                    f"contrast={float(gs.get('contrast', 100)) / 100:.3f}:"
+                    f"saturation={float(gs.get('saturation', 100)) / 100:.3f},"
+                    f"colorbalance=rs={float(gs.get('temperature', 0)) / 500:.3f}:"
+                    f"bs={-float(gs.get('temperature', 0)) / 500:.3f}")
     sw, sh, _ = probe_video(video)
     fps = probe_fps(video)
     fps_value = eval_fps(fps)
     work_dir.mkdir(parents=True, exist_ok=True)
     fonts = fonts_bundle(work_dir)
     ass = work_dir / "reel3.ass"
-    ass.write_text(build_ass(plan, fonts), encoding="utf-8")
-    outro, outro_seconds = render_outro(work_dir, cta.strip(), fps, fonts)
+    ass_text = build_ass(plan, fonts)
+    title_color = str(settings.get("title_color") or "")
+    if re.fullmatch(r"#[0-9A-Fa-f]{6}", title_color):
+        ass_text = ass_text.replace(ACCENT_COLOUR, "&H00" + title_color[5:7] + title_color[3:5] + title_color[1:3])
+    ass.write_text(ass_text, encoding="utf-8")
+    logo = settings.get("outro_logo") or {}
+    outro, outro_seconds = render_outro(work_dir, cta.strip(), fps, fonts,
+                                        logo_enabled=logo.get("enabled", True), logo_motion=logo.get("motion", "pop"))
     total = plan.duration + outro_seconds
 
     panels: dict[tuple, Path] = {}
@@ -266,11 +281,13 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
           f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
     nxt = 1
+    zoom = settings.get("zoom") or {}
+    zoom_amount = float(zoom.get("amount", 100)) / 100 if zoom.get("enabled", True) else 0.0
     for k, shot in enumerate(plan.shots):
         frames = max(1, round(shot.length * fps_value))
         cw, ch, x, y = speaker_crop(shot, sw, sh)
         cut = f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,crop={cw}:{ch}:{x}:{y}"
-        push = f"zoompan=z='1.0+{PICTURE_ZOOM}*on/{frames}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1"
+        push = f"zoompan=z='1.0+{PICTURE_ZOOM * zoom_amount:.4f}*on/{frames}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1"
         if shot.split and id(shot) in plan.full_pictures:
             inputs += ["-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(panel(shot.picture, "full"))]
             vf.append(f"[{nxt}:v]{push}:s={W}x{H}:fps={fps},setsar=1[v{k}]")
@@ -281,14 +298,14 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
             top = panel(shot.picture, kind) if shot.picture else plain
             inputs += ["-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(top)]
             vf.append(f"[{nxt}:v]{push}:s={W}x{SPLIT_Y}:fps={fps},setsar=1[t{k}]")
-            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{GRADE}[b{k}]")
+            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{custom_grade}[b{k}]")
             vf.append(f"[t{k}][b{k}]vstack=inputs=2[v{k}]")
             nxt += 1
         else:
             # Full-frame speaker: a slow push-in, close on alternate shots.
             vf.append(f"{cut},scale={W * 3 // 2}:{H * 3 // 2}:flags=lanczos,"
-                      f"zoompan=z='1.0+0.05*on/{frames}':x='iw/2-iw/zoom/2':y='ih*0.4-ih/zoom*0.4':d=1:s={W}x{H}:fps={fps},"
-                      f"setsar=1,{GRADE}[v{k}]")
+                      f"zoompan=z='1.0+{0.05 * zoom_amount:.4f}*on/{frames}':x='iw/2-iw/zoom/2':y='ih*0.4-ih/zoom*0.4':d=1:s={W}x{H}:fps={fps},"
+                      f"setsar=1,{custom_grade}[v{k}]")
         fade = min(0.012, shot.length / 4)
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
@@ -297,7 +314,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     vf.append(f"[{nxt}:v]format=rgba[seam]")
     nxt += 1
     inputs += ["-loop", "1", "-framerate", fps, "-i", str(vignette_png(work_dir / "vignette.png"))]
-    vf.append(f"[{nxt}:v]format=rgba[vig]")
+    vignette_alpha = max(0.0, min(1.0, float(gs.get("vignette", 50)) / 50))
+    vf.append(f"[{nxt}:v]format=rgba,colorchannelmixer=aa={vignette_alpha:.3f}[vig]")
     nxt += 1
     split_times = "+".join(f"between(t,{s.out_start:.3f},{s.out_start + s.length:.3f})" for s in plan.shots
                            if s.split and id(s) not in plan.full_pictures) or "0"

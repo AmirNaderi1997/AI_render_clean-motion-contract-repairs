@@ -24,6 +24,8 @@ class ReelEdit(BaseModel):
     style: Optional[str] = None
     hook2: Optional[str] = None
     captions: Optional[list[dict]] = None
+    storyboard: Optional[list[dict]] = None
+    render_settings: Optional[dict] = None
 
 
 def _job(request: Request, job_id: str):

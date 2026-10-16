@@ -24,8 +24,19 @@ DEFAULTS = {
     "hook": "", "hook_highlight": [], "name": "Reza Rafiei", "title": "Founder Of Rafiei Group",
     "music": DEFAULT_MUSIC, "cta": "", "style": "talking_1", "suggested_style": None,
     "suggested_style_reason": "", "analysis_ready": False, "output": None, "decisions": None,
+    "render_settings": {
+        "grade": {"brightness": 0, "contrast": 100, "saturation": 100, "temperature": 0, "vignette": 50},
+        "zoom": {"enabled": True, "amount": 100},
+        "key_moments_enabled": True,
+        "first_key_moment_enabled": True,
+        "first_key_moment_sentence": None,
+        "key_moment_effect": "grayscale_title",
+        "title_color": "#F5B800",
+        "outro_logo": {"enabled": True, "motion": "pop"},
+        "disabled_moments": [],
+    },
 }
-EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions", "storyboard"}
+EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions", "storyboard", "render_settings"}
 _lock = threading.Lock()
 _running: set[str] = set()
 
@@ -60,7 +71,64 @@ def public(state: dict) -> dict:
         for index, text in sorted(captions.items(), key=lambda item: int(item[0]))
     ]
     result["storyboard"] = decisions.get("storyboard") or []
+    result["timeline"] = _timeline(decisions, str(state.get("style") or "talking_1"))
     return result
+
+
+def _timeline(decisions: dict, style: str) -> list[dict]:
+    """Editable pre-render events, using transcript sentence indices as stable ids."""
+    rows = []
+    for source in ("notes", "titles", "storyboard", "broll"):
+        for index, item in enumerate(decisions.get(source) or []):
+            try:
+                sentence = int(item.get("i", index))
+            except (TypeError, ValueError):
+                sentence = index
+            rows.append({
+                "id": f"{style}-{source}-{sentence}-{index}", "sentence": sentence,
+                "title": str(item.get("text") or item.get("title") or item.get("label") or f"لحظه کلیدی {len(rows) + 1}"),
+                "kind": "key_moment", "order": len(rows),
+            })
+    return rows
+
+
+def _clean_render_settings(value: object) -> dict:
+    current = json.loads(json.dumps(DEFAULTS["render_settings"]))
+    if not isinstance(value, dict):
+        return current
+    grade = value.get("grade") if isinstance(value.get("grade"), dict) else {}
+    limits = {"brightness": (-30, 30), "contrast": (50, 160), "saturation": (0, 180),
+              "temperature": (-50, 50), "vignette": (0, 100)}
+    for key, (low, high) in limits.items():
+        try:
+            current["grade"][key] = max(low, min(high, int(grade.get(key, current["grade"][key]))))
+        except (TypeError, ValueError):
+            pass
+    zoom = value.get("zoom") if isinstance(value.get("zoom"), dict) else {}
+    current["zoom"]["enabled"] = bool(zoom.get("enabled", current["zoom"]["enabled"]))
+    try:
+        current["zoom"]["amount"] = max(0, min(200, int(zoom.get("amount", 100))))
+    except (TypeError, ValueError):
+        pass
+    for key in ("key_moments_enabled", "first_key_moment_enabled"):
+        current[key] = bool(value.get(key, current[key]))
+    try:
+        selected = value.get("first_key_moment_sentence")
+        current["first_key_moment_sentence"] = None if selected in (None, "") else max(0, int(selected))
+    except (TypeError, ValueError):
+        pass
+    if value.get("key_moment_effect") in {"grayscale_title", "title_only", "grayscale", "none"}:
+        current["key_moment_effect"] = value["key_moment_effect"]
+    import re
+    colour = str(value.get("title_color") or "").upper()
+    if re.fullmatch(r"#[0-9A-F]{6}", colour):
+        current["title_color"] = colour
+    outro = value.get("outro_logo") if isinstance(value.get("outro_logo"), dict) else {}
+    current["outro_logo"]["enabled"] = bool(outro.get("enabled", True))
+    if outro.get("motion") in {"pop", "fade", "slide", "none"}:
+        current["outro_logo"]["motion"] = outro["motion"]
+    current["disabled_moments"] = [str(v)[:80] for v in (value.get("disabled_moments") or [])][:30]
+    return current
 
 
 def _decisions_key(style: str) -> str:
@@ -74,6 +142,9 @@ def update(job_dir: Path, changes: dict) -> dict:
         state = load(job_dir)
         for key in EDITABLE & set(changes):
             value = changes[key]
+            if key == "render_settings":
+                state[key] = _clean_render_settings(value)
+                continue
             if key in {"captions", "storyboard"}:
                 decisions_key = _decisions_key(str(state.get("style") or "talking_1"))
                 decisions = dict(state.get(decisions_key) or {})
@@ -296,6 +367,8 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
             state["hook_highlight"] = decisions["hook_highlight"]
         save(job_dir, state)
     decisions = {**decisions, "captions": {int(k): v for k, v in decisions["captions"].items()}}
+    settings = state.get("render_settings") or DEFAULTS["render_settings"]
+    decisions = _apply_timeline_choices(decisions, "talking_1", settings)
 
     _stage(job_dir, "tracking the face", progress=35)
     faces_path = job_dir / "talking_reel_faces.json"
@@ -321,6 +394,7 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
                  name=state.get("name") or "", title=state.get("title") or "",
                  work_dir=job_dir / "talking_reel_work", music=resolve_music(state.get("music")),
                  cta=state.get("cta") or "",
+                 render_settings=settings,
                  on_progress=progress)
     state = load(job_dir)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",
@@ -462,6 +536,36 @@ SPLIT_STYLES = {   # style -> (brain module, decisions key, default music)
 }
 
 
+def _apply_timeline_choices(decisions: dict, style: str, settings: dict) -> dict:
+    """Apply review choices to AI decisions before a render plan is built."""
+    result = dict(decisions)
+    if not settings.get("first_key_moment_enabled", True):
+        result["cold_open"] = None
+    elif settings.get("first_key_moment_sentence") is not None:
+        cold = dict(result.get("cold_open") or {})
+        cold["i"] = int(settings["first_key_moment_sentence"])
+        result["cold_open"] = cold
+    effect = settings.get("key_moment_effect", "grayscale_title")
+    if not settings.get("key_moments_enabled", True) or effect == "none":
+        for key in ("notes", "titles", "storyboard"):
+            result[key] = []
+        result["bw"] = []
+    elif effect == "title_only":
+        result["bw"] = []
+    elif effect == "grayscale":
+        result["notes"] = []
+        result["titles"] = []
+    disabled = set(settings.get("disabled_moments") or [])
+    for key in ("notes", "titles", "storyboard", "broll"):
+        kept = []
+        for index, item in enumerate(result.get(key) or []):
+            moment_id = f"{style}-{key}-{int(item.get('i', index))}-{index}"
+            if moment_id not in disabled:
+                kept.append(item)
+        result[key] = kept
+    return result
+
+
 def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> None:
     """The split-screen styles ("صحبتی ۲", "صحبتی ۳"): pictures on top, the speaker below."""
     from importlib import import_module
@@ -486,6 +590,8 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         save(job_dir, state)
     decisions = {**decisions, "captions": {int(k): v for k, v in decisions["captions"].items()},
                  "hook": load(job_dir).get("hook2") or decisions["hook"]}
+    render_settings = state.get("render_settings") or DEFAULTS["render_settings"]
+    decisions = _apply_timeline_choices(decisions, style, render_settings)
     hyperframes = style == "talking_2" and settings.TALKING_HYPERFRAMES_ENABLED
     _stage(job_dir, "planning visual beats" if hyperframes else "finding pictures", progress=25)
     if hyperframes:
@@ -537,7 +643,8 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         music = default_music
     rough = job_dir / "talking_reel_work" / "hyperframes_base.mp4" if hyperframes else out
     media.render(video, plan, rough, work_dir=job_dir / "talking_reel_work",
-                 music=resolve_music(music), cta=state.get("cta") or "", on_progress=progress)
+                 music=resolve_music(music), cta=state.get("cta") or "", render_settings=render_settings,
+                 on_progress=progress)
     if hyperframes:
         from engine.hyperframes import build_project, build_visual_beats, render_project
 

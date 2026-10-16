@@ -1,5 +1,5 @@
 import React from "react";
-import { api, TalkingReelState } from "./api";
+import { api, TalkingReelState, TalkingRenderSettings } from "./api";
 import { AuthenticatedMedia } from "./AuthenticatedMedia";
 import { friendlyError, notify } from "./ui";
 
@@ -59,6 +59,7 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
           hook: draft.hook, hook_highlight: draft.hook_highlight, name: draft.name, title: draft.title, music: draft.music,
           cta: draft.cta ?? "", style: draft.style || "talking_1", hook2: draft.hook2 ?? "", captions: draft.captions ?? [],
           storyboard: draft.storyboard ?? [],
+          render_settings: draft.render_settings,
         });
       }
       setState(await api.renderTalkingReel(jobId, regenerate));
@@ -107,6 +108,10 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
         {state.suggested_style && <span className="tag">پیشنهاد سیستم: {styles.find(s => s.id === state.suggested_style)?.label || state.suggested_style}</span>}
       </div>
       {state.suggested_style_reason && <p className="muted">دلیل پیشنهاد: {state.suggested_style_reason}</p>}
+      {state.analysis_ready && draft.render_settings && (
+        <TimelineReview jobId={jobId} state={draft} disabled={running}
+          onChange={render_settings => setDraft({ ...draft, render_settings })} />
+      )}
       {enhanced ? (
         <>
           <div className="row">
@@ -206,4 +211,95 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
       </div>
     </div>
   );
+}
+
+function TimelineReview({ jobId, state, disabled, onChange }: {
+  jobId: string; state: TalkingReelState; disabled: boolean;
+  onChange: (settings: TalkingRenderSettings) => void;
+}) {
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  const settings = state.render_settings!;
+  const moments = state.timeline || [];
+  const setGrade = (key: keyof TalkingRenderSettings["grade"], value: number) =>
+    onChange({ ...settings, grade: { ...settings.grade, [key]: value } });
+  const toggleMoment = (id: string) => {
+    const off = new Set(settings.disabled_moments);
+    off.has(id) ? off.delete(id) : off.add(id);
+    onChange({ ...settings, disabled_moments: [...off] });
+  };
+  const filter = `brightness(${100 + settings.grade.brightness}%) contrast(${settings.grade.contrast}%) saturate(${settings.grade.saturation}%) sepia(${Math.abs(settings.grade.temperature) / 100}) hue-rotate(${settings.grade.temperature < 0 ? 190 : 350}deg)`;
+  const ranges: { key: keyof TalkingRenderSettings["grade"]; label: string; min: number; max: number; suffix: string }[] = [
+    { key: "brightness", label: "نور", min: -30, max: 30, suffix: "" },
+    { key: "contrast", label: "کنتراست", min: 50, max: 160, suffix: "%" },
+    { key: "saturation", label: "رنگ", min: 0, max: 180, suffix: "%" },
+    { key: "temperature", label: "دمای رنگ", min: -50, max: 50, suffix: "" },
+    { key: "vignette", label: "وینیت", min: 0, max: 100, suffix: "%" },
+  ];
+  return <section style={{ marginTop: 20, padding: 16, border: "1px solid var(--border)", borderRadius: 14, background: "rgba(255,255,255,.025)" }}>
+    <div className="section-header"><h3>Timeline Review — تنظیم تدوین قبل از رندر</h3><span className="tag">Pre-render</span></div>
+    <p className="muted">رنگ، زوم، لحظه‌های کلیدی، تیتر و لوگوی پایان را همین‌جا کنترل کن. همه‌ی تغییرها با دکمه رندر ذخیره و روی خروجی اعمال می‌شوند.</p>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 340px) 1fr", gap: 18, alignItems: "start" }}>
+      <div style={{ position: "relative", overflow: "hidden", borderRadius: 12, background: "#111", aspectRatio: "9 / 16", maxHeight: 480 }}>
+        <AuthenticatedMedia as="video" ref={videoRef} src={api.rawUrl(jobId)} controls preload="metadata"
+          style={{ width: "100%", height: "100%", objectFit: "cover", filter }} />
+        <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none", boxShadow: `inset 0 0 ${settings.grade.vignette * 1.4}px rgba(0,0,0,${settings.grade.vignette / 125})` }} />
+      </div>
+      <div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
+          {ranges.map(item => <label key={item.key} style={{ display: "grid", gap: 4 }}>{item.label} <span className="muted">{settings.grade[item.key]}{item.suffix}</span>
+            <input type="range" min={item.min} max={item.max} value={settings.grade[item.key]} disabled={disabled}
+              onChange={e => setGrade(item.key, Number(e.target.value))} />
+          </label>)}
+        </div>
+        <div className="row" style={{ marginTop: 14 }}>
+          <label><input type="checkbox" checked={settings.zoom.enabled} disabled={disabled}
+            onChange={e => onChange({ ...settings, zoom: { ...settings.zoom, enabled: e.target.checked } })} /> زوم‌های دوربین</label>
+          <label style={{ flex: 1 }}>شدت زوم: {settings.zoom.amount}%
+            <input type="range" min="0" max="200" value={settings.zoom.amount} disabled={disabled || !settings.zoom.enabled}
+              onChange={e => onChange({ ...settings, zoom: { ...settings.zoom, amount: Number(e.target.value) } })} style={{ width: "100%" }} />
+          </label>
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <label><input type="checkbox" checked={settings.key_moments_enabled} disabled={disabled}
+            onChange={e => onChange({ ...settings, key_moments_enabled: e.target.checked })} /> افکت لحظه‌های کلیدی</label>
+          <label><input type="checkbox" checked={settings.first_key_moment_enabled} disabled={disabled}
+            onChange={e => onChange({ ...settings, first_key_moment_enabled: e.target.checked })} /> لحظه کلیدی اول / Cold open</label>
+          {moments.length > 0 && <label>انتخاب لحظه اول <select value={settings.first_key_moment_sentence ?? ""}
+            disabled={disabled || !settings.first_key_moment_enabled}
+            onChange={e => onChange({ ...settings, first_key_moment_sentence: e.target.value === "" ? null : Number(e.target.value) })}>
+            <option value="">پیشنهاد هوش مصنوعی</option>
+            {moments.map((m, i) => <option key={`${m.id}-first`} value={m.sentence}>{i + 1}. {m.title}</option>)}
+          </select></label>}
+          <label>نوع افکت <select value={settings.key_moment_effect} disabled={disabled || !settings.key_moments_enabled}
+            onChange={e => onChange({ ...settings, key_moment_effect: e.target.value as TalkingRenderSettings["key_moment_effect"] })}>
+            <option value="grayscale_title">سیاه‌وسفید + تیتر کامل</option><option value="title_only">فقط تیتر</option>
+            <option value="grayscale">فقط سیاه‌وسفید</option><option value="none">بدون افکت</option>
+          </select></label>
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <label>رنگ تیتر <input type="color" value={settings.title_color} disabled={disabled}
+            onChange={e => onChange({ ...settings, title_color: e.target.value.toUpperCase() })} /></label>
+          <label><input type="checkbox" checked={settings.outro_logo.enabled} disabled={disabled}
+            onChange={e => onChange({ ...settings, outro_logo: { ...settings.outro_logo, enabled: e.target.checked } })} /> لوگوی پایان</label>
+          <label>موشن لوگو <select value={settings.outro_logo.motion} disabled={disabled || !settings.outro_logo.enabled}
+            onChange={e => onChange({ ...settings, outro_logo: { ...settings.outro_logo, motion: e.target.value as TalkingRenderSettings["outro_logo"]["motion"] } })}>
+            <option value="pop">Pop + glow</option><option value="fade">Fade</option><option value="slide">Slide</option><option value="none">ثابت</option>
+          </select></label>
+        </div>
+      </div>
+    </div>
+    <div style={{ marginTop: 16 }}>
+      <div className="muted" style={{ marginBottom: 7 }}>لایه لحظه‌های کلیدی — روی هر کلیپ بزن تا خاموش/روشن شود</div>
+      <div style={{ display: "flex", gap: 4, minHeight: 64, padding: 6, borderRadius: 10, background: "rgba(0,0,0,.2)", overflowX: "auto" }}>
+        {moments.length ? moments.map((moment, index) => {
+          const active = settings.key_moments_enabled && !settings.disabled_moments.includes(moment.id);
+          return <button key={moment.id} type="button" disabled={disabled} onClick={() => toggleMoment(moment.id)}
+            title={moment.title} style={{ minWidth: 130, flex: 1, border: `1px solid ${active ? settings.title_color : "#555"}`, opacity: active ? 1 : .42,
+              background: active ? `${settings.title_color}22` : "transparent", borderRadius: 7, padding: "7px 9px", color: "inherit", cursor: "pointer" }}>
+            <small>{String(index + 1).padStart(2, "0")}</small><br />{moment.title || "لحظه کلیدی"}
+          </button>;
+        }) : <span className="muted" style={{ padding: 14 }}>برای این استایل لحظه کلیدی جداگانه‌ای پیشنهاد نشده؛ کنترل‌های عمومی همچنان اعمال می‌شوند.</span>}
+      </div>
+    </div>
+  </section>;
 }
