@@ -910,16 +910,17 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
            "-progress", "pipe:1", "-nostats", str(out)]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert proc.stdout is not None
+    log_tail = []
     try:
         for row in proc.stdout:
+            log_tail = (log_tail + [row])[-80:]
             if row.startswith("out_time_us=") and on_progress and total > 0:
                 try: on_progress(min(99, int(int(row.split("=")[1]) / 1e6 / total * 100)))
                 except ValueError: pass
     except BaseException:
         proc.terminate(); proc.wait(timeout=5); out.unlink(missing_ok=True); raise
-    stderr = proc.stderr.read() if proc.stderr else ""
     if proc.wait() != 0:
-        raise RuntimeError(f"ffmpeg failed: {ffmpeg_error(stderr)}")
+        raise RuntimeError(f"ffmpeg failed: {ffmpeg_error(''.join(log_tail))}")
     return out

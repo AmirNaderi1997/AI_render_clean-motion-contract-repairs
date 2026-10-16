@@ -1504,10 +1504,12 @@ def render(
            "-c:v", "libx264", "-crf", "20", "-preset", "medium", "-pix_fmt", "yuv420p",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{duration:.3f}",
            "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(out)]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert proc.stdout is not None
+    log_tail = []
     try:
         for row in proc.stdout:
+            log_tail = (log_tail + [row])[-80:]
             if row.startswith("out_time_us=") and on_progress and duration > 0:
                 try:
                     on_progress(min(99, int(int(row.split("=")[1]) / 1e6 / duration * 100)))
@@ -1521,9 +1523,8 @@ def render(
             proc.kill()
         out.unlink(missing_ok=True)
         raise
-    stderr = proc.stderr.read() if proc.stderr else ""
     if proc.wait() != 0:
-        raise RuntimeError(f"ffmpeg failed: {stderr.strip()[-800:]}")
+        raise RuntimeError(f"ffmpeg failed: {''.join(log_tail).strip()[-800:]}")
     if on_progress:
         on_progress(100)
     return out
