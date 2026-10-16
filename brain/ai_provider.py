@@ -1,6 +1,7 @@
 """Unified text-intelligence providers for planning and content creation.
 
-Only Jarvis, Sarovi, and the local editable templates are selectable here.
+Arvan AI is the primary hosted provider. Legacy Jarvis and Sarovi classes are
+kept only for old saved jobs that explicitly name them.
 Media generation and vision-specific clients remain separate concerns.
 """
 from __future__ import annotations
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _DEFAULT_JARVIS_URL = "https://api.jarvis.you/v1"
 _DEFAULT_SAROVI_URL = "https://api.sarovi.ir/v1"
+_DEFAULT_ARVAN_URL = "https://aiapi.rafiei.co/v1"
 
 
 def _config(name: str, *legacy_names: str, default: str = "") -> str:
@@ -55,12 +57,15 @@ def _endpoint(base_url: str, path: str) -> str:
     return clean if clean.endswith(suffix) else clean + suffix
 
 
-def _post_json(url: str, payload: dict, api_key: str, timeout: float) -> dict:
+def _post_json(
+    url: str, payload: dict, api_key: str, timeout: float,
+    *, auth_scheme: str = "Bearer",
+) -> dict:
     request = urllib.request.Request(
         url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"{auth_scheme} {api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
@@ -287,6 +292,81 @@ class _ExternalProvider(AIProvider):
             return fallback(LocalFallbackProvider(reason=reason[:300]))
 
 
+class ArvanProvider(_ExternalProvider):
+    name = "arvan"
+    configured = True
+
+    def __init__(self) -> None:
+        self.api_key = _config("ARVAN_AI_API_KEY")
+        self.api_url = _config(
+            "ARVAN_AI_API_BASE", default=_DEFAULT_ARVAN_URL
+        ) or _DEFAULT_ARVAN_URL
+        self.model = _config(
+            "ARVAN_AI_MODEL", default="GPT-5.6-Terra"
+        ) or "GPT-5.6-Terra"
+
+    def _chat_json(self, system: str, user: str) -> tuple[dict, LLMUsage]:
+        started = time.monotonic()
+        result = _post_json(
+            _endpoint(self.api_url, "chat/completions"),
+            {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": 0,
+                "response_format": {"type": "json_object"},
+            },
+            self.api_key,
+            _timeout_seconds(),
+            auth_scheme="apikey",
+        )
+        choices = result.get("choices") or []
+        if not choices or not isinstance(choices[0], dict):
+            raise RuntimeError("Arvan AI returned no completion choices")
+        message = choices[0].get("message") or {}
+        text = message.get("content") if isinstance(message, dict) else ""
+        if not isinstance(text, str) or not text.strip():
+            raise RuntimeError("Arvan AI returned no text")
+        reported = result.get("usage") or {}
+        usage = LLMUsage(
+            input_tokens=int(reported.get("prompt_tokens") or reported.get("input_tokens") or 0),
+            output_tokens=int(reported.get("completion_tokens") or reported.get("output_tokens") or 0),
+            model=str(result.get("model") or self.model),
+            elapsed_sec=round(time.monotonic() - started, 2),
+        )
+        return _extract_json(text), usage
+
+    def generate_plan(self, video_metadata: dict, transcript: dict) -> tuple[dict, LLMUsage]:
+        system = str(video_metadata.get("system_prompt") or "Return a valid edit plan as JSON.")
+        user = str(video_metadata.get("user_prompt") or json.dumps(transcript, ensure_ascii=False))
+        return self._with_fallback(
+            "plan generation",
+            lambda: self._chat_json(system, user),
+            lambda local: local.generate_plan(video_metadata, transcript),
+        )
+
+    def generate_storyboard(self, prompt: Any, style: Any) -> tuple[dict, LLMUsage]:
+        system, user, context = _prompt_parts(prompt, style, "Return a storyboard as JSON.")
+        return self._with_fallback(
+            "storyboard generation",
+            lambda: self._chat_json(system, user),
+            lambda local: local.generate_storyboard(prompt, context),
+        )
+
+    def suggest_edits(self, scene: dict, context: dict) -> tuple[dict, LLMUsage]:
+        system = str(context.get("system_prompt") or "Suggest concrete render edits as JSON.")
+        user = str(context.get("user_prompt") or json.dumps(
+            {"scene": scene, "context": context}, ensure_ascii=False
+        ))
+        return self._with_fallback(
+            "edit suggestion",
+            lambda: self._chat_json(system, user),
+            lambda local: local.suggest_edits(scene, context),
+        )
+
+
 class JarvisProvider(_ExternalProvider):
     name = "jarvis"
     configured = True
@@ -431,6 +511,8 @@ class SaroviProvider(_ExternalProvider):
 
 def get_provider(provider_name: str | None = None) -> AIProvider:
     provider = (provider_name or _config("LLM_PROVIDER", default="")).strip().lower()
+    if provider == "arvan" and _config("ARVAN_AI_API_KEY"):
+        return ArvanProvider()
     if provider == "jarvis" and _config("JARVIS_API_KEY"):
         return JarvisProvider()
     if provider == "sarovi" and _config("SAROVI_API_KEY"):

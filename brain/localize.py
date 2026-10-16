@@ -207,24 +207,20 @@ The successive phrases should convey the sentence naturally. Do not change the u
 
 
 def _chat_with_fallback(system: str, request: str) -> tuple[dict, object]:
-    """chat_json with retries, then Sarovi: flaky links drop provider calls."""
+    """Call the configured Arvan text model with bounded retries."""
     from brain.llm import chat_json
 
-    providers: list[Optional[str]] = [None]
-    if os.environ.get("SAROVI_API_KEY", "").strip() and os.environ.get("LLM_PROVIDER", "").lower() != "sarovi":
-        providers.append("sarovi")
     errors = []
-    for provider in providers:
-        for attempt in range(3):
-            try:
-                return chat_json(system, request, max_tokens=3000, temperature=0.3,
-                                 provider=provider, timeout_seconds=90)
-            except Exception as exc:
-                errors.append(f"{provider or 'default'}: {exc}")
-                log.warning("translation via %s attempt %d failed: %s", provider or "default", attempt + 1, exc)
-                if re.search(r"\b(?:401|402|403)\b|insufficient[_ ](?:quota|credits)|insufficienttokens", str(exc), re.I):
-                    break
-                time.sleep(2 * (attempt + 1))
+    for attempt in range(3):
+        try:
+            return chat_json(system, request, max_tokens=3000, temperature=0.3,
+                             provider="arvan", timeout_seconds=90)
+        except Exception as exc:
+            errors.append(f"arvan: {exc}")
+            log.warning("translation via Arvan AI attempt %d failed: %s", attempt + 1, exc)
+            if re.search(r"\b(?:401|402|403)\b|insufficient[_ ](?:quota|credits)|insufficienttokens", str(exc), re.I):
+                break
+            time.sleep(2 * (attempt + 1))
     raise RuntimeError("translation failed: " + "; ".join(errors)[-400:])
 
 

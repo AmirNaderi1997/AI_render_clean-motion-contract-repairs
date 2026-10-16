@@ -10,12 +10,12 @@ class Settings(BaseSettings):
     JWT_SECRET: str = ""
     JWT_ACCESS_HOURS: int = 24
     JWT_REFRESH_DAYS: int = 30
-    AI_PROVIDER: str = "jarvis"
+    AI_PROVIDER: str = "arvan"
     AI_PROVIDER_TIMEOUT_SECONDS: int = 300
     AI_TIMEOUT_SECONDS: int = 60
     AI_CORRECTION_TIMEOUT_SECONDS: int = 45
-    LLM_PROVIDER: str = "anthropic"
-    LLM_MODEL: str = "CLAUDE_SONNET_5_5"
+    LLM_PROVIDER: str = "arvan"
+    LLM_MODEL: str = "GPT-5.6-Terra"
     SAROVI_LLM_MODEL: str = "anthropic/claude-sonnet-5.5"
     # Content Creator can use a dedicated text provider without changing the
     # upload/edit planner used elsewhere in the application.
@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     JARVIS_API_URL: str = ""
     JARVIS_MODEL: str = ""
     JARVIS_BASE_URL: str = ""
+    ARVAN_AI_API_KEY: str = ""
+    ARVAN_AI_API_BASE: str = "https://aiapi.rafiei.co/v1"
+    ARVAN_AI_MODEL: str = "GPT-5.6-Terra"
     SAROVI_API_URL: str = ""
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = ""

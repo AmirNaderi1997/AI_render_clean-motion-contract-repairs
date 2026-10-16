@@ -62,20 +62,19 @@ def _sentences_prompt(sentences: list[dict]) -> str:
 
 
 def _chat(system: str, user: str) -> dict:
-    from .ai_provider import JarvisProvider, SaroviProvider
+    from .ai_provider import ArvanProvider
 
     errors = []
-    for provider in (JarvisProvider(), SaroviProvider()):
-        call = getattr(provider, "_chat_json", None) or getattr(provider, "_responses_json")
-        for attempt in range(2):
-            try:
-                data, usage = call(system, user)
-                log.info("talking reel decisions from %s (%s)", provider.name, usage.model)
-                return data
-            except Exception as exc:  # flaky provider connections
-                errors.append(f"{provider.name}: {exc}")
-                log.warning("talking reel LLM attempt failed (%s): %s", provider.name, exc)
-    raise RuntimeError("LLM unavailable for the talking reel (check the VPN): " + " | ".join(errors)[:600])
+    provider = ArvanProvider()
+    for attempt in range(3):
+        try:
+            data, usage = provider._chat_json(system, user)
+            log.info("talking reel decisions from %s (%s)", provider.name, usage.model)
+            return data
+        except Exception as exc:  # hosted links may fail transiently
+            errors.append(f"attempt {attempt + 1}: {exc}")
+            log.warning("talking reel Arvan AI attempt failed: %s", exc)
+    raise RuntimeError("Arvan AI unavailable for the talking reel: " + " | ".join(errors)[:600])
 
 
 def recommend_style(sentences: list[dict]) -> tuple[str, str]:
