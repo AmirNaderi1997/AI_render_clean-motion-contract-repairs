@@ -34,7 +34,7 @@ BOX_STYLES = {
     "blue": ("#1565C0", "#FFFFFF"),
     "green": ("#2E7D32", "#FFFFFF"),
 }
-PAD_X, PAD_Y = 0.12, 0.04       # tight box padding, as a fraction of the font size
+PAD_X, PAD_Y = 0.0, 0.0         # glyph-tight cards; source cover supplies the safety pixel
 LINE_PITCH = 1.05               # line spacing of two-line captions, x font size
 MAX_TEXT_FRACTION = 0.88        # widest text, as a fraction of the frame width
 # End card shown after the source ends (instead of a frozen last frame).
@@ -865,7 +865,7 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     text_colour = _ass_colour(TEXT_COLOUR)
     caption_style = BOX_STYLES.get(state.get("caption_box") or "", BOX_STYLES["black"])
     title_style = BOX_STYLES.get(state.get("title_box") or "", caption_style)
-    cover_pad = int(H * 0.003)
+    cover_pad = 1
     radius = 13 * W / 1080
     source_duration = source_duration if source_duration is not None else duration
     end_all = max(0.01, (end_card_at if end_card_at is not None else duration) - 0.02)
@@ -915,9 +915,11 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     def rect(layer: int, t0: float, t1: float, x0: float, y0: float, x1: float, y1: float, colour: str) -> None:
         events.append(_rounded_rect(layer, t0, t1, x0, y0, x1, y1, colour, radius))
 
-    def text(layer: int, t0: float, t1: float, y: float, line: str, size: int, colour: str) -> None:
+    def text(layer: int, t0: float, t1: float, y: float, line: str, size: int, colour: str,
+             scale_y: int = 100) -> None:
         events.append(f"Dialogue: {layer},{_ass_time(t0)},{_ass_time(t1)},caption,,0,0,0,,"
-                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f})\\fs{size}\\1c&H{_ass_colour(colour)[4:]}&}}"
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f})\\fs{size}\\fscy{scale_y}"
+                      f"\\1c&H{_ass_colour(colour)[4:]}&}}"
                       + _escape(line))
 
     def block(lines_ink: list[tuple[int, int]], size: int, layout_size: int, cy: float
@@ -958,17 +960,20 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
             size = min(max_size, wanted)
 
         half, top, bottom, anchors = extents(size)
+        scale_y = 100
         if relevant:
             x0 = min((c["box"]["cx"] - c["box"]["w"] / 2) * W for c in relevant) - cover_pad
             x1 = max((c["box"]["cx"] + c["box"]["w"] / 2) * W for c in relevant) + cover_pad
             y0 = min((c["box"]["cy"] - c["box"]["h"] / 2) * H for c in relevant) - cover_pad
             y1 = max((c["box"]["cy"] + c["box"]["h"] / 2) * H for c in relevant) + cover_pad
             half = max(half, W / 2 - x0, x1 - W / 2)
+            ink_height = max(1.0, bottom - top)
+            scale_y = min(135, max(100, round((y1 - y0) / ink_height * 100)))
             top, bottom = min(top, y0), max(bottom, y1)
         top = max(floor, top)
         rect(layer, t0, t1, W / 2 - half, top, W / 2 + half, bottom, box_colour)
         for line, y in zip(lines, anchors):
-            text(layer + 1, t0, t1, y, line, size, text_col)
+            text(layer + 1, t0, t1, y, line, size, text_col, scale_y)
         return top, bottom
 
     title_box = (state.get("title_layout") or {}).get("box")
