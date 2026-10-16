@@ -537,9 +537,13 @@ GRADE = ("eq=contrast=1.10:saturation=1.16:gamma=0.98,"
 BW = "hue=s=0,eq=contrast=1.12:brightness=-0.01"
 
 
-def crop_for(shot: Shot, sw: int, sh: int, close_zoom: float = CLOSE_ZOOM) -> tuple[int, int, int, int]:
+def crop_for(
+    shot: Shot, sw: int, sh: int, *, base_zoom: float = 1.0,
+    close_zoom: float = CLOSE_ZOOM,
+) -> tuple[int, int, int, int]:
     """(w, h, x, y) of the 9:16 source crop for a shot's framing."""
-    ch = sh / (close_zoom if shot.close else 1.0)
+    framing_zoom = close_zoom if shot.close else base_zoom
+    ch = sh / max(1.0, framing_zoom)
     cw = ch * 9 / 16
     if cw > sw:   # a portrait or square source: use the full width instead
         cw, ch = sw, sw * 16 / 9
@@ -549,6 +553,30 @@ def crop_for(shot: Shot, sw: int, sh: int, close_zoom: float = CLOSE_ZOOM) -> tu
     # Close framing keeps the face in the upper third; wide keeps the full height.
     y = min(max(0, fy - 0.36 * ch), sh - ch) if shot.close else max(0, (sh - ch) / 2)
     return cw, ch, int(x) & ~1, int(y) & ~1
+
+
+def source_colour_filter(video: Path) -> str:
+    """Normalize HDR phone footage to SDR before applying editable grading.
+
+    Browsers tone-map HLG/PQ previews automatically. Without this explicit
+    conversion FFmpeg applies SDR controls to HDR-coded values, so export and
+    preview cannot match.
+    """
+    try:
+        raw = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=color_transfer", "-of", "default=nw=1:nk=1", str(video)],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip().lower()
+    except (OSError, subprocess.CalledProcessError):
+        raw = ""
+    if raw not in {"arib-std-b67", "smpte2084"}:
+        return "null"
+    return (
+        "zscale=transfer=linear:npl=100,format=gbrpf32le,"
+        "zscale=primaries=bt709,tonemap=mobius:param=0.3:desat=0,"
+        "zscale=transfer=bt709:matrix=bt709:range=tv,format=yuv420p"
+    )
 
 
 def eval_fps(fps: str) -> float:
@@ -793,6 +821,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
           f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
     grade_settings = settings.get("grade") or {}
+    source_colour = source_colour_filter(video)
     brightness = 1 + float(grade_settings.get("brightness", 0)) / 100
     contrast = float(grade_settings.get("contrast", 100)) / 100
     custom_grade = (f"lutrgb=r='(val*{brightness:.3f}-128)*{contrast:.3f}+128':"
@@ -803,9 +832,12 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
                     f"bs={-float(grade_settings.get('temperature', 0)) / 500:.3f}")
     zoom_settings = settings.get("zoom") or {}
     zoom_amount = float(zoom_settings.get("amount", 100)) / 100 if zoom_settings.get("enabled", True) else 0.0
+    base_zoom = float(zoom_settings.get("base_scale", 100)) / 100 if zoom_settings.get("enabled", True) else 1.0
+    close_zoom = float(zoom_settings.get("close_scale", 140)) / 100 if zoom_settings.get("enabled", True) else 1.0
     for k, shot in enumerate(plan.shots):
-        close_zoom = 1.0 + (CLOSE_ZOOM - 1.0) * zoom_amount
-        cw, ch, x, y = crop_for(shot, sw, sh, close_zoom=max(1.0, close_zoom))
+        cw, ch, x, y = crop_for(
+            shot, sw, sh, base_zoom=max(1.0, base_zoom), close_zoom=max(1.0, close_zoom)
+        )
         look = custom_grade + (f",{BW}" if shot.bw else "")
         if shot.push and zoom_amount > 0:
             # Slow eased push-in anchored on the face (Ken Burns), rendered
@@ -820,7 +852,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         else:
             frame = f"scale={W}:{H}:flags=lanczos,fps={fps}"
         vf.append(f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,"
-                  f"crop={cw}:{ch}:{x}:{y},{frame},setsar=1,{look}[v{k}]")
+                  f"crop={cw}:{ch}:{x}:{y},{frame},setsar=1,{source_colour},{look}[v{k}]")
         fade = min(0.012, shot.length / 4)
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
@@ -857,6 +889,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         vf.append("[cpad]loudnorm=I=-16:TP=-1:LRA=9,aresample=48000[aout]")
     cmd = [ffmpeg, "-hide_banner", "-y", *inputs, "-filter_complex", ";".join(vf),
            "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "19", "-preset", "medium",
+           "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
            "-progress", "pipe:1", "-nostats", str(out)]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

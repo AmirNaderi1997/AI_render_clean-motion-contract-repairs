@@ -222,6 +222,7 @@ function TimelineReview({ jobId, state, disabled, onChange }: {
   const [logoUploaded, setLogoUploaded] = React.useState(!!state.logo_uploaded);
   const [logoNonce, setLogoNonce] = React.useState(0);
   const [logoError, setLogoError] = React.useState("");
+  const [previewClose, setPreviewClose] = React.useState(false);
   const moments = state.timeline || [];
   const setGrade = (key: keyof TalkingRenderSettings["grade"], value: number) =>
     onChange({ ...settings, grade: { ...settings.grade, [key]: value } });
@@ -231,7 +232,8 @@ function TimelineReview({ jobId, state, disabled, onChange }: {
     onChange({ ...settings, disabled_moments: [...off] });
   };
   const filter = `brightness(${100 + settings.grade.brightness}%) contrast(${settings.grade.contrast}%) saturate(${settings.grade.saturation}%)`;
-  const previewScale = settings.zoom.enabled ? 1 + .4 * settings.zoom.amount / 100 : 1;
+  const previewScale = settings.zoom.enabled
+    ? (previewClose ? settings.zoom.close_scale : settings.zoom.base_scale) / 100 : 1;
   const ranges: { key: keyof TalkingRenderSettings["grade"]; label: string; min: number; max: number; suffix: string }[] = [
     { key: "brightness", label: "نور", min: -30, max: 30, suffix: "" },
     { key: "contrast", label: "کنتراست", min: 50, max: 160, suffix: "%" },
@@ -261,10 +263,22 @@ function TimelineReview({ jobId, state, disabled, onChange }: {
         <div className="row" style={{ marginTop: 14 }}>
           <label><input type="checkbox" checked={settings.zoom.enabled} disabled={disabled}
             onChange={e => onChange({ ...settings, zoom: { ...settings.zoom, enabled: e.target.checked } })} /> زوم‌های دوربین</label>
-          <label style={{ flex: 1 }}>شدت زوم: {settings.zoom.amount}%
+          <label style={{ flex: 1 }}>حرکت زوم داخل شات: {settings.zoom.amount}%
             <input type="range" min="0" max="200" value={settings.zoom.amount} disabled={disabled || !settings.zoom.enabled}
               onChange={e => onChange({ ...settings, zoom: { ...settings.zoom, amount: Number(e.target.value) } })} style={{ width: "100%" }} />
           </label>
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <label style={{ flex: 1 }}>زوم قاب اصلی: {settings.zoom.base_scale}%
+            <input type="range" min="100" max="180" value={settings.zoom.base_scale} disabled={disabled || !settings.zoom.enabled}
+              onChange={e => { const base_scale = Number(e.target.value); onChange({ ...settings, zoom: { ...settings.zoom, base_scale, close_scale: Math.max(base_scale, settings.zoom.close_scale) } }); }} style={{ width: "100%" }} />
+          </label>
+          <label style={{ flex: 1 }}>زوم قاب نزدیک: {settings.zoom.close_scale}%
+            <input type="range" min={settings.zoom.base_scale} max="220" value={settings.zoom.close_scale} disabled={disabled || !settings.zoom.enabled}
+              onChange={e => onChange({ ...settings, zoom: { ...settings.zoom, close_scale: Number(e.target.value) } })} style={{ width: "100%" }} />
+          </label>
+          <label><input type="checkbox" checked={previewClose} disabled={!settings.zoom.enabled}
+            onChange={e => setPreviewClose(e.target.checked)} /> نمایش قاب نزدیک در پیش‌نمایش</label>
         </div>
         <div className="row" style={{ marginTop: 10 }}>
           <label><input type="checkbox" checked={settings.key_moments_enabled} disabled={disabled}

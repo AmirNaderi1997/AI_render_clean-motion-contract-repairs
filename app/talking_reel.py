@@ -26,7 +26,7 @@ DEFAULTS = {
     "suggested_style_reason": "", "analysis_ready": False, "output": None, "decisions": None,
     "render_settings": {
         "grade": {"brightness": 0, "contrast": 100, "saturation": 100, "temperature": 0, "vignette": 50},
-        "zoom": {"enabled": True, "amount": 100},
+        "zoom": {"enabled": True, "amount": 100, "base_scale": 100, "close_scale": 140},
         "key_moments_enabled": True,
         "first_key_moment_enabled": True,
         "first_key_moment_sentence": None,
@@ -50,6 +50,7 @@ def load(job_dir: Path) -> dict:
     state = dict(DEFAULTS)
     if path.is_file():
         state.update(json.loads(path.read_text()))
+    state["render_settings"] = _clean_render_settings(state.get("render_settings"))
     return state
 
 
@@ -110,6 +111,16 @@ def _clean_render_settings(value: object) -> dict:
         current["zoom"]["amount"] = max(0, min(200, int(zoom.get("amount", 100))))
     except (TypeError, ValueError):
         pass
+    for key, default, low, high in (
+        ("base_scale", 100, 100, 180), ("close_scale", 140, 100, 220),
+    ):
+        try:
+            current["zoom"][key] = max(low, min(high, int(zoom.get(key, default))))
+        except (TypeError, ValueError):
+            pass
+    current["zoom"]["close_scale"] = max(
+        current["zoom"]["base_scale"], current["zoom"]["close_scale"]
+    )
     for key in ("key_moments_enabled", "first_key_moment_enabled"):
         current[key] = bool(value.get(key, current[key]))
     try:

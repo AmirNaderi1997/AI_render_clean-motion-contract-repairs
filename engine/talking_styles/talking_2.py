@@ -373,7 +373,10 @@ GRADE = ("eq=contrast=1.08:saturation=1.12:gamma=0.99,"
 MINIMAL_GRADE = "eq=contrast=1.04:saturation=0.96:gamma=1.01,unsharp=5:5:0.35"
 
 
-def speaker_crop(shot: Shot, sw: int, sh: int, zoom_amount: float = 1.0) -> tuple[int, int, int, int]:
+def speaker_crop(
+    shot: Shot, sw: int, sh: int, base_zoom: float = 1.0,
+    close_zoom: float = base.CLOSE_ZOOM,
+) -> tuple[int, int, int, int]:
     """Source crop for the speaker: 9:16 full frame (wide/close) or W x SPLIT_Y for the bottom half."""
     if shot.split:
         aspect = W / (H - SPLIT_Y)
@@ -385,9 +388,10 @@ def speaker_crop(shot: Shot, sw: int, sh: int, zoom_amount: float = 1.0) -> tupl
         # Face a little below the middle, leaving the seam captions clear of the head.
         y = min(max(0, fy - 0.5 * ch), sh - ch)
         return int(cw) & ~1, int(ch) & ~1, int(x) & ~1, int(y) & ~1
-    close_zoom = 1.0 + (base.CLOSE_ZOOM - 1.0) * zoom_amount
-    return base.crop_for(base.Shot(shot.src_in, shot.src_out, close=shot.close, face=shot.face), sw, sh,
-                         close_zoom=max(1.0, close_zoom))
+    return base.crop_for(
+        base.Shot(shot.src_in, shot.src_out, close=shot.close, face=shot.face), sw, sh,
+        base_zoom=max(1.0, base_zoom), close_zoom=max(1.0, close_zoom),
+    )
 
 
 def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Optional[Path] = None,
@@ -399,6 +403,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
     sw, sh, _ = probe_video(video)
     settings = render_settings or {}
+    source_colour = base.source_colour_filter(video)
     gs = settings.get("grade") or {}
     brightness = 1 + float(gs.get("brightness", 0)) / 100
     contrast = float(gs.get("contrast", 100)) / 100
@@ -444,8 +449,10 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     next_input = 1
     zoom = settings.get("zoom") or {}
     zoom_amount = float(zoom.get("amount", 100)) / 100 if zoom.get("enabled", True) else 0.0
+    base_zoom = float(zoom.get("base_scale", 100)) / 100 if zoom.get("enabled", True) else 1.0
+    close_zoom = float(zoom.get("close_scale", 140)) / 100 if zoom.get("enabled", True) else 1.0
     for k, shot in enumerate(plan.shots):
-        cw, ch, x, y = speaker_crop(shot, sw, sh, zoom_amount)
+        cw, ch, x, y = speaker_crop(shot, sw, sh, base_zoom, close_zoom)
         cut = f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,crop={cw}:{ch}:{x}:{y}"
         if shot.split:
             inputs += ["-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(panel_for(shot))]
@@ -453,11 +460,11 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
             # Continue the push across shots of the same picture so it never jumps back.
             vf.append(f"[{next_input}:v]zoompan=z='1.0+{PICTURE_ZOOM * zoom_amount:.4f}*on/{frames}':"
                       f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={W}x{SPLIT_Y}:fps={fps},setsar=1[t{k}]")
-            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{grade}[b{k}]")
+            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{source_colour},{grade}[b{k}]")
             vf.append(f"[t{k}][b{k}]vstack=inputs=2[v{k}]")
             next_input += 1
         else:
-            vf.append(f"{cut},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{grade}[v{k}]")
+            vf.append(f"{cut},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{source_colour},{grade}[v{k}]")
         fade = min(0.012, shot.length / 4)
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
@@ -486,6 +493,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         vf.append(f"[cpad]{loud}")
     cmd = [ffmpeg, "-hide_banner", "-y", *inputs, "-filter_complex", ";".join(vf),
            "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "19", "-preset", "medium",
+           "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
            "-progress", "pipe:1", "-nostats", str(out)]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

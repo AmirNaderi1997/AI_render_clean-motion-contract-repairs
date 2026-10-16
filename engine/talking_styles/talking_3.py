@@ -236,6 +236,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
     settings = render_settings or {}
+    source_colour = split.base.source_colour_filter(video)
     gs = settings.get("grade") or {}
     brightness = 1 + float(gs.get("brightness", 0)) / 100
     contrast = float(gs.get("contrast", 100)) / 100
@@ -288,9 +289,11 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     nxt = 1
     zoom = settings.get("zoom") or {}
     zoom_amount = float(zoom.get("amount", 100)) / 100 if zoom.get("enabled", True) else 0.0
+    base_zoom = float(zoom.get("base_scale", 100)) / 100 if zoom.get("enabled", True) else 1.0
+    close_zoom = float(zoom.get("close_scale", 140)) / 100 if zoom.get("enabled", True) else 1.0
     for k, shot in enumerate(plan.shots):
         frames = max(1, round(shot.length * fps_value))
-        cw, ch, x, y = speaker_crop(shot, sw, sh, zoom_amount)
+        cw, ch, x, y = speaker_crop(shot, sw, sh, base_zoom, close_zoom)
         cut = f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,crop={cw}:{ch}:{x}:{y}"
         push = f"zoompan=z='1.0+{PICTURE_ZOOM * zoom_amount:.4f}*on/{frames}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1"
         if shot.split and id(shot) in plan.full_pictures:
@@ -303,14 +306,14 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
             top = panel(shot.picture, kind) if shot.picture else plain
             inputs += ["-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(top)]
             vf.append(f"[{nxt}:v]{push}:s={W}x{SPLIT_Y}:fps={fps},setsar=1[t{k}]")
-            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{custom_grade}[b{k}]")
+            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{source_colour},{custom_grade}[b{k}]")
             vf.append(f"[t{k}][b{k}]vstack=inputs=2[v{k}]")
             nxt += 1
         else:
             # Full-frame speaker: a slow push-in, close on alternate shots.
             vf.append(f"{cut},scale={W * 3 // 2}:{H * 3 // 2}:flags=lanczos,"
                       f"zoompan=z='1.0+{0.05 * zoom_amount:.4f}*on/{frames}':x='iw/2-iw/zoom/2':y='ih*0.4-ih/zoom*0.4':d=1:s={W}x{H}:fps={fps},"
-                      f"setsar=1,{custom_grade}[v{k}]")
+                      f"setsar=1,{source_colour},{custom_grade}[v{k}]")
         fade = min(0.012, shot.length / 4)
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
@@ -346,6 +349,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         vf.append(f"[cpad]{loud}")
     cmd = [ffmpeg, "-hide_banner", "-y", *inputs, "-filter_complex", ";".join(vf),
            "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "19", "-preset", "medium",
+           "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
            "-progress", "pipe:1", "-nostats", str(out)]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
