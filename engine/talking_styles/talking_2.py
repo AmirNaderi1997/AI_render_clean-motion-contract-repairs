@@ -444,7 +444,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     n = len(plan.shots)
     source_colour = base.source_colour_filter(video)
     inputs = ["-i", str(video)]
-    vf = [f"[0:v]{source_colour},split={n}" + "".join(f"[s{k}]" for k in range(n)),
+    vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
           f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
     next_input = 1
     zoom = settings.get("zoom") or {}
@@ -460,11 +460,11 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
             # Continue the push across shots of the same picture so it never jumps back.
             vf.append(f"[{next_input}:v]zoompan=z='1.0+{PICTURE_ZOOM * zoom_amount:.4f}*on/{frames}':"
                       f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={W}x{SPLIT_Y}:fps={fps},setsar=1[t{k}]")
-            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{grade}[b{k}]")
+            vf.append(f"{cut},{source_colour},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{grade}[b{k}]")
             vf.append(f"[t{k}][b{k}]vstack=inputs=2[v{k}]")
             next_input += 1
         else:
-            vf.append(f"{cut},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{grade}[v{k}]")
+            vf.append(f"{cut},{source_colour},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{grade}[v{k}]")
         fade = min(0.012, shot.length / 4)
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")

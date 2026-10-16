@@ -830,8 +830,14 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     total = plan.duration + outro_seconds
     n = len(plan.shots)
     source_colour = source_colour_filter(video)
-    vf = [f"[0:v]{source_colour},split={n}" + "".join(f"[s{k}]" for k in range(n)),
-          f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
+    # Open each edit as an independently seeked input. A single decoded input
+    # followed by split+trim must scan and buffer everything before a hook
+    # taken from late in the source; that produced no output/progress for many
+    # minutes. Seeked inputs let concat emit the first shot immediately.
+    inputs: list[str] = []
+    for shot in plan.shots:
+        inputs += ["-ss", f"{shot.src_in:.3f}", "-t", f"{shot.length:.3f}", "-i", str(video)]
+    vf: list[str] = []
     grade_settings = settings.get("grade") or {}
     brightness = 1 + float(grade_settings.get("brightness", 0)) / 100
     contrast = float(grade_settings.get("contrast", 100)) / 100
@@ -862,14 +868,14 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
             frame = f"scale={W * 3 // 2}:{H * 3 // 2}:flags=lanczos,{zoom}"
         else:
             frame = f"scale={W}:{H}:flags=lanczos,fps={fps}"
-        vf.append(f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,"
-                  f"crop={cw}:{ch}:{x}:{y},{frame},setsar=1,{look}[v{k}]")
+        vf.append(f"[{k}:v]setpts=PTS-STARTPTS,"
+                  f"crop={cw}:{ch}:{x}:{y},{source_colour},{frame},setsar=1,{look}[v{k}]")
         fade = min(0.012, shot.length / 4)
-        vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
+        vf.append(f"[{k}:a]asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
     vf.append("".join(f"[v{k}][a{k}]" for k in range(n)) + f"concat=n={n}:v=1:a=1[cv][ca]")
     vignette_alpha = max(0.0, min(1.0, float(grade_settings.get("vignette", 50)) / 100))
-    vf.append(f"[1:v]format=rgba,colorchannelmixer=aa={vignette_alpha:.3f}[vig]")
+    vf.append(f"[{n}:v]format=rgba,colorchannelmixer=aa={vignette_alpha:.3f}[vig]")
     content = "vmain" if outro else "vout"
     windows = "+".join(f"between(t,{n['start']:.3f},{n['end']:.3f})" for n in plan.notes)
     emphasis = (f"gblur=sigma=9:enable='{windows}',hue=s=0:enable='{windows}',"
@@ -877,8 +883,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     vf.append(f"[cv]{emphasis}null[cvx]")
     vf.append(f"[cvx][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},"
               f"format=yuv420p[{content}]")
-    inputs = ["-i", str(video), "-loop", "1", "-framerate", fps, "-i", str(vignette)]
-    next_input = 2
+    inputs += ["-loop", "1", "-framerate", fps, "-i", str(vignette)]
+    next_input = n + 1
     if outro:
         inputs += ["-i", str(outro)]
         vf.append(f"[{next_input}:v]setsar=1,format=yuv420p[vend]")
