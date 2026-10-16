@@ -34,7 +34,7 @@ BOX_STYLES = {
     "blue": ("#1565C0", "#FFFFFF"),
     "green": ("#2E7D32", "#FFFFFF"),
 }
-PAD_X, PAD_Y = 0.0, 0.0         # glyph-tight cards; source cover supplies the safety pixel
+PAD_X, PAD_Y = 0.06, 0.025       # compact anti-clipping inset around natural glyph bounds
 LINE_PITCH = 1.05               # line spacing of two-line captions, x font size
 MAX_TEXT_FRACTION = 0.88        # widest text, as a fraction of the frame width
 # End card shown after the source ends (instead of a frozen last frame).
@@ -865,7 +865,6 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     text_colour = _ass_colour(TEXT_COLOUR)
     caption_style = BOX_STYLES.get(state.get("caption_box") or "", BOX_STYLES["black"])
     title_style = BOX_STYLES.get(state.get("title_box") or "", caption_style)
-    cover_pad = 1
     radius = 13 * W / 1080
     source_duration = source_duration if source_duration is not None else duration
     end_all = max(0.01, (end_card_at if end_card_at is not None else duration) - 0.02)
@@ -891,7 +890,7 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     # Large bold text (about 70-80 px at 1080 wide) in a box that hugs it.
     # The text grows (up to about 100 px at 1080 wide) to fill a box that
     # must hide a large English caption, instead of the box padding out.
-    base_size, min_size, max_size = int(H * 0.031), int(H * 0.024), int(H * 0.052)
+    base_size, min_size = int(H * 0.028), int(H * 0.023)
     max_text_w = W * MAX_TEXT_FRACTION
     title_text = (state.get("title") or "").strip()
     texts = [(line["fa"], base_size) for line, _, _ in windows] + ([(title_text, base_size)] if title_text else [])
@@ -915,11 +914,10 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     def rect(layer: int, t0: float, t1: float, x0: float, y0: float, x1: float, y1: float, colour: str) -> None:
         events.append(_rounded_rect(layer, t0, t1, x0, y0, x1, y1, colour, radius))
 
-    def text(layer: int, t0: float, t1: float, y: float, line: str, size: int, colour: str,
-             scale_y: int = 100) -> None:
+    def text(layer: int, t0: float, t1: float, y: float, line: str, size: int, colour: str) -> None:
         events.append(f"Dialogue: {layer},{_ass_time(t0)},{_ass_time(t1)},caption,,0,0,0,,"
-                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f})\\fs{size}\\fscy{scale_y}"
-                      f"\\1c&H{_ass_colour(colour)[4:]}&}}"
+                      f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f})\\fs{size}"
+                      f"\\fscx100\\fscy100\\1c&H{_ass_colour(colour)[4:]}&}}"
                       + _escape(line))
 
     def block(lines_ink: list[tuple[int, int]], size: int, layout_size: int, cy: float
@@ -952,28 +950,13 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
         box_colour, text_col = style
         relevant = [c for c in covers if c["end"] > absorb[0] and c["start"] < absorb[1]
                     and abs(c["box"]["cy"] * H - cy) < H * 0.08 + reach]
-        size = layout_size
-        if relevant and max(widths) > 0:
-            source_width = max(c["box"]["w"] * W for c in relevant)
-            # Fill the card horizontally while retaining a small safety inset.
-            wanted = int(layout_size * max(1.0, (source_width - 2 * cover_pad) / max(widths)))
-            size = min(max_size, wanted)
-
-        half, top, bottom, anchors = extents(size)
-        scale_y = 100
-        if relevant:
-            x0 = min((c["box"]["cx"] - c["box"]["w"] / 2) * W for c in relevant) - cover_pad
-            x1 = max((c["box"]["cx"] + c["box"]["w"] / 2) * W for c in relevant) + cover_pad
-            y0 = min((c["box"]["cy"] - c["box"]["h"] / 2) * H for c in relevant) - cover_pad
-            y1 = max((c["box"]["cy"] + c["box"]["h"] / 2) * H for c in relevant) + cover_pad
-            half = max(half, W / 2 - x0, x1 - W / 2)
-            ink_height = max(1.0, bottom - top)
-            scale_y = min(135, max(100, round((y1 - y0) / ink_height * 100)))
-            top, bottom = min(top, y0), max(bottom, y1)
+        # Source-caption removal is a separate video-cleanup pass. The Persian
+        # card is therefore sized only from its own natural, unscaled glyphs.
+        half, top, bottom, anchors = extents(layout_size)
         top = max(floor, top)
         rect(layer, t0, t1, W / 2 - half, top, W / 2 + half, bottom, box_colour)
         for line, y in zip(lines, anchors):
-            text(layer + 1, t0, t1, y, line, size, text_col, scale_y)
+            text(layer + 1, t0, t1, y, line, layout_size, text_col)
         return top, bottom
 
     title_box = (state.get("title_layout") or {}).get("box")
@@ -1090,6 +1073,75 @@ def audio_cut_time(lines: list[dict], placements: list[dict]) -> float:
     return max(0.0, min(p["start"] for p in placements) - 0.15)
 
 
+def clean_source_captions(video: Path, state: dict, out: Path, until: float) -> Path:
+    """Inpaint only burned-caption glyph pixels, preserving the picture around them."""
+    import hashlib
+    import json
+
+    covers = [c for line in state.get("lines", []) for c in (line.get("covers") or [])
+              if float(c["start"]) < until]
+    signature = hashlib.sha256(("glyph-inpaint-v2" + json.dumps(covers, sort_keys=True)).encode()).hexdigest()[:12]
+    cached = out.with_name(f"source_without_captions_{signature}.mp4")
+    if cached.is_file() and cached.stat().st_size > 0:
+        return cached
+    if not covers:
+        return video
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return video
+
+    cap = cv2.VideoCapture(str(video))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    tmp = out.with_name(f".{out.stem}_{signature}.avi")
+    writer = cv2.VideoWriter(str(tmp), cv2.VideoWriter_fourcc(*"MJPG"), fps, (W, H))
+    frame_index = 0
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            t = frame_index / fps
+            active = [c for c in covers if float(c["start"]) - 0.05 <= t <= float(c["end"]) + 0.05]
+            if active:
+                hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                _, sat, val = cv2.split(hsv)
+                bright = ((val > 205) & (sat < 80)) | ((val > 170) & (sat > 105))
+                dark = val < 85
+                near_dark = cv2.dilate(dark.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+                glyph = bright & near_dark
+                # Include the complete dark stroke connected to each bright
+                # glyph; removing only the white centre leaves black blobs.
+                around_glyph = cv2.dilate(glyph.astype(np.uint8), np.ones((17, 17), np.uint8)) > 0
+                caption_ink = glyph | (dark & around_glyph)
+                mask = np.zeros((H, W), np.uint8)
+                for cover in active:
+                    box = cover["box"]
+                    pad = max(4, round(H * 0.004))
+                    x0 = max(0, round((box["cx"] - box["w"] / 2) * W) - pad)
+                    x1 = min(W, round((box["cx"] + box["w"] / 2) * W) + pad)
+                    y0 = max(0, round((box["cy"] - box["h"] / 2) * H) - pad)
+                    y1 = min(H, round((box["cy"] + box["h"] / 2) * H) + pad)
+                    mask[y0:y1, x0:x1] = (caption_ink[y0:y1, x0:x1].astype(np.uint8) * 255)
+                mask = cv2.dilate(mask, np.ones((9, 9), np.uint8))
+                if cv2.countNonZero(mask):
+                    frame = cv2.inpaint(frame, mask, 4, cv2.INPAINT_TELEA)
+            writer.write(frame)
+            frame_index += 1
+    finally:
+        cap.release()
+        writer.release()
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-i", str(tmp), "-i", str(video),
+        "-map", "0:v:0", "-map", "1:a?", "-c:v", "libx264", "-crf", "18",
+        "-preset", "medium", "-c:a", "copy", "-shortest", str(cached),
+    ], check=True)
+    tmp.unlink(missing_ok=True)
+    return cached
+
+
 def render(
     video: Path,
     state: dict,
@@ -1130,7 +1182,8 @@ def render(
                              end_card_at=card_at if end_card else None)
     ass.write_text(ass_text, encoding="utf-8")
 
-    inputs = ["-i", str(video)]
+    picture = clean_source_captions(video, state, work_dir / "source_without_captions.mp4", card_at)
+    inputs = ["-i", str(picture)]
     fps = probe_fps(video)
     n = 1
     if end_card:
