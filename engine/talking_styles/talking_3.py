@@ -236,7 +236,6 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
     settings = render_settings or {}
-    source_colour = split.base.source_colour_filter(video)
     gs = settings.get("grade") or {}
     brightness = 1 + float(gs.get("brightness", 0)) / 100
     contrast = float(gs.get("contrast", 100)) / 100
@@ -283,8 +282,9 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     Image.new("RGB", (int(W * 1.12), int(SPLIT_Y * 1.12)), "#0B0C0E").save(plain)
 
     n = len(plan.shots)
+    source_colour = split.base.source_colour_filter(video)
     inputs = ["-i", str(video)]
-    vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
+    vf = [f"[0:v]{source_colour},split={n}" + "".join(f"[s{k}]" for k in range(n)),
           f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
     nxt = 1
     zoom = settings.get("zoom") or {}
@@ -306,14 +306,14 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
             top = panel(shot.picture, kind) if shot.picture else plain
             inputs += ["-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(top)]
             vf.append(f"[{nxt}:v]{push}:s={W}x{SPLIT_Y}:fps={fps},setsar=1[t{k}]")
-            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{source_colour},{custom_grade}[b{k}]")
+            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{custom_grade}[b{k}]")
             vf.append(f"[t{k}][b{k}]vstack=inputs=2[v{k}]")
             nxt += 1
         else:
             # Full-frame speaker: a slow push-in, close on alternate shots.
             vf.append(f"{cut},scale={W * 3 // 2}:{H * 3 // 2}:flags=lanczos,"
                       f"zoompan=z='1.0+{0.05 * zoom_amount:.4f}*on/{frames}':x='iw/2-iw/zoom/2':y='ih*0.4-ih/zoom*0.4':d=1:s={W}x{H}:fps={fps},"
-                      f"setsar=1,{source_colour},{custom_grade}[v{k}]")
+                      f"setsar=1,{custom_grade}[v{k}]")
         fade = min(0.012, shot.length / 4)
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
@@ -362,5 +362,5 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
                 pass
     stderr = proc.stderr.read() if proc.stderr else ""
     if proc.wait() != 0:
-        raise RuntimeError(f"ffmpeg failed: {stderr.strip()[-800:]}")
+        raise RuntimeError(f"ffmpeg failed: {split.base.ffmpeg_error(stderr)}")
     return out

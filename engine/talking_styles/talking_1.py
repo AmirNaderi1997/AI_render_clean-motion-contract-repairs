@@ -579,6 +579,15 @@ def source_colour_filter(video: Path) -> str:
     )
 
 
+def ffmpeg_error(stderr: str, limit: int = 1200) -> str:
+    """Keep the actionable FFmpeg failure instead of trailing encoder stats."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    needles = ("error", "failed", "invalid", "cannot", "no space", "broken pipe", "conversion")
+    useful = [line for line in lines if any(word in line.lower() for word in needles)]
+    chosen = useful[-12:] if useful else lines[-20:]
+    return "\n".join(chosen)[-limit:]
+
+
 def eval_fps(fps: str) -> float:
     num, _, den = fps.partition("/")
     return float(num) / float(den or 1)
@@ -818,10 +827,10 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
                                         logo_motion=logo.get("motion", "pop"), logo_path=logo_path)
     total = plan.duration + outro_seconds
     n = len(plan.shots)
-    vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
+    source_colour = source_colour_filter(video)
+    vf = [f"[0:v]{source_colour},split={n}" + "".join(f"[s{k}]" for k in range(n)),
           f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
     grade_settings = settings.get("grade") or {}
-    source_colour = source_colour_filter(video)
     brightness = 1 + float(grade_settings.get("brightness", 0)) / 100
     contrast = float(grade_settings.get("contrast", 100)) / 100
     custom_grade = (f"lutrgb=r='(val*{brightness:.3f}-128)*{contrast:.3f}+128':"
@@ -852,7 +861,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         else:
             frame = f"scale={W}:{H}:flags=lanczos,fps={fps}"
         vf.append(f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,"
-                  f"crop={cw}:{ch}:{x}:{y},{frame},setsar=1,{source_colour},{look}[v{k}]")
+                  f"crop={cw}:{ch}:{x}:{y},{frame},setsar=1,{look}[v{k}]")
         fade = min(0.012, shot.length / 4)
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
@@ -902,5 +911,5 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
                 pass
     stderr = proc.stderr.read() if proc.stderr else ""
     if proc.wait() != 0:
-        raise RuntimeError(f"ffmpeg failed: {stderr.strip()[-800:]}")
+        raise RuntimeError(f"ffmpeg failed: {ffmpeg_error(stderr)}")
     return out

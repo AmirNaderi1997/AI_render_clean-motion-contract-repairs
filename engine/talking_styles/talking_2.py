@@ -403,7 +403,6 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
     sw, sh, _ = probe_video(video)
     settings = render_settings or {}
-    source_colour = base.source_colour_filter(video)
     gs = settings.get("grade") or {}
     brightness = 1 + float(gs.get("brightness", 0)) / 100
     contrast = float(gs.get("contrast", 100)) / 100
@@ -443,8 +442,9 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         return panels[shot.picture]
 
     n = len(plan.shots)
+    source_colour = base.source_colour_filter(video)
     inputs = ["-i", str(video)]
-    vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
+    vf = [f"[0:v]{source_colour},split={n}" + "".join(f"[s{k}]" for k in range(n)),
           f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
     next_input = 1
     zoom = settings.get("zoom") or {}
@@ -460,11 +460,11 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
             # Continue the push across shots of the same picture so it never jumps back.
             vf.append(f"[{next_input}:v]zoompan=z='1.0+{PICTURE_ZOOM * zoom_amount:.4f}*on/{frames}':"
                       f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={W}x{SPLIT_Y}:fps={fps},setsar=1[t{k}]")
-            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{source_colour},{grade}[b{k}]")
+            vf.append(f"{cut},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{grade}[b{k}]")
             vf.append(f"[t{k}][b{k}]vstack=inputs=2[v{k}]")
             next_input += 1
         else:
-            vf.append(f"{cut},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{source_colour},{grade}[v{k}]")
+            vf.append(f"{cut},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{grade}[v{k}]")
         fade = min(0.012, shot.length / 4)
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
@@ -506,5 +506,5 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
                 pass
     stderr = proc.stderr.read() if proc.stderr else ""
     if proc.wait() != 0:
-        raise RuntimeError(f"ffmpeg failed: {stderr.strip()[-800:]}")
+        raise RuntimeError(f"ffmpeg failed: {base.ffmpeg_error(stderr)}")
     return out
