@@ -7,6 +7,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import asyncio
 import importlib.util
+import ipaddress
 import logging
 import os
 import re
@@ -130,6 +131,29 @@ app.add_middleware(
 )
 
 
+def _is_loopback_development_request(request: Request) -> bool:
+    """Allow password-free access only to a non-production server on loopback."""
+    if production:
+        return False
+    hostname = (request.url.hostname or "").strip().lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _local_development_user() -> auth.User:
+    return auth.User(
+        id="local_dev",
+        email="local@localhost",
+        name="Local Developer",
+        password_hash="",
+        created_at=0,
+    )
+
+
 @app.exception_handler(StarletteHTTPException)
 async def http_error(request: Request, exc: StarletteHTTPException):
     if exc.status_code >= 500:
@@ -170,6 +194,11 @@ async def auth_middleware(request: Request, call_next):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
+
+    # This cannot activate in production or through a LAN/public hostname.
+    if _is_loopback_development_request(request):
+        request.state.user = _local_development_user()
+        return await call_next(request)
 
     path = request.url.path
     if request.method == "OPTIONS" or path in {"/", "/health", "/api/health/ready"} or path.startswith("/auth/"):

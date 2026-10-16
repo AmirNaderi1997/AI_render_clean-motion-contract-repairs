@@ -1,7 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
-import { isAuthenticated, getUser, clearToken, restoreSession } from "./auth";
+import { isAuthenticated, isLocalDevelopment, getUser, clearToken, restoreSession } from "./auth";
 import Login from "./Login";
 import { JobCacheProvider } from "./JobCache";
 import { LoadingState, ToastHost } from "./ui";
@@ -94,7 +94,7 @@ function UserNav() {
   return (
     <div className="nav-user">
       {user && <span className="nav-user-name">{user.name}</span>}
-      <button className="nav-logout-btn" onClick={handleLogout} disabled={loggingOut} title={(loggingOut) ? "Wait for the current action to finish." : undefined}>{loggingOut ? "Logging out…" : "Log out"}</button>
+      {!isLocalDevelopment && <button className="nav-logout-btn" onClick={handleLogout} disabled={loggingOut} title={(loggingOut) ? "Wait for the current action to finish." : undefined}>{loggingOut ? "Logging out…" : "Log out"}</button>}
     </div>
   );
 }

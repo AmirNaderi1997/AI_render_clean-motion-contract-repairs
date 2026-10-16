@@ -1,6 +1,9 @@
 let accessToken: string | null = null;
 let refreshPromise: Promise<string | null> | null = null;
 
+export const isLocalDevelopment = import.meta.env.DEV &&
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" || window.location.hostname === "::1");
+
 export function getToken(): string | null {
   return accessToken;
 }
@@ -15,11 +18,12 @@ export function clearToken(): void {
 
 export function handleUnauthorized(): never {
   clearToken();
-  if (window.location.pathname !== "/login") window.location.assign("/login");
+  if (!isLocalDevelopment && window.location.pathname !== "/login") window.location.assign("/login");
   throw new Error("Session expired");
 }
 
 export function isAuthenticated(): boolean {
+  if (isLocalDevelopment) return true;
   const token = getToken();
   if (!token) return false;
   try {
@@ -31,6 +35,7 @@ export function isAuthenticated(): boolean {
 }
 
 export function getUser(): { id: string; email: string; name: string } | null {
+  if (isLocalDevelopment) return { id: "local_dev", email: "local@localhost", name: "Local Developer" };
   const token = getToken();
   if (!token) return null;
   try {
@@ -54,6 +59,7 @@ function tokenExpiresWithin(seconds: number): boolean {
 }
 
 export async function ensureFreshToken(): Promise<string | null> {
+  if (isLocalDevelopment) return null;
   if (!tokenExpiresWithin(300)) return getToken();
   if (refreshPromise) return refreshPromise;
 

@@ -17,6 +17,9 @@ log = logging.getLogger(__name__)
 
 
 async def get_current_user(request: Request) -> auth.User:
+    local_user = getattr(request.state, "user", None)
+    if local_user is not None:
+        return local_user
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer "):
         raise HTTPException(401, "Not authenticated")
