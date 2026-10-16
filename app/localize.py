@@ -31,6 +31,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 _lock = threading.Lock()
 _running: set[str] = set()
+_cancel_events: dict[str, threading.Event] = {}
+_pause_events: dict[str, threading.Event] = {}
+
+
+class TaskCanceled(Exception):
+    pass
 DEFAULT_LOCALIZE_MUSIC = "assets/music/motivational_piano_beat.mp3"
 
 EDITABLE_LINE_FIELDS = {"fa", "kind"}
@@ -79,7 +85,8 @@ def list_projects(user_id: str | None) -> list[dict]:
             continue
         if user_id is None or str(state.get("user_id")) == str(user_id):
             items.append({k: state.get(k) for k in
-                          ("id", "name", "status", "stage", "message", "title", "output", "created_at")})
+                          ("id", "name", "status", "stage", "message", "title", "output",
+                           "progress", "created_at", "updated_at")})
     return sorted(items, key=lambda s: s.get("created_at") or 0, reverse=True)
 
 
@@ -190,10 +197,16 @@ def _start(project_id: str, target, status: str) -> None:
         state.update(status=status, message="", progress=0)
         save(state)
         _running.add(project_id)
+        _cancel_events[project_id] = threading.Event()
+        _pause_events[project_id] = threading.Event()
 
     def run() -> None:
         try:
             target(project_id)
+        except TaskCanceled:
+            state = load(project_id)
+            state.update(status="canceled", stage="", message="Canceled by user")
+            save(state)
         except Exception as exc:  # surface the failure in the project state
             log.exception("localize %s failed", project_id)
             state = load(project_id)
@@ -202,6 +215,8 @@ def _start(project_id: str, target, status: str) -> None:
         finally:
             with _lock:
                 _running.discard(project_id)
+                _cancel_events.pop(project_id, None)
+                _pause_events.pop(project_id, None)
 
     threading.Thread(target=run, daemon=True).start()
 
@@ -215,6 +230,56 @@ def start_render(project_id: str) -> None:
     if not state.get("lines"):
         raise ValueError("analyze the video first")
     _start(project_id, _render, "rendering")
+
+
+def pause(project_id: str) -> dict:
+    with _lock:
+        event = _pause_events.get(project_id)
+        if event is None:
+            raise ValueError("project is not running")
+        event.set()
+    state = load(project_id)
+    state["resume_status"] = state.get("status") or "analyzing"
+    state.update(status="paused", message="Paused by user")
+    return save(state)
+
+
+def resume(project_id: str) -> dict:
+    with _lock:
+        event = _pause_events.get(project_id)
+        if event is None:
+            raise ValueError("project is not running")
+        event.clear()
+    state = load(project_id)
+    status = state.pop("resume_status", "analyzing")
+    state.update(status=status, message="")
+    return save(state)
+
+
+def cancel(project_id: str) -> dict:
+    with _lock:
+        event = _cancel_events.get(project_id)
+        pause_event = _pause_events.get(project_id)
+        if event is None:
+            raise ValueError("project is not running")
+        event.set()
+        if pause_event:
+            pause_event.clear()
+    state = load(project_id)
+    state.update(status="canceled", message="Canceling…")
+    return save(state)
+
+
+def _checkpoint(project_id: str) -> None:
+    while True:
+        with _lock:
+            cancel_event = _cancel_events.get(project_id)
+            pause_event = _pause_events.get(project_id)
+        if cancel_event and cancel_event.is_set():
+            raise TaskCanceled()
+        if not pause_event or not pause_event.is_set():
+            return
+        time.sleep(0.2)
 
 
 def _stage(project_id: str, stage: str, **extra) -> dict:
@@ -267,31 +332,36 @@ def _analyze(project_id: str) -> None:
     from engine import localize as media
 
     root = _dir(project_id)
+    _checkpoint(project_id)
     state = load(project_id)
     video = root / state["source"]
-    _stage(project_id, "transcribing")
+    _stage(project_id, "transcribing", progress=5)
     transcript, asr_cost, engine = _transcribe(video, root)
+    _checkpoint(project_id)
     lines = text.split_lines(transcript)
     if not lines:
         raise RuntimeError("no speech found in the video")
 
-    _stage(project_id, "finding captions")
+    _stage(project_id, "finding captions", progress=20)
     scan = media.ocr_video(video)
+    _checkpoint(project_id)
     headline = media.source_headline(scan)
 
-    _stage(project_id, "translating")
+    _stage(project_id, "translating", progress=50)
     data, usage = text.translate(lines, source_headline=headline)
+    _checkpoint(project_id)
     lines, title, emojis = text.apply_translation(lines, data, state["cta_number"])
 
-    _stage(project_id, "finding captions")
+    _stage(project_id, "finding captions", progress=70)
     title_layout, layout = media.detect_layout(video, lines, transcript.get("words"), scan=scan)
+    _checkpoint(project_id)
     english = media.english_regions(scan)
     for line, item in zip(lines, layout):
         line.update(item)
 
     state = load(project_id)
     state.update(
-        status="ready", stage="", message="",
+        status="ready", stage="", message="", progress=100,
         language=transcript.get("language"), asr_engine=engine,
         title=title, title_emojis=emojis, source_headline=headline,
         title_layout=title_layout, lines=lines, english_regions=english,
@@ -306,6 +376,7 @@ def _render(project_id: str) -> None:
     from engine import localize as media
 
     root = _dir(project_id)
+    _checkpoint(project_id)
     state = load(project_id)
     video = root / state["source"]
     if state.get("caption_detector") not in {"visual-outline-v2", "frame-outline-v3", "frame-outline-v4", "frame-outline-v5", "frame-outline-v6"}:
@@ -324,7 +395,9 @@ def _render(project_id: str) -> None:
         _stage(project_id, "tracking caption frames")
         _, _, source_duration = media.probe_video(video)
         windows = media.frame_caption_windows(video, state, source_duration)
+        _checkpoint(project_id)
         media.read_caption_cards(video, windows)
+        _checkpoint(project_id)
         spoken_lines = [line for line in state["lines"] if line.get("kind") != "lyrics" and line.get("fa")]
         owned = {line["i"]: [] for line in state["lines"]}
         for window in windows:
@@ -341,6 +414,7 @@ def _render(project_id: str) -> None:
         save(state)
     _stage(project_id, "planning caption phrases")
     text.translate_caption_cards(state["lines"])
+    _checkpoint(project_id)
     save(state)
     _stage(project_id, "generating voice")
     clips = {}
@@ -370,6 +444,7 @@ def _render(project_id: str) -> None:
     logo = PROJECT_ROOT / "assets" / "brand" / "logo.png"
 
     def progress(pct: int) -> None:
+        _checkpoint(project_id)
         current = load(project_id)
         current["progress"] = 40 + int(pct * 0.6)
         save(current)

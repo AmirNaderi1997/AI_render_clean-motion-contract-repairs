@@ -39,6 +39,22 @@ DEFAULTS = {
 EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions", "storyboard", "render_settings"}
 _lock = threading.Lock()
 _running: set[str] = set()
+_cancel_events: dict[str, threading.Event] = {}
+_pause_events: dict[str, threading.Event] = {}
+
+class TaskCanceled(Exception):
+    pass
+
+def _checkpoint(job_dir: Path) -> None:
+    key = str(job_dir)
+    while True:
+        with _lock:
+            cancel_event, pause_event = _cancel_events.get(key), _pause_events.get(key)
+        if cancel_event and cancel_event.is_set():
+            raise TaskCanceled()
+        if not pause_event or not pause_event.is_set():
+            return
+        time.sleep(0.2)
 
 
 def _path(job_dir: Path) -> Path:
@@ -222,10 +238,13 @@ def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None) -> d
         state.update(status="running", stage="transcribing", message="", progress=5, analysis_ready=False)
         save(job_dir, state)
         _running.add(key)
+        _cancel_events[key], _pause_events[key] = threading.Event(), threading.Event()
 
     def run() -> None:
         try:
             _analyze(job_dir, raw_video, style=style)
+        except TaskCanceled:
+            current = load(job_dir); current.update(status="canceled", stage="", message="Canceled by user"); save(job_dir, current)
         except Exception as exc:
             log.exception("talking reel analysis failed for %s", job_dir.name)
             current = load(job_dir)
@@ -234,6 +253,7 @@ def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None) -> d
         finally:
             with _lock:
                 _running.discard(key)
+                _cancel_events.pop(key, None); _pause_events.pop(key, None)
 
     threading.Thread(target=run, daemon=True).start()
     return state
@@ -289,10 +309,13 @@ def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False) -> dict:
         state.update(status="running", stage="queued", message="", progress=0)
         save(job_dir, state)
         _running.add(key)
+        _cancel_events[key], _pause_events[key] = threading.Event(), threading.Event()
 
     def run() -> None:
         try:
             _run(job_dir, raw_video, regenerate=regenerate)
+        except TaskCanceled:
+            current = load(job_dir); current.update(status="canceled", stage="", message="Canceled by user"); save(job_dir, current)
         except Exception as exc:
             log.exception("talking reel failed for %s", job_dir.name)
             current = load(job_dir)
@@ -301,15 +324,42 @@ def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False) -> dict:
         finally:
             with _lock:
                 _running.discard(key)
+                _cancel_events.pop(key, None); _pause_events.pop(key, None)
 
     threading.Thread(target=run, daemon=True).start()
     return state
 
 
 def _stage(job_dir: Path, stage: str, **extra) -> None:
+    _checkpoint(job_dir)
     state = load(job_dir)
     state.update(stage=stage, **extra)
     save(job_dir, state)
+
+def pause(job_dir: Path) -> dict:
+    key = str(job_dir)
+    with _lock:
+        event = _pause_events.get(key)
+        if event is None: raise ValueError("talking reel is not running")
+        event.set()
+    state = load(job_dir); state.update(status="paused", message="Paused by user"); return save(job_dir, state)
+
+def resume(job_dir: Path) -> dict:
+    key = str(job_dir)
+    with _lock:
+        event = _pause_events.get(key)
+        if event is None: raise ValueError("talking reel is not running")
+        event.clear()
+    state = load(job_dir); state.update(status="running", message=""); return save(job_dir, state)
+
+def cancel(job_dir: Path) -> dict:
+    key = str(job_dir)
+    with _lock:
+        event, pause_event = _cancel_events.get(key), _pause_events.get(key)
+        if event is None: raise ValueError("talking reel is not running")
+        event.set()
+        if pause_event: pause_event.clear()
+    state = load(job_dir); state.update(status="canceled", message="Canceling…"); return save(job_dir, state)
 
 
 def transcript_for(job_dir: Path, video: Path) -> dict:

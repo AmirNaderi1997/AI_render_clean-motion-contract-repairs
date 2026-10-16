@@ -253,7 +253,7 @@ export interface LocalizeLine {
 }
 
 export interface TalkingReelState {
-  status: "idle" | "running" | "ready" | "done" | "error";
+  status: "idle" | "running" | "paused" | "canceled" | "ready" | "done" | "error";
   stage: string;
   message: string;
   progress: number;
@@ -309,7 +309,7 @@ export type LocalizeBoxColour = "black" | "white" | "red" | "blue" | "green";
 export interface LocalizeProject {
   id: string;
   name: string;
-  status: "queued" | "analyzing" | "ready" | "rendering" | "done" | "error";
+  status: "queued" | "analyzing" | "ready" | "rendering" | "paused" | "canceled" | "done" | "error";
   stage: string;
   message: string;
   progress: number;
@@ -328,7 +328,9 @@ export interface LocalizeProject {
   created_at: number;
 }
 
-export type LocalizeSummary = Pick<LocalizeProject, "id" | "name" | "status" | "stage" | "message" | "title" | "output" | "created_at">;
+export type LocalizeSummary = Pick<LocalizeProject, "id" | "name" | "status" | "stage" | "message" | "title" | "output" | "progress" | "created_at"> & {
+  updated_at?: number;
+};
 
 export const api = {
   authenticatedObjectUrl,
@@ -783,6 +785,15 @@ export const api = {
   async renderLocalize(id: string): Promise<LocalizeProject> {
     return j(await authFetch(`${BASE}/localize/${id}/render`, { method: "POST" }));
   },
+  async pauseLocalize(id: string): Promise<LocalizeProject> {
+    return j(await authFetch(`${BASE}/localize/${id}/pause`, { method: "POST" }));
+  },
+  async resumeLocalize(id: string): Promise<LocalizeProject> {
+    return j(await authFetch(`${BASE}/localize/${id}/resume`, { method: "POST" }));
+  },
+  async cancelLocalize(id: string): Promise<LocalizeProject> {
+    return j(await authFetch(`${BASE}/localize/${id}/cancel`, { method: "POST" }));
+  },
   async deleteLocalize(id: string): Promise<void> {
     return j(await authFetch(`${BASE}/localize/${id}`, { method: "DELETE" }));
   },
@@ -800,6 +811,15 @@ export const api = {
   async analyzeTalkingReel(jobId: string, style?: string): Promise<TalkingReelState> {
     const query = style ? `?style=${encodeURIComponent(style)}` : "";
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/analyze${query}`, { method: "POST" }));
+  },
+  async pauseTalkingReel(jobId: string): Promise<TalkingReelState> {
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/pause`, { method: "POST" }));
+  },
+  async resumeTalkingReel(jobId: string): Promise<TalkingReelState> {
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/resume`, { method: "POST" }));
+  },
+  async cancelTalkingReel(jobId: string): Promise<TalkingReelState> {
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/cancel`, { method: "POST" }));
   },
   async talkingReelMedia(jobId: string): Promise<string[]> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/media`));

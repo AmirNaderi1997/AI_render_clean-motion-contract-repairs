@@ -1,4 +1,5 @@
 import React from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, LibraryAsset, LocalizeBoxColour, LocalizeLine, LocalizeProject, LocalizeSummary } from "./api";
 import { AuthenticatedMedia } from "./AuthenticatedMedia";
 import { LoadingState, friendlyError, notify } from "./ui";
@@ -9,6 +10,8 @@ const STATUS_LABELS: Record<LocalizeProject["status"], string> = {
   analyzing: "در حال تحلیل",
   ready: "آماده ویرایش",
   rendering: "در حال رندر",
+  paused: "متوقف موقت",
+  canceled: "لغو شد",
   done: "رندر شد",
   error: "خطا",
 };
@@ -164,12 +167,27 @@ function ProjectEditor({ id, onChanged }: { id: string; onChanged: () => void })
     catch (err) { setError(friendlyError(err, "analyze the video")); }
   }
 
+  async function control(action: "pause" | "resume" | "cancel") {
+    try {
+      const next = action === "pause" ? await api.pauseLocalize(id)
+        : action === "resume" ? await api.resumeLocalize(id)
+          : await api.cancelLocalize(id);
+      setProject(next); setDraft(next); onChanged();
+    } catch (err) { setError(friendlyError(err, `${action} the project`)); }
+  }
+
   return (
     <div className="card" dir="rtl">
       <div className="section-header">
         <h2>{project.name}</h2>
-        <span className="tag">{STATUS_LABELS[project.status]}{busy && project.stage ? ` — ${STAGE_LABELS[project.stage] || project.stage}` : ""}{project.status === "rendering" ? ` ${project.progress}%` : ""}</span>
+        <span className="tag">{STATUS_LABELS[project.status]}{(busy || project.status === "paused") && project.stage ? ` — ${STAGE_LABELS[project.stage] || project.stage}` : ""}{["analyzing", "rendering", "paused"].includes(project.status) && project.progress ? ` ${project.progress}%` : ""}</span>
       </div>
+      {(busy || project.status === "paused") && <div className="action-bar">
+        {project.status === "paused"
+          ? <button className="btn-secondary" onClick={() => control("resume")}>ادامه</button>
+          : <button className="btn-secondary" onClick={() => control("pause")}>توقف موقت</button>}
+        <button className="btn-danger" onClick={() => control("cancel")}>لغو پردازش</button>
+      </div>}
       {project.status === "error" && <div className="errors">{project.message}</div>}
       {error && <div className="errors">{error}</div>}
 
@@ -248,20 +266,28 @@ function ProjectEditor({ id, onChanged }: { id: string; onChanged: () => void })
 }
 
 export default function Localize() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [projects, setProjects] = React.useState<LocalizeSummary[] | null>(null);
-  const [selected, setSelected] = React.useState<string | null>(null);
+  const [selected, setSelected] = React.useState<string | null>(() => searchParams.get("project"));
   const [error, setError] = React.useState("");
 
   const refresh = React.useCallback(() => {
     api.listLocalize().then(setProjects).catch(err => setError(friendlyError(err, "load the projects")));
   }, []);
   React.useEffect(refresh, [refresh]);
+  React.useEffect(() => { setSelected(searchParams.get("project")); }, [searchParams]);
+
+  const selectProject = React.useCallback((id: string | null) => {
+    setSelected(id);
+    if (id) setSearchParams({ project: id });
+    else setSearchParams({});
+  }, [setSearchParams]);
 
   return (
     <div className="page">
       <h1>Dropshipping / دوبله فارسی</h1>
       {error && <div className="errors">{error}</div>}
-      <NewProject onCreated={p => { setSelected(p.id); refresh(); }} />
+      <NewProject onCreated={p => { selectProject(p.id); refresh(); }} />
       {selected && <ProjectEditor key={selected} id={selected} onChanged={refresh} />}
       <div className="card" dir="rtl">
         <div className="section-header"><h2>پروژه‌ها</h2></div>
@@ -271,11 +297,11 @@ export default function Localize() {
           <ul style={{ listStyle: "none", padding: 0 }}>
             {projects.map(p => (
               <li key={p.id} className="row" style={{ justifyContent: "space-between" }}>
-                <button className="secondary" onClick={() => setSelected(p.id)}>{p.title || p.name}</button>
+                <button className="secondary" onClick={() => selectProject(p.id)}>{p.title || p.name}</button>
                 <span className="muted">{STATUS_LABELS[p.status]}</span>
                 <button className="btn-sm btn-danger" onClick={async () => {
                   if (!window.confirm("این پروژه حذف شود؟")) return;
-                  try { await api.deleteLocalize(p.id); if (selected === p.id) setSelected(null); refresh(); }
+                  try { await api.deleteLocalize(p.id); if (selected === p.id) selectProject(null); refresh(); }
                   catch (err) { setError(friendlyError(err, "delete the project")); }
                 }}>حذف</button>
               </li>

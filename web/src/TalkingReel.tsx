@@ -19,6 +19,8 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
   const [draft, setDraft] = React.useState<TalkingReelState | null>(null);
   const [error, setError] = React.useState("");
   const running = state?.status === "running";
+  const paused = state?.status === "paused";
+  const busy = running || paused;
   const [styles, setStyles] = React.useState<{ id: string; label: string }[]>([]);
   const [media, setMedia] = React.useState<string[]>([]);
   React.useEffect(() => { api.talkingReelStyles().then(setStyles).catch(() => setStyles([])); }, []);
@@ -31,13 +33,13 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
         const next = await api.getTalkingReel(jobId);
         if (!active) return;
         setState(prev => { if (prev && prev.status !== next.status) onChanged?.(); return next; });
-        setDraft(d => (d && next.status === "running" ? d : next));
+        setDraft(d => (d && ["running", "paused"].includes(next.status) ? d : next));
       } catch (err) { if (active) setError(friendlyError(err, "load the talking reel")); }
     }
     void poll();
-    const iv = setInterval(() => { if (running) void poll(); }, 2000);
+    const iv = setInterval(() => { if (running || paused) void poll(); }, 2000);
     return () => { active = false; clearInterval(iv); };
-  }, [jobId, running]);
+  }, [jobId, running, paused]);
 
   if (!state || !draft) return null;
   const enhanced = ["talking_2", "talking_3", "talking_4"].includes(draft.style || "talking_1");
@@ -81,14 +83,26 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
     await analyze(style);
   }
 
+  async function control(action: "pause" | "resume" | "cancel") {
+    try {
+      const next = action === "pause" ? await api.pauseTalkingReel(jobId) : action === "resume"
+        ? await api.resumeTalkingReel(jobId) : await api.cancelTalkingReel(jobId);
+      setState(next); onChanged?.();
+    } catch (err) { setError(friendlyError(err, `${action} the talking reel`)); }
+  }
+
   return (
     <div className="card" dir="rtl">
       <div className="section-header">
         <h2>ویدیوی صحبتی (پادکست ← ریل عمودی)</h2>
         <span className="tag">
-          {running ? `${STAGES[state.stage] || state.stage} ${state.progress}%` : state.status === "ready" ? "آماده‌ی بازبینی" : state.status === "done" ? "آماده" : state.status === "error" ? "خطا" : ""}
+          {running ? `${STAGES[state.stage] || state.stage} ${state.progress}%` : paused ? `متوقف موقت — ${STAGES[state.stage] || state.stage} ${state.progress}%` : state.status === "canceled" ? "لغو شد" : state.status === "ready" ? "آماده‌ی بازبینی" : state.status === "done" ? "آماده" : state.status === "error" ? "خطا" : ""}
         </span>
       </div>
+      {busy && <div className="action-bar">
+        {paused ? <button className="btn-secondary" onClick={() => control("resume")}>ادامه</button> : <button className="btn-secondary" onClick={() => control("pause")}>توقف موقت</button>}
+        <button className="btn-danger" onClick={() => control("cancel")}>لغو پردازش</button>
+      </div>}
       <p className="muted">اول ترنسکریب و تحلیل انجام می‌شود. استایل پیشنهادی، تیتر قلاب، کلمات برجسته و زیرنویس‌ها را بازبینی کن؛ سپس رندر را شروع کن.</p>
       {state.status === "error" && <div className="errors">{state.message}</div>}
       {error && <div className="errors">{error}</div>}

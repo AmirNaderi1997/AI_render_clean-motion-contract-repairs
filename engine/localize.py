@@ -1506,12 +1506,21 @@ def render(
            "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(out)]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     assert proc.stdout is not None
-    for row in proc.stdout:
-        if row.startswith("out_time_us=") and on_progress and duration > 0:
-            try:
-                on_progress(min(99, int(int(row.split("=")[1]) / 1e6 / duration * 100)))
-            except ValueError:
-                pass
+    try:
+        for row in proc.stdout:
+            if row.startswith("out_time_us=") and on_progress and duration > 0:
+                try:
+                    on_progress(min(99, int(int(row.split("=")[1]) / 1e6 / duration * 100)))
+                except ValueError:
+                    pass
+    except BaseException:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        out.unlink(missing_ok=True)
+        raise
     stderr = proc.stderr.read() if proc.stderr else ""
     if proc.wait() != 0:
         raise RuntimeError(f"ffmpeg failed: {stderr.strip()[-800:]}")

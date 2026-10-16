@@ -71,6 +71,24 @@ def analyze(request: Request, job_id: str, style: Optional[str] = None):
     except ValueError as exc:
         raise HTTPException(409, str(exc))
 
+@router.post("/pause")
+def pause(request: Request, job_id: str):
+    job = _job(request, job_id)
+    try: return store.public(store.pause(job.dir))
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
+@router.post("/resume")
+def resume(request: Request, job_id: str):
+    job = _job(request, job_id)
+    try: return store.public(store.resume(job.dir))
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
+@router.post("/cancel")
+def cancel(request: Request, job_id: str):
+    job = _job(request, job_id)
+    try: return store.public(store.cancel(job.dir))
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
 
 @router.get("/media")
 def list_media(request: Request, job_id: str):

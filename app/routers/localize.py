@@ -104,6 +104,33 @@ def render(request: Request, project_id: str):
     return store.public(store.load(project_id))
 
 
+@router.post("/{project_id}/pause")
+def pause(request: Request, project_id: str):
+    _owned(request, project_id)
+    try:
+        return store.public(store.pause(project_id))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/{project_id}/resume")
+def resume(request: Request, project_id: str):
+    _owned(request, project_id)
+    try:
+        return store.public(store.resume(project_id))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/{project_id}/cancel")
+def cancel(request: Request, project_id: str):
+    _owned(request, project_id)
+    try:
+        return store.public(store.cancel(project_id))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+
+
 @router.get("/{project_id}/output")
 def output(request: Request, project_id: str):
     state = _owned(request, project_id)
