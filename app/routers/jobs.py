@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app import jobs as jobstore
-from app.job_access import get_job_for_request
+from app.job_access import get_job_for_request, is_local_auth_bypass
 from .music import AUDIO_EXTENSIONS
 
 log = logging.getLogger(__name__)
@@ -21,9 +21,10 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 @router.get("")
 def list_jobs(request: Request, db: AsyncSession = Depends(get_db)):
     user_id = str(request.state.user.id)
+    show_all_local = is_local_auth_bypass(request)
     result = []
     for job in jobstore.list_jobs(db=db):
-        if job.user_id is not None and str(job.user_id) != user_id:
+        if not show_all_local and job.user_id is not None and str(job.user_id) != user_id:
             continue
         item = job.to_dict()
         # Legacy rows can outlive local media artifacts. Keep the list response

@@ -68,7 +68,7 @@ def public(state: dict) -> dict:
     return out
 
 
-def list_projects(user_id: str) -> list[dict]:
+def list_projects(user_id: str | None) -> list[dict]:
     if not LOCALIZE_ROOT.is_dir():
         return []
     items = []
@@ -77,7 +77,7 @@ def list_projects(user_id: str) -> list[dict]:
             state = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        if str(state.get("user_id")) == str(user_id):
+        if user_id is None or str(state.get("user_id")) == str(user_id):
             items.append({k: state.get(k) for k in
                           ("id", "name", "status", "stage", "message", "title", "output", "created_at")})
     return sorted(items, key=lambda s: s.get("created_at") or 0, reverse=True)

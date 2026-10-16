@@ -6,8 +6,15 @@ from fastapi import HTTPException, Request
 from app import jobs as jobstore
 
 
+def is_local_auth_bypass(request: Request) -> bool:
+    """True only when main's loopback-only development middleware opted in."""
+    return getattr(request.state, "local_auth_bypass", False) is True
+
+
 def verify_job_owner(request: Request, job) -> None:
     """Allow legacy unowned jobs, and reject jobs owned by another user."""
+    if is_local_auth_bypass(request):
+        return
     owner_id = getattr(job, "user_id", None)
     if owner_id is None:
         return

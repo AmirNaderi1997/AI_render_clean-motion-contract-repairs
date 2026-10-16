@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app import talking_reel as store
-from app.job_access import get_job_for_request
+from app.job_access import get_job_for_request, is_local_auth_bypass
 
 router = APIRouter(prefix="/jobs/{job_id}/talking-reel", tags=["talking-reel"])
 
@@ -170,9 +170,10 @@ def list_reels(request: Request):
     from app import jobs as jobstore
 
     user_id = str(request.state.user.id)
+    show_all_local = is_local_auth_bypass(request)
     items = []
     for job in jobstore.list_jobs():
-        if job.user_id is not None and str(job.user_id) != user_id:
+        if not show_all_local and job.user_id is not None and str(job.user_id) != user_id:
             continue
         if not (job.dir / "talking_reel.json").is_file():
             continue

@@ -198,6 +198,7 @@ async def auth_middleware(request: Request, call_next):
     # This cannot activate in production or through a LAN/public hostname.
     if _is_loopback_development_request(request):
         request.state.user = _local_development_user()
+        request.state.local_auth_bypass = True
         return await call_next(request)
 
     path = request.url.path

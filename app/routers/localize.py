@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app import localize as store
+from app.job_access import is_local_auth_bypass
 
 router = APIRouter(prefix="/localize", tags=["localize"])
 
@@ -19,14 +20,15 @@ def _owned(request: Request, project_id: str) -> dict:
         state = store.load(project_id)
     except KeyError:
         raise HTTPException(404, "project not found")
-    if str(state.get("user_id")) != str(request.state.user.id):
+    if not is_local_auth_bypass(request) and str(state.get("user_id")) != str(request.state.user.id):
         raise HTTPException(403, "You do not have access to this project")
     return state
 
 
 @router.get("")
 def list_projects(request: Request):
-    return store.list_projects(str(request.state.user.id))
+    user_id = None if is_local_auth_bypass(request) else str(request.state.user.id)
+    return store.list_projects(user_id)
 
 
 @router.post("", status_code=201)
