@@ -21,6 +21,7 @@ const Signup = React.lazy(() => import("./Signup"));
 const ForgotPassword = React.lazy(() => import("./ForgotPassword"));
 const ResetPassword = React.lazy(() => import("./ResetPassword"));
 const Jobs = React.lazy(() => import("./Jobs"));
+const ProductReels = React.lazy(() => import("./ProductReels"));
 
 const HermesLayout = React.lazy(() => import("./pages/hermes/HermesLayout.jsx"));
 const HermesDashboard = React.lazy(() => import("./pages/hermes/HermesDashboard.jsx"));
@@ -121,6 +122,10 @@ function AuthenticatedApp() {
             <span className="nav-icon">&#127908;</span>
             ویدیو صحبتی
           </NavLink>
+          <NavLink to="/product-reels">
+            <span className="nav-icon">◆</span>
+            ریلز محصول
+          </NavLink>
           <NavLink to="/localize">
             <span className="nav-icon">&#127760;</span>
             Dropshipping
@@ -161,6 +166,7 @@ function AuthenticatedApp() {
           <Route path="/content" element={<ContentCreator />} />
           <Route path="/localize" element={<Localize />} />
           <Route path="/talking" element={<TalkingReels />} />
+          <Route path="/product-reels" element={<ProductReels />} />
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/jobs/:id" element={<PlanReview />} />
           <Route path="/jobs/:id/render" element={<Render />} />

@@ -304,6 +304,24 @@ export interface TalkingReelSummary {
   updated_at: number;
 }
 
+export interface MotionRecipe {
+  id: string; title: string; renderer: string; intents: string[];
+  best_for: string; avoid_when: string; max_per_video: number;
+}
+
+export interface ProductScene {
+  id: string; role: string; title: string; items: string[]; duration: number;
+  recipe: string; renderer: string; motion: string; why?: string;
+}
+
+export interface ProductReelState {
+  status: "analyzing" | "ready" | "rendering" | "done" | "canceled" | "error";
+  stage: string; progress: number; message: string; url: string;
+  source?: { name?: string; title?: string; description?: string; host?: string; colours?: string[]; image?: string };
+  storyboard?: { summary?: string; audience?: string; scenes: ProductScene[] };
+  output?: string | null; duration?: number;
+}
+
 export type LocalizeBoxColour = "black" | "white" | "red" | "blue" | "green";
 
 export interface LocalizeProject {
@@ -966,4 +984,31 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status}`);
     return r.blob();
   },
+  async motionRecipes(): Promise<MotionRecipe[]> {
+    return j(await authFetch(`${BASE}/product-reels/recipes`));
+  },
+  async createProductReel(url: string): Promise<{ job_id: string } & ProductReelState> {
+    const result = await j<{ job_id: string } & ProductReelState>(await authFetch(`${BASE}/product-reels`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url }),
+    }));
+    invalidateJobCache(); return result;
+  },
+  async productReel(id: string): Promise<ProductReelState> {
+    return j(await authFetch(`${BASE}/product-reels/${id}`));
+  },
+  async listProductReels(): Promise<any[]> {
+    return j(await authFetch(`${BASE}/product-reels`));
+  },
+  async updateProductReel(id: string, scenes: ProductScene[]): Promise<ProductReelState> {
+    return j(await authFetch(`${BASE}/product-reels/${id}`, {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ scenes }),
+    }));
+  },
+  async renderProductReel(id: string): Promise<ProductReelState> {
+    return j(await authFetch(`${BASE}/product-reels/${id}/render`, { method: "POST" }));
+  },
+  async cancelProductReel(id: string): Promise<ProductReelState> {
+    return j(await authFetch(`${BASE}/product-reels/${id}/cancel`, { method: "POST" }));
+  },
+  productReelOutputUrl(id: string): string { return `${BASE}/product-reels/${id}/output`; },
 };

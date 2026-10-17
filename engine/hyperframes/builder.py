@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .schema import VisualBeat
 from .catalog import recommend
+from engine.motion_recipes import select_recipe
 
 ROOT = Path(__file__).resolve().parents[2]
 RAY = ROOT / "presets" / "fonts" / "RAY-EXTRABOLD.TTF"
@@ -82,6 +83,7 @@ def build_visual_beats(plan, decisions: dict, transcript: dict | None = None) ->
     for n, item in enumerate(storyboard):
         per_sentence.setdefault(int(item.get("i", 0)), []).append(n)
     used_refs: set[str] = set()
+    used_recipes: dict[str, int] = {}
     fallback_types = ["kinetic_type", "concept", "comparison", "media_collage", "ui_showcase", "stat", "chat", "before_after"]
     fallback_motions = ["slam", "assemble", "wipe", "collage", "orbit", "count_up", "type_on", "reveal"]
     beats: list[VisualBeat] = []
@@ -113,7 +115,17 @@ def build_visual_beats(plan, decisions: dict, transcript: dict | None = None) ->
             visual_type = "comparison"
         if beats and visual_type == beats[-1].visual_type:
             visual_type = fallback_types[n % len(fallback_types)]
-        motion_style = str(item.get("motion_style") or fallback_motions[n % len(fallback_motions)])
+        recipe = select_recipe(
+            role=str(item.get("narrative_role") or "evidence"), title=title,
+            items=values, used=used_recipes, talking=True,
+        )
+        used_recipes[recipe.id] = used_recipes.get(recipe.id, 0) + 1
+        # A storyboard can explicitly request a semantic type, but a vague
+        # "concept" now resolves through the audited recipe registry instead
+        # of repeatedly falling back to the same generic world.
+        if visual_type == "concept":
+            visual_type = recipe.renderer
+        motion_style = str(item.get("motion_style") or recipe.motion or fallback_motions[n % len(fallback_motions)])
         if beats and motion_style == beats[-1].motion_style:
             motion_style = fallback_motions[n % len(fallback_motions)]
         # Catalog search informs the choreography vocabulary, but a reference
@@ -127,6 +139,7 @@ def build_visual_beats(plan, decisions: dict, transcript: dict | None = None) ->
             registry_refs=refs,
             narrative_role=str(item.get("narrative_role") or "evidence"),
             motion_style=motion_style,
+            recipe_id=recipe.id,
             why=str(item.get("why") or ""),
         ))
     # Output edits may repeat a source range (cold open) or collapse adjacent
@@ -272,7 +285,8 @@ def _timeline_script(beats: list[VisualBeat]) -> str:
     return "\n".join(lines)
 
 
-def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], *, duration: float) -> Path:
+def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], *, duration: float,
+                  enable_registry: bool = True) -> Path:
     """Write a self-contained 1080x1920 HyperFrames composition."""
     project_dir.mkdir(parents=True, exist_ok=True)
     assets = project_dir / "assets"
@@ -289,8 +303,9 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
         "$schema": "https://hyperframes.heygen.com/schema/hyperframes.json",
         "media": {"autoProxy": True},
     }, indent=2))
-    from .registry_runtime import wire_registry
-    wire_registry(project_dir, beats)
+    if enable_registry:
+        from .registry_runtime import wire_registry
+        wire_registry(project_dir, beats)
     visual_library = []
     for beat in beats:
         value = beat.model_dump()

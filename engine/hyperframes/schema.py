@@ -20,6 +20,7 @@ class VisualBeat(BaseModel):
     layout: Literal["top_panel", "full_frame"] = "top_panel"
     accent: Literal["teal", "amber", "coral", "blue", "ink"] = "teal"
     registry_refs: list[str] = Field(default_factory=list, max_length=3)
+    recipe_id: str = ""
     narrative_role: str = "evidence"
     motion_style: str = "slide"
     why: str = ""

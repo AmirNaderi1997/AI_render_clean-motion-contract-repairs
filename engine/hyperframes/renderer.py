@@ -22,6 +22,7 @@ def render_project(
     *,
     timeout: int = 1800,
     on_progress: Optional[Callable[[int], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "NO_COLOR": "1"}
@@ -57,11 +58,19 @@ def render_project(
     )
     started = time.monotonic()
     while True:
+        if should_cancel and should_cancel():
+            os.killpg(process.pid, signal.SIGTERM)
+            process.communicate(timeout=15)
+            raise HyperFramesError("HyperFrames render canceled")
         try:
             stdout, stderr = process.communicate(timeout=10)
             break
         except subprocess.TimeoutExpired:
             elapsed = time.monotonic() - started
+            if should_cancel and should_cancel():
+                os.killpg(process.pid, signal.SIGTERM)
+                process.communicate(timeout=15)
+                raise HyperFramesError("HyperFrames render canceled")
             if elapsed >= timeout:
                 os.killpg(process.pid, signal.SIGTERM)
                 stdout, stderr = process.communicate(timeout=15)
