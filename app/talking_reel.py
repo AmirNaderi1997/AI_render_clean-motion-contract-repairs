@@ -78,6 +78,36 @@ def save(job_dir: Path, state: dict) -> dict:
     return state
 
 
+def recover_interrupted(jobs_root: Path) -> int:
+    """Fail in-memory talking tasks left behind by a backend restart.
+
+    Talking renders run in daemon threads and cannot survive their owning
+    process.  Leaving the persisted state as ``running`` makes the editor look
+    permanently stuck even though no FFmpeg process exists.
+    """
+    if not jobs_root.is_dir():
+        return 0
+    recovered = 0
+    for path in jobs_root.glob("*/talking_reel.json"):
+        try:
+            state = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if state.get("status") not in {"running", "paused"}:
+            continue
+        state.update(
+            status="error",
+            stage="",
+            message="Interrupted by a server restart. Start the render again.",
+            updated_at=time.time(),
+        )
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1))
+        tmp.replace(path)
+        recovered += 1
+    return recovered
+
+
 def public(state: dict) -> dict:
     result = {k: v for k, v in state.items() if not k.startswith("decisions")}
     key = _decisions_key(str(state.get("style") or "talking_1"))

@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from ..localize import _ass_colour, _ass_time, _rounded_rect, measure_text_boxes, probe_fps, probe_video
+from ..localize import _ass_colour, _ass_time, _rounded_rect, measure_text_boxes, probe_video
 from ..render_ass import ass_burner_ffmpeg, subtitles_filter
 
 log = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FACE_TRACK = PROJECT_ROOT / "tools" / "face_track"
 
 W, H = 1080, 1920
+RENDER_FPS = "30"          # delivery cadence; phone sources are commonly 60fps
 GAP_CUT = 0.35            # pauses longer than this are cut out
 CUT_PAD = 0.08            # speech kept around each cut
 MIN_SHOT = 4.0            # framing changes at most this often (seconds of output)
@@ -577,7 +578,12 @@ def source_colour_filter(video: Path) -> str:
         # This shoulder closely matches the browser's SDR presentation of
         # iPhone HLG. Mobius left faces and pale clothes visibly overexposed.
         "zscale=primaries=bt709,tonemap=hable:desat=0,"
-        "zscale=transfer=bt709:matrix=bt709:range=tv,format=yuv420p"
+        # Keep ten-bit precision through crop, zoom and the editable grade.
+        # Quantising HLG to 8-bit here caused banding/posterised skin, most
+        # visible in close crops.  The final encoder conversion still emits
+        # broadly compatible yuv420p.
+        "zscale=transfer=bt709:matrix=bt709:range=tv:dither=error_diffusion,"
+        "format=yuv420p10le"
     )
 
 
@@ -766,7 +772,11 @@ def render_outro(work_dir: Path, cta: str, fps: str, fonts: Path, *, logo_enable
     parts, inputs, chains = [], [], []
     cta_seconds = CTA_SECONDS if cta else 0.0
     if cta:
-        bg = render_end_card(work_dir / "cta_bg.png", W, H, active_logo if active_logo.is_file() else None)
+        # The single "end logo" toggle owns every logo appearance in the
+        # outro, including the small static mark on the CTA card.  Previously
+        # it only disabled the standalone logo-motion clip.
+        cta_logo = active_logo if logo_enabled and active_logo.is_file() else None
+        bg = render_end_card(work_dir / "cta_bg.png", W, H, cta_logo)
         ass = work_dir / "cta.ass"
         ass.write_text("\n".join([
             "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}", "WrapStyle: 2", "",
@@ -809,7 +819,10 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
     sw, sh, _ = probe_video(video)
-    fps = probe_fps(video)
+    # Always render social delivery at a fixed 30fps.  In particular, feeding
+    # a 60fps phone source straight into zoompan(d=1,fps=30) changes the video
+    # clock relative to its audio and produces the visible lag/judder.
+    fps = RENDER_FPS
     work_dir.mkdir(parents=True, exist_ok=True)
     fonts = fonts_bundle(work_dir)
     ass = work_dir / "reel.ass"
@@ -841,10 +854,9 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     grade_settings = settings.get("grade") or {}
     brightness = 1 + float(grade_settings.get("brightness", 0)) / 100
     contrast = float(grade_settings.get("contrast", 100)) / 100
-    custom_grade = (f"lutrgb=r='(val*{brightness:.3f}-128)*{contrast:.3f}+128':"
-                    f"g='(val*{brightness:.3f}-128)*{contrast:.3f}+128':"
-                    f"b='(val*{brightness:.3f}-128)*{contrast:.3f}+128',"
-                    f"hue=s={float(grade_settings.get('saturation', 100)) / 100:.3f},"
+    custom_grade = (f"lutyuv=y='val*{brightness:.3f}',"
+                    f"eq=contrast={contrast:.3f}:"
+                    f"saturation={float(grade_settings.get('saturation', 100)) / 100:.3f},"
                     f"colorbalance=rs={float(grade_settings.get('temperature', 0)) / 500:.3f}:"
                     f"bs={-float(grade_settings.get('temperature', 0)) / 500:.3f}")
     zoom_settings = settings.get("zoom") or {}
@@ -857,15 +869,23 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         )
         look = custom_grade + (f",{BW}" if shot.bw else "")
         if shot.push and zoom_amount > 0:
-            # Slow eased push-in anchored on the face (Ken Burns), rendered
-            # from a 1.5x frame so the motion stays smooth.
+            # Slow eased push-in anchored on the face (Ken Burns).  The crop is
+            # already larger than the 1080x1920 delivery frame, so feeding it
+            # straight to zoompan preserves the available source detail.  The
+            # old path first upscaled every frame to 1620x2880 and immediately
+            # scaled it back down inside zoompan; that added millions of
+            # Lanczos samples per frame without adding any real detail.
             frames = max(1, round(shot.length * fps_value))
             ax = min(max((shot.face[0] * sw - x) / cw, 0.2), 0.8)
             ay = min(max((shot.face[1] * sh - y) / ch, 0.2), 0.8)
             zoom = (f"zoompan=z='1+{PUSH_ZOOM * zoom_amount:.4f}*(1-cos(PI*min(on/{frames},1)))/2':"
                     f"x='iw*{ax:.3f}-iw/zoom*{ax:.3f}':y='ih*{ay:.3f}-ih/zoom*{ay:.3f}':"
                     f"d=1:s={W}x{H}:fps={fps}")
-            frame = f"scale={W * 3 // 2}:{H * 3 // 2}:flags=lanczos,{zoom}"
+            # Decimate the phone source to the delivery cadence *before*
+            # zoompan.  zoompan emits ``d`` frames for every input frame; if a
+            # 60fps input reaches d=1 at a 30fps output clock, picture duration
+            # doubles while audio keeps real time.
+            frame = f"fps={fps},{zoom}"
         else:
             frame = f"scale={W}:{H}:flags=lanczos,fps={fps}"
         vf.append(f"[{k}:v]setpts=PTS-STARTPTS,"
@@ -903,9 +923,14 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         vf.append("[vo][duck]amix=inputs=2:normalize=0:duration=first,"
                   "loudnorm=I=-16:TP=-1:LRA=9,aresample=48000[aout]")
     else:
-        vf.append("[cpad]loudnorm=I=-16:TP=-1:LRA=9,aresample=48000[aout]")
+        # loudnorm internally upsamples.  With the source's 44.1kHz AAC and
+        # this FFmpeg build, normalising before fixing the input rate changes
+        # timestamps (a 5s shot became 3.32s of audio).  Establish a 48kHz
+        # clock first so picture and sound keep identical duration.
+        vf.append("[cpad]aresample=48000,loudnorm=I=-16:TP=-1:LRA=9,"
+                  "aresample=48000[aout]")
     cmd = [ffmpeg, "-hide_banner", "-y", *inputs, "-filter_complex", ";".join(vf),
-           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "17", "-preset", "medium",
+           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "17", "-preset", "veryfast",
            "-profile:v", "high", "-pix_fmt", "yuv420p",
            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",

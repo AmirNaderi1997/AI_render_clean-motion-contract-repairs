@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     melt \
     libmlt7 \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    fonts-dejavu-core \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

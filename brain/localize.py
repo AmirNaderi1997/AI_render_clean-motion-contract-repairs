@@ -163,7 +163,13 @@ CHUNK_LINES = 6
 
 
 def translate_caption_cards(lines: list[dict]) -> None:
-    """Localize the visible phrases, keeping manually corrected facts as context."""
+    """Partition the approved narration across the visible source cards.
+
+    The card text is assembled from contiguous slices of ``line["fa"]``.  The
+    model may choose only the slice boundaries; it cannot paraphrase, add or
+    remove words.  Consequently the concatenated subtitles are byte-for-byte
+    the same words spoken by TTS.
+    """
     import hashlib
 
     pending = []
@@ -171,39 +177,91 @@ def translate_caption_cards(lines: list[dict]) -> None:
         cards = line.get("covers") or []
         if line.get("kind") in {"lyrics", "cta"} or not cards or not line.get("fa"):
             continue
-        signature = hashlib.sha256(json.dumps([line["fa"], [c.get("en", "") for c in cards]],
+        tokens = line["fa"].replace("\n", " ").split()
+        if len(cards) > len(tokens):
+            _coalesce_caption_cards(cards, len(tokens))
+        signature = hashlib.sha256(json.dumps(["exact-token-cuts-v1", line["fa"],
+                                               [c.get("en", "") for c in cards]],
                                                ensure_ascii=False).encode()).hexdigest()[:16]
         if line.get("caption_text_signature") == signature and all(c.get("fa") for c in cards):
             continue
         pending.append((line, cards, signature))
     if not pending:
         return
-    request = [{"i": line["i"], "spoken_en": line.get("en"), "approved_fa": line["fa"],
+    request = [{"i": line["i"], "spoken_en": line.get("en"),
+                "approved_tokens": line["fa"].replace("\n", " ").split(),
                 "cards": [{"en": c.get("en", ""), "seconds": round(c["end"] - c["start"], 2),
                            "max_chars": max(10, round(c["box"]["w"] / max(.01, c["box"]["h"]) * 1.8))}
                           for c in cards]} for line, cards, _ in pending]
-    system = """Write Persian subtitles for successive visible English caption cards in a video.
-Return JSON {"lines":[{"i":integer,"cards":["Persian phrase", ...]}]}.
-Return exactly one phrase for EACH input card in the same order, never merge cards.
-Use each card's OCR English plus the full English sentence to recover OCR errors.
-The approved_fa is the user's corrected narration: its numbers, names, facts and meaning take precedence.
-Use natural, colloquial Iranian Persian; short meaningful phrases, usually 2-4 words.
-Avoid isolated prepositions such as از / با / برای. No punctuation, padding, decoration or new claims.
-Stay close to max_chars so the phrase fills the original card naturally without stretching the font.
-Each phrase must match ONLY what is visible in its own card; do not put the entire sentence in a card.
-The successive phrases should convey the sentence naturally. Do not change the user's narration."""
+    system = """Choose where to split approved Persian narration across successive visible English caption cards.
+Return JSON {"lines":[{"i":integer,"cuts":[integer, ...]}]}.
+For N cards return exactly N-1 strictly increasing cut positions. A cut is a token index in approved_tokens,
+between 1 and len(approved_tokens)-1. Each card receives the contiguous tokens between adjacent cuts.
+Never rewrite, translate, reorder, add or remove a token. Use each card's OCR English, duration and max_chars
+only to choose semantic, readable boundaries that align with what is visible in that card."""
     data, _ = _chat_with_fallback(system, json.dumps(request, ensure_ascii=False))
-    results = {item.get("i"): item.get("cards") for item in data.get("lines", []) if isinstance(item, dict)}
+    results = {item.get("i"): item.get("cuts") for item in data.get("lines", []) if isinstance(item, dict)}
     validated = []
     for line, cards, signature in pending:
-        phrases = results.get(line["i"])
-        if not isinstance(phrases, list) or len(phrases) != len(cards) or not all(isinstance(p, str) and p.strip() for p in phrases):
-            raise RuntimeError(f"Caption planner returned an invalid card count for line {line['i']}")
+        tokens = line["fa"].replace("\n", " ").split()
+        cuts = results.get(line["i"])
+        valid = (isinstance(cuts, list) and len(cuts) == len(cards) - 1
+                 and all(isinstance(c, int) for c in cuts)
+                 and cuts == sorted(set(cuts))
+                 and all(0 < c < len(tokens) for c in cuts))
+        if valid:
+            points = [0, *cuts, len(tokens)]
+            phrases = [" ".join(tokens[points[i]:points[i + 1]]) for i in range(len(cards))]
+        else:
+            # A malformed model answer must not block rendering or permit a
+            # paraphrase. The deterministic fallback still preserves every
+            # approved token exactly once.
+            phrases = _split_exact_tokens(tokens, len(cards),
+                                           [max(.05, c["end"] - c["start"]) for c in cards])
         validated.append((line, cards, signature, phrases))
     for line, cards, signature, phrases in validated:
         for card, phrase in zip(cards, phrases):
             card["fa"] = phrase.strip().replace("\n", " ")
         line["caption_text_signature"] = signature
+
+
+def _split_exact_tokens(tokens: list[str], count: int, weights: list[float]) -> list[str]:
+    """Split tokens into ``count`` non-empty contiguous weighted slices."""
+    count = max(1, min(count, len(tokens)))
+    total = sum(weights[:count]) or float(count)
+    cuts, used = [], 0
+    for i in range(count - 1):
+        target = round(len(tokens) * sum(weights[:i + 1]) / total)
+        used = min(len(tokens) - (count - i - 1), max(used + 1, target))
+        cuts.append(used)
+    points = [0, *cuts, len(tokens)]
+    return [" ".join(tokens[points[i]:points[i + 1]]) for i in range(count)]
+
+
+def _coalesce_caption_cards(cards: list[dict], target: int) -> None:
+    """Merge duplicate animation fragments until every card can own a token."""
+    import difflib
+
+    def norm(value: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", value.lower())
+
+    while len(cards) > max(1, target):
+        candidates = []
+        for i in range(len(cards) - 1):
+            a, b = norm(cards[i].get("en", "")), norm(cards[i + 1].get("en", ""))
+            similarity = difflib.SequenceMatcher(None, a, b).ratio() if a and b else 0.0
+            # Prefer OCR-equivalent neighbours; otherwise absorb the shortest
+            # entrance fragment rather than duplicating narration words.
+            shortness = 1 / max(.03, cards[i + 1]["end"] - cards[i]["start"])
+            candidates.append((similarity * 10 + shortness, i))
+        _, index = max(candidates)
+        left, right = cards[index], cards[index + 1]
+        frames = [*(left.get("frames") or []), *(right.get("frames") or [])]
+        merged = {**left, "start": min(left["start"], right["start"]),
+                  "end": max(left["end"], right["end"]), "frames": frames}
+        if len(str(right.get("en", ""))) > len(str(left.get("en", ""))):
+            merged["en"] = right.get("en", "")
+        cards[index:index + 2] = [merged]
 
 
 def _chat_with_fallback(system: str, request: str) -> tuple[dict, object]:

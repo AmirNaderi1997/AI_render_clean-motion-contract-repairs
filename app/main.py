@@ -87,6 +87,10 @@ async def lifespan(app: FastAPI):
     log.info("job registry rescan: loaded %d job(s) from %s", n, jobstore.JOBS_ROOT)
     from app.localize import recover_interrupted
     recover_interrupted()
+    from app.talking_reel import recover_interrupted as recover_interrupted_talking
+    recovered_talking = recover_interrupted_talking(jobstore.JOBS_ROOT)
+    if recovered_talking:
+        log.warning("marked %d interrupted talking reel task(s) as failed", recovered_talking)
     yield
     await close_db()
 

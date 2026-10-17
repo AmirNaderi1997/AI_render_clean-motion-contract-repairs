@@ -1,0 +1,67 @@
+# Arvan VPS overlay. Public TLS/static delivery is owned by the host's Caddy;
+# only loopback API ports are published from this Compose project.
+services:
+  app:
+    image: ai-render-runtime:latest
+    ports: !override
+      - "127.0.0.1:8300:8000"
+    command:
+      - gunicorn
+      - app.main:app
+      - -w
+      - "1"
+      - -k
+      - uvicorn.workers.UvicornWorker
+      - -b
+      - 0.0.0.0:8000
+      - --timeout
+      - "900"
+      - --graceful-timeout
+      - "60"
+    mem_limit: 3g
+    cpus: 2.5
+
+  celery-worker:
+    # Reuse the exact app runtime instead of materializing four identical
+    # multi-gigabyte images on the VPS.
+    build: !reset null
+    image: ai-render-runtime:latest
+    command: >-
+      celery -A app.celery_app.celery worker
+      --concurrency=1
+      --loglevel=info
+      -Q default
+    mem_limit: 3g
+    cpus: 2.0
+
+  celery-beat:
+    build: !reset null
+    image: ai-render-runtime:latest
+    mem_limit: 256m
+    cpus: 0.25
+
+  hermes:
+    build: !reset null
+    image: ai-render-runtime:latest
+    ports: !override
+      - "127.0.0.1:8301:8001"
+    command: >-
+      gunicorn hermes.main:app
+      -w 1
+      -k uvicorn.workers.UvicornWorker
+      -b 0.0.0.0:8001
+      --timeout 300
+    mem_limit: 768m
+    cpus: 0.5
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "curl -fsS -H 'Host: editor.rafiei.co' http://127.0.0.1:8001/health >/dev/null"
+
+  db:
+    mem_limit: 768m
+    cpus: 0.5
+
+  redis:
+    mem_limit: 256m
+    cpus: 0.25

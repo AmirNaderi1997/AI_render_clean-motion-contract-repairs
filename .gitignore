@@ -53,6 +53,7 @@ assets/effect_previews/
 backups/
 nginx/certs/
 /certs/
+/tools/face_track/face_track
 
 # Excluded from GitHub (large media kept local only)
 raw/MYVIDEO.mp4

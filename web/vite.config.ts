@@ -12,6 +12,7 @@ export default defineConfig({
       "/api/health": {
         target: process.env.API_TARGET || "http://127.0.0.1:8000",
         changeOrigin: true,
+        rewrite: () => "/health",
       },
       "/api/ai": {
         target: process.env.API_TARGET || "http://127.0.0.1:8000",

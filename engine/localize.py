@@ -37,8 +37,8 @@ BOX_STYLES = {
 PAD_X, PAD_Y = 0.06, 0.025       # compact anti-clipping inset around natural glyph bounds
 LINE_PITCH = 1.05               # line spacing of two-line captions, x font size
 MAX_TEXT_FRACTION = 0.88        # widest text, as a fraction of the frame width
-CAPTION_COVER_PAD_X = 0.012      # safety cover beyond imperfect OCR ink bounds
-CAPTION_COVER_PAD_Y = 0.005
+CAPTION_COVER_PAD_X = 0.025      # safety cover beyond imperfect OCR ink bounds
+CAPTION_COVER_PAD_Y = 0.010
 CAPTION_TEXT_SCALE = 1.08        # slightly larger Persian text inside source cards
 CAPTION_GAP_HOLD = 0.75         # bridge short detector misses such as "$20"
 # End card shown after the source ends (instead of a frozen last frame).
@@ -1318,19 +1318,18 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
                                                     + max((b["cy"] + b["h"] / 2) for b in rows)) / 2 * H)
         geometries = source_box.get("frames", []) if source_box else []
         if geometries:
-            # When the detector missed a short preceding card (commonly a
-            # price such as "$20"), the window was extended backwards above.
-            # Its per-frame geometry naturally starts later, so explicitly
-            # hold the first known box over that leading safety interval.
-            first_start = min(t1, geometries[0]["start"])
-            if first_start > t0:
-                place(3, t0, first_start, line_y, k, caption_style, absorb=(t0, first_start),
-                      source_box={"box": geometries[0]["box"], "fit_box": source_box["box"]})
-            for frame in geometries:
-                left, right = max(t0, frame["start"]), min(t1, frame["end"])
-                if right > left:
-                    place(3, left, right, line_y, k, caption_style, absorb=(left, right),
-                          source_box={"box": frame["box"], "fit_box": source_box["box"]})
+            # Use one fixed envelope for the complete source card. Following
+            # the animated English glyph bounds frame by frame made the black
+            # cover visibly pulse and lag. The envelope covers every detected
+            # entrance/exit position while remaining perfectly still.
+            left = min(f["box"]["cx"] - f["box"]["w"] / 2 for f in geometries)
+            right = max(f["box"]["cx"] + f["box"]["w"] / 2 for f in geometries)
+            top = min(f["box"]["cy"] - f["box"]["h"] / 2 for f in geometries)
+            bottom = max(f["box"]["cy"] + f["box"]["h"] / 2 for f in geometries)
+            stable = {"cx": (left + right) / 2, "cy": (top + bottom) / 2,
+                      "w": right - left, "h": bottom - top}
+            place(3, t0, t1, line_y, k, caption_style, absorb=(t0, t1),
+                  source_box={"box": stable, "fit_box": stable})
         else:
             place(3, t0, t1, line_y, k, caption_style, absorb=(t0, t1), floor=title_floor,
                   reach=reach, source_box=source_box)
