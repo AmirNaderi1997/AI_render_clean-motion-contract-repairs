@@ -97,6 +97,7 @@ def create_content(
     provider_name: str = "local_fixture",
     creative_brief: Optional[dict[str, str]] = None,
     user_id: Optional[str] = None,
+    source_assets: Optional[list[Path]] = None,
 ) -> dict:
     from app.jobs import create_job, _write_status
 
@@ -114,7 +115,29 @@ def create_content(
     )
 
     job = create_job(user_id=user_id)
-    (job.dir / "generated").mkdir(exist_ok=True)
+    generated_dir = job.dir / "generated"
+    generated_dir.mkdir(exist_ok=True)
+
+    safe_assets: list[str] = []
+    if source_assets:
+        import shutil
+        asset_dir = generated_dir / "source_assets"
+        asset_dir.mkdir(exist_ok=True)
+        for index, original in enumerate(source_assets[:20]):
+            source = Path(original).resolve()
+            if not source.is_file():
+                continue
+            suffix = source.suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+                continue
+            target = asset_dir / f"asset_{index + 1:02d}{suffix}"
+            shutil.copy2(source, target)
+            safe_assets.append(str(target.relative_to(job.dir)))
+        if not safe_assets:
+            raise ValueError("No valid source images were supplied")
+        for index, scene in enumerate(storyboard.scenes):
+            scene.media_method = "upload"
+            scene.source_asset = safe_assets[index % len(safe_assets)]
 
     storyboard_path = job.dir / "storyboard.json"
     storyboard_path.write_text(
@@ -264,7 +287,16 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                 if scene.index in cached_media:
                     record = cached_media[scene.index]
                 else:
-                    if preset["is_static"] or scene.media_method == "upload":
+                    if scene.media_method == "upload":
+                        source = (job.dir / scene.source_asset).resolve()
+                        if not source.is_relative_to(job.dir.resolve()) or not source.is_file():
+                            raise ValueError(f"Scene {scene.index + 1} source image is missing")
+                        result = still_to_motion_video(
+                            source, gen_dir, scene.duration_s, preset["aspect"],
+                            source="uploaded_image_motion",
+                            metadata={"source_asset": scene.source_asset},
+                        )
+                    elif preset["is_static"]:
                         result = provider.generate_image(
                             scene.media_prompt or scene.description,
                             preset["aspect"],

@@ -21,6 +21,7 @@ const Signup = React.lazy(() => import("./Signup"));
 const ForgotPassword = React.lazy(() => import("./ForgotPassword"));
 const ResetPassword = React.lazy(() => import("./ResetPassword"));
 const Jobs = React.lazy(() => import("./Jobs"));
+const Studio = React.lazy(() => import("./Studio"));
 
 const HermesLayout = React.lazy(() => import("./pages/hermes/HermesLayout.jsx"));
 const HermesDashboard = React.lazy(() => import("./pages/hermes/HermesDashboard.jsx"));
@@ -109,6 +110,10 @@ function AuthenticatedApp() {
           <span className="nav-brand-text">AI Render</span>
         </div>
         <div className="nav-links" aria-label="Sections">
+          <NavLink to="/studio">
+            <span className="nav-icon">✦</span>
+            Video Studio
+          </NavLink>
           <NavLink to="/new">
             <span className="nav-icon">+</span>
             New Reel
@@ -157,6 +162,7 @@ function AuthenticatedApp() {
       </nav>
       <main id="main-content" tabIndex={-1}>
         <Routes>
+          <Route path="/studio" element={<Studio />} />
           <Route path="/new" element={<NewReel />} />
           <Route path="/content" element={<ContentCreator />} />
           <Route path="/localize" element={<Localize />} />

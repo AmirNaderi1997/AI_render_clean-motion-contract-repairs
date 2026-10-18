@@ -161,6 +161,20 @@ export interface MusicStatus {
   technical_qc?: { loudness_lufs: number | null; true_peak_dbfs: number | null; warnings: string[] } | null;
 }
 
+export interface StudioAttachment { id: string; kind: "video" | "image" | "audio"; filename: string; mime_type: string; size_bytes: number }
+export interface StudioMessage { id: number; role: "user" | "assistant"; content: string; attachments: string[]; created_at: string }
+export interface StudioProject {
+  id: string; conversation_id: string; engine: "localize" | "talking" | "motion";
+  title: string; status: string; external_ref?: string; current_version: number;
+  state: Record<string, any>; created_at: string; updated_at: string;
+}
+export interface StudioAction { id: string; project_id?: string; kind: string; status: string; payload: any; estimated_cost_usd?: number | null }
+export interface StudioConversation {
+  id: string; title: string; language: string; status_voice_enabled: boolean; state: Record<string, any>;
+  created_at: string; updated_at: string; messages?: StudioMessage[]; projects?: StudioProject[]; actions?: StudioAction[];
+}
+export interface StudioEvent { id: number; seq: number; type: string; data: Record<string, any>; created_at: string }
+
 async function authFetch(url: string, init?: RequestInit): Promise<Response> {
   await ensureFreshToken();
   const token = getToken();
@@ -965,5 +979,57 @@ export const api = {
     const r = await authFetch(`${BASE}/content/export-image/${id}`, { method: "POST" });
     if (!r.ok) throw new Error(`${r.status}`);
     return r.blob();
+  },
+
+  // ── Chat-first Video Studio ──
+  async createStudioConversation(title = "گفتگوی جدید"): Promise<StudioConversation> {
+    return j(await authFetch(`${BASE}/studio/conversations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title }) }));
+  },
+  async listStudioConversations(): Promise<StudioConversation[]> {
+    return j(await authFetch(`${BASE}/studio/conversations`));
+  },
+  async getStudioConversation(id: string): Promise<StudioConversation> {
+    return j(await authFetch(`${BASE}/studio/conversations/${id}`));
+  },
+  async updateStudioConversation(id: string, patch: { title?: string; status_voice_enabled?: boolean }): Promise<StudioConversation> {
+    return j(await authFetch(`${BASE}/studio/conversations/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }));
+  },
+  async uploadStudioAttachment(id: string, file: File, onProgress?: (value: number) => void): Promise<StudioAttachment> {
+    const form = new FormData(); form.append("file", file);
+    return uploadWithProgress(`${BASE}/studio/conversations/${id}/attachments`, form, onProgress);
+  },
+  async sendStudioMessage(id: string, content: string, attachment_ids: string[]): Promise<StudioMessage> {
+    return j(await authFetch(`${BASE}/studio/conversations/${id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, attachment_ids }) }));
+  },
+  async confirmStudioAction(id: string): Promise<StudioAction> {
+    return j(await authFetch(`${BASE}/studio/actions/${id}/confirm`, { method: "POST" }));
+  },
+  async cancelStudioAction(id: string): Promise<StudioAction> {
+    return j(await authFetch(`${BASE}/studio/actions/${id}/cancel`, { method: "POST" }));
+  },
+  async cancelStudioProject(id: string): Promise<any> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/cancel`, { method: "POST" }));
+  },
+  async updateStudioStoryboard(id: string, scenes: any[]): Promise<StudioProject> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/storyboard`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ scenes }) }));
+  },
+  studioOutputUrl(id: string): string { return `${BASE}/studio/projects/${id}/output`; },
+  studioAssetUrl(id: string, index: number): string { return `${BASE}/studio/projects/${id}/assets/${index}`; },
+  studioAttachmentUrl(conversationId: string, attachmentId: string): string { return `${BASE}/studio/conversations/${conversationId}/attachments/${attachmentId}`; },
+  studioEventAudioUrl(conversationId: string, eventSeq: number): string { return `${BASE}/studio/conversations/${conversationId}/events/${eventSeq}/audio`; },
+  async streamStudioEvents(id: string, after: number, onEvent: (event: StudioEvent) => void, signal: AbortSignal): Promise<void> {
+    const response = await authFetch(`${BASE}/studio/conversations/${id}/events?after=${after}`, { signal, headers: { "Last-Event-ID": String(after) } });
+    if (!response.ok || !response.body) throw new Error(`${response.status} Could not connect to live events`);
+    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+    while (!signal.aborted) {
+      const { value, done } = await reader.read(); if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+        const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+        const line = block.split("\n").find(item => item.startsWith("data: "));
+        if (line) { try { onEvent(JSON.parse(line.slice(6))); } catch { /* ignore malformed event */ } }
+      }
+    }
   },
 };

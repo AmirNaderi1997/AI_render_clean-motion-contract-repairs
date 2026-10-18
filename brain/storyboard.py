@@ -24,6 +24,9 @@ class Scene:
     estimated_cost: float = 0.0
     narration_text: str = ""
     narration_voice: str = "default"
+    # Job-relative, server-controlled path. Never accept this value directly
+    # from an LLM or a public API request.
+    source_asset: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

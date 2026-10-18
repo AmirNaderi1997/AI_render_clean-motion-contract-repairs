@@ -149,3 +149,13 @@ if CELERY_AVAILABLE:
         _execute(
             self, "content generation", job_id, run,
         )
+
+
+    @celery.task(bind=True, name="airender.studio_message", max_retries=1, default_retry_delay=15)
+    def task_studio_message(self, conversation_id: str, user_key: str, message_id: int | str,
+                            text: str, attachment_ids: list[str]) -> None:
+        from app.studio_orchestrator import process_message
+
+        # The orchestrator persists its own user-facing failure event.  A
+        # retry is reserved for worker/transport loss, not validation errors.
+        process_message(conversation_id, user_key, message_id, text, attachment_ids)
