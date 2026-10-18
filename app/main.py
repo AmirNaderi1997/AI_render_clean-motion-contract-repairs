@@ -31,7 +31,7 @@ from . import auth, jobs as jobstore
 from .auth_routes import router as auth_router
 from .database import DB_AVAILABLE, close_db, engine, init_db
 from .config import settings
-from .routers import ai, content, denoise, effects, fonts, jobs, localize, music, plans, premiere, product_reel, qc, render, style, talking_reel
+from .routers import ai, content, denoise, effects, fonts, jobs, localize, music, plans, premiere, qc, render, style, talking_reel
 from .health import router as health_router
 
 log = logging.getLogger(__name__)
@@ -188,7 +188,6 @@ app.include_router(qc.router)
 app.include_router(fonts.router)
 app.include_router(fonts.legacy_router)
 app.include_router(localize.router)
-app.include_router(product_reel.router)
 
 
 @app.middleware("http")

@@ -1743,11 +1743,6 @@ video {
   z-index: 1;
 }
 
-.product-url-row{display:grid;grid-template-columns:1fr auto;gap:12px;margin:8px 0}.product-url-row input{min-width:0}
-.product-source{display:flex;align-items:center;justify-content:space-between;gap:24px}.product-source h2{margin:5px 0}.brand-swatches{display:flex;gap:8px;direction:ltr}.brand-swatches i{width:34px;height:34px;border-radius:50%;border:2px solid var(--border-strong);box-shadow:0 3px 12px #0004}
-.product-scenes{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:16px}.product-scene header{display:flex;align-items:center;gap:10px;margin-bottom:16px}.product-scene header>b{font-size:22px;color:var(--accent)}.product-scene header>div{margin-inline-start:auto;display:flex;gap:6px}.product-scene header button{min-width:38px;padding:7px}.product-scene label{display:block;margin-top:11px}.product-scene input,.product-scene select{width:100%}.recipe-help{padding:10px 12px;border-radius:10px;background:var(--bg-elevated);font-size:12px;line-height:1.65}.recipe-help span{color:var(--text-tertiary)}.product-output video{display:block;width:min(100%,430px);aspect-ratio:9/16;margin:14px auto 0;background:#080b0c;border-radius:18px}
-@media(max-width:700px){.product-url-row{grid-template-columns:1fr}.product-source{align-items:flex-start;flex-direction:column}.product-scenes{grid-template-columns:1fr}}
-
 /* ═══════════════════════════════════════════
    Auth Pages
    ═══════════════════════════════════════════ */

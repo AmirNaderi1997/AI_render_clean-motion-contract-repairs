@@ -1,4 +1,4 @@
-"""Audited, renderable motion recipes shared by talking and product reels.
+"""Audited, renderable motion recipes for talking reels.
 
 The external catalogs are discovery sources.  This registry is deliberately
 smaller: every item maps to a local, deterministic renderer and carries the
