@@ -9,6 +9,7 @@ import ipaddress
 import json
 import re
 import socket
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,9 +17,11 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+import certifi
 from PIL import Image
 
 MAX_HTML = 3 * 1024 * 1024
+MAX_SCRIPT = 12 * 1024 * 1024
 MAX_IMAGE = 12 * 1024 * 1024
 MAX_REDIRECTS = 5
 USER_AGENT = "RafieiVideoStudio/1.0"
@@ -46,11 +49,20 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _fetch(url: str, *, max_bytes: int, accept: str) -> tuple[bytes, str, str]:
-    opener = urllib.request.build_opener(_NoRedirect)
+def _fetch(url: str, *, max_bytes: int, accept: str,
+           headers: dict[str, str] | None = None) -> tuple[bytes, str, str]:
+    # The python.org macOS runtime does not always inherit the system Keychain
+    # roots. Use certifi's maintained CA bundle while keeping verification and
+    # hostname checks fully enabled (never fall back to an unverified context).
+    tls_context = ssl.create_default_context(cafile=certifi.where())
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=tls_context),
+        _NoRedirect,
+    )
     current = _public_url(url)
     for _ in range(MAX_REDIRECTS + 1):
-        request = urllib.request.Request(current, headers={"User-Agent": USER_AGENT, "Accept": accept})
+        request_headers = {"User-Agent": USER_AGENT, "Accept": accept, **(headers or {})}
+        request = urllib.request.Request(current, headers=request_headers)
         try:
             response = opener.open(request, timeout=20)
         except urllib.error.HTTPError as exc:
@@ -84,6 +96,7 @@ class PageParser(HTMLParser):
         self.text: list[str] = []
         self.images: list[dict[str, str]] = []
         self.structured: list[Any] = []
+        self.scripts: list[str] = []
         self._capture: str | None = None
         self._buffer: list[str] = []
         self._json_ld = False
@@ -97,6 +110,8 @@ class PageParser(HTMLParser):
             self._capture, self._buffer = "text", []
         elif tag == "script" and attrs.get("type", "").lower() == "application/ld+json":
             self._capture, self._buffer, self._json_ld = "json", [], True
+        elif tag == "script" and attrs.get("src"):
+            self.scripts.append(attrs["src"])
         elif tag == "meta":
             key = (attrs.get("property") or attrs.get("name") or "").lower()
             content = attrs.get("content", "").strip()
@@ -162,6 +177,52 @@ def _structured_products(value: Any) -> list[dict]:
     return items
 
 
+def _spa_product(parser: PageParser, base: str) -> dict | None:
+    """Resolve a public product from a Supabase-backed SPA without running JS.
+
+    Some storefronts expose only an empty app shell but load a public product
+    row through Supabase. We inspect same-origin bundles for the public project
+    URL and anon token, then issue the exact read that the storefront performs.
+    The token is never persisted or returned.
+    """
+    match = re.search(r"/product/([0-9a-f-]{36})(?:/|$)", urllib.parse.urlsplit(base).path, re.I)
+    if not match:
+        return None
+    product_id = match.group(1)
+    page_host = urllib.parse.urlsplit(base).hostname
+    for script in parser.scripts[:8]:
+        script_url = urllib.parse.urljoin(base, script)
+        if urllib.parse.urlsplit(script_url).hostname != page_host:
+            continue
+        try:
+            raw, _resolved, _kind = _fetch(script_url, max_bytes=MAX_SCRIPT, accept="application/javascript,text/javascript")
+        except (OSError, ValueError, urllib.error.URLError):
+            continue
+        source = raw.decode("utf-8", errors="ignore")
+        credentials = re.search(
+            r'"(https://[a-z0-9-]+\.supabase\.co)".{0,300}?"(eyJ[A-Za-z0-9._-]{100,})"',
+            source,
+        )
+        if not credentials:
+            continue
+        endpoint, anon_key = credentials.groups()
+        query = urllib.parse.urlencode({"id": f"eq.{product_id}", "status": "eq.active", "select": "*"})
+        try:
+            payload, _url, _kind = _fetch(
+                f"{endpoint}/rest/v1/products?{query}", max_bytes=MAX_HTML, accept="application/json",
+                headers={"apikey": anon_key, "Authorization": f"Bearer {anon_key}"},
+            )
+            rows = json.loads(payload)
+        except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError):
+            continue
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            row = rows[0]
+            # Never return arbitrary embedded HTML/JS from a remote row.
+            return {key: value for key, value in row.items()
+                    if key not in {"landing_page_html", "custom_html", "custom_js"}}
+    return None
+
+
 def inspect_page(url: str, output_dir: Path) -> dict:
     html, final_url, content_type = _fetch(url, max_bytes=MAX_HTML, accept="text/html,application/xhtml+xml")
     if "html" not in content_type:
@@ -169,6 +230,24 @@ def inspect_page(url: str, output_dir: Path) -> dict:
     parser = PageParser()
     parser.feed(html.decode("utf-8", errors="replace"))
     base = final_url
+    spa_product = None
+    if not parser.text and not _structured_products(parser.structured):
+        spa_product = _spa_product(parser, base)
+        if spa_product:
+            name = spa_product.get("name_fa") or spa_product.get("name_en") or spa_product.get("name")
+            description = (spa_product.get("description_fa") or spa_product.get("description_en")
+                           or spa_product.get("description"))
+            normalized_product = {
+                "@type": "Product",
+                "name": name,
+                "description": description,
+                "sku": spa_product.get("sku"),
+                "category": spa_product.get("category"),
+                "offers": {"price": spa_product.get("price"), "currency": spa_product.get("currency")},
+                "images": spa_product.get("images") or spa_product.get("image") or [],
+            }
+            parser.structured.append({key: value for key, value in normalized_product.items() if value not in (None, "", [])})
+            parser.text.extend(str(value) for value in (name, description) if value)
     candidates = list(parser.images)
     for document in parser.structured:
         candidates.extend({"url": item, "alt": "structured product image"} for item in _walk_json_images(document))
