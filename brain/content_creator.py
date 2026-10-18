@@ -47,27 +47,8 @@ def _load_checkpoint(path: Path, signature: str, provider_name: str) -> dict:
 
 
 def _voice_provider() -> str:
-    content_tts = os.environ.get(
-        "CONTENT_TTS_PROVIDER", settings.CONTENT_TTS_PROVIDER
-    ).strip().lower()
-    if content_tts:
-        if content_tts not in ("sarovi", "azure", "edge-tts", "elevenlabs", "disabled"):
-            raise ValueError(
-                "CONTENT_TTS_PROVIDER must be sarovi, azure, edge-tts, elevenlabs, or disabled"
-            )
-        return content_tts
-    # TTS_PROVIDER is the current explicit narration contract. Keep an
-    # explicitly configured legacy Sarovi route working until it is migrated.
-    configured_tts = os.environ.get("TTS_PROVIDER", settings.TTS_PROVIDER).strip().lower()
-    if configured_tts not in ("sarovi", "azure", "edge-tts", "elevenlabs", "disabled"):
-        raise ValueError("TTS_PROVIDER must be sarovi, azure, edge-tts, elevenlabs, or disabled")
-    if os.environ.get("TTS_PROVIDER") is not None:
-        return configured_tts
-    configured = os.environ.get("CONTENT_VOICE_PROVIDER", settings.CONTENT_VOICE_PROVIDER).strip().lower()
-    if configured not in ("auto", "sarovi", "edge"):
-        raise ValueError("CONTENT_VOICE_PROVIDER must be auto, sarovi, or edge")
-    sarovi_configured = os.environ.get("SAROVI_API_KEY", "").strip()
-    return "sarovi" if configured == "sarovi" or (configured == "auto" and sarovi_configured) else "edge"
+    """All generated speech uses the same ElevenLabs route as Localize."""
+    return "elevenlabs"
 
 
 def _default_narration_voice(language: str) -> str:
@@ -79,14 +60,9 @@ def _default_narration_voice(language: str) -> str:
 
 
 def _default_elevenlabs_voice(language: str) -> str:
-    """Prefer an account voice trained in the requested narration language."""
-    normalized = language.lower().strip()
-    if normalized in {"fa", "per", "fas", "persian", "farsi"}:
-        return os.environ.get("CONTENT_TTS_ELEVENLABS_VOICE_FA", "").strip()
-    return os.environ.get(
-        "CONTENT_TTS_ELEVENLABS_VOICE_EN",
-        os.environ.get("ELEVENLABS_VOICE_ID", settings.ELEVENLABS_VOICE_ID),
-    ).strip()
+    """Return Localize's canonical ElevenLabs voice for every TTS surface."""
+    from .localize import tts_voice
+    return tts_voice()
 
 
 def create_content(
@@ -366,10 +342,11 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                 f"configured={bool(os.environ.get('AZURE_SPEECH_KEY', '').strip() and os.environ.get('AZURE_SPEECH_REGION', '').strip())}"
             )
         elif voice_provider == "elevenlabs":
+            from .localize import tts_model
             # The voice ID is safe checkpoint metadata; never persist the key.
             voice_settings = (
                 f"fa={_default_elevenlabs_voice('fa')}:"
-                f"en={_default_elevenlabs_voice('en')}"
+                f"en={_default_elevenlabs_voice('en')}:model={tts_model()}"
             )
         elif voice_provider in ("edge", "edge-tts"):
             voice_settings = (
@@ -404,7 +381,11 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                     if not isinstance(scene.narration_text, str) or not scene.narration_text.strip():
                         continue
                     try:
-                        if scene.index in cached_narration:
+                        if (
+                            scene.index in cached_narration
+                            and cached_narration[scene.index].get("narration_text")
+                            == scene.narration_text
+                        ):
                             record = cached_narration[scene.index]
                         else:
                             voice = scene.narration_voice.strip() if isinstance(scene.narration_voice, str) else "default"
@@ -417,10 +398,9 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                                 if voice_provider == "azure":
                                     voice_kwargs["fallback_voice_id"] = _default_elevenlabs_voice(storyboard.language)
                             elif voice_provider == "elevenlabs":
-                                voice_kwargs["voice_id"] = (
-                                    voice if voice and voice != "default"
-                                    else _default_elevenlabs_voice(storyboard.language)
-                                )
+                                from .localize import tts_model
+                                voice_kwargs["voice_id"] = _default_elevenlabs_voice(storyboard.language)
+                                voice_kwargs["model_id"] = tts_model()
                                 if not voice_kwargs["voice_id"]:
                                     if storyboard.language.lower().strip() in {
                                         "fa", "per", "fas", "persian", "farsi",
@@ -444,6 +424,7 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                                 )
                             record = {
                                 "scene_index": scene.index,
+                                "narration_text": scene.narration_text,
                                 "file_path": tts_result.file_path,
                                 "duration_s": tts_result.duration_s,
                                 "provider": getattr(tts_result, "provider", "") or voice_provider,

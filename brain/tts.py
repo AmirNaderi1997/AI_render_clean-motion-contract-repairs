@@ -163,7 +163,7 @@ def generate_narration(
     provider: str | None = None,
     fallback_voice_id: str = "",
 ) -> TTSResult:
-    """Generate narration; Azure can fall back to an explicit ElevenLabs voice."""
+    """Generate narration using the requested provider without silent substitution."""
     if not text.strip():
         raise ValueError("narration text is empty")
 
@@ -218,13 +218,8 @@ def generate_narration(
             log.info("generating narration with ElevenLabs")
             _generate_elevenlabs(text, str(out_file), voice_id=voice_id, model_id=model_id)
         except Exception as exc:
-            # ElevenLabs is commonly inaccessible in Iran. Edge remains a
-            # no-key fallback even when ElevenLabs is explicitly requested.
-            if "requires a paid plan for API use" in str(exc):
-                raise
-            log.warning("ElevenLabs narration failed (%s); falling back to edge-tts", exc)
             out_file.unlink(missing_ok=True)
-            provider = "edge-tts"
+            raise RuntimeError(f"ElevenLabs narration failed: {exc}") from exc
 
     if provider == "edge-tts":
         from aiohttp import ClientConnectionError

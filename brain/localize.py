@@ -425,12 +425,11 @@ def audio_duration(path: Path) -> float:
     return float(out or 0.0)
 
 
-VOICE_PROVIDERS = ("elevenlabs", "sarovi")
+VOICE_PROVIDERS = ("elevenlabs",)
 
 
 def default_voice_provider() -> str:
-    provider = os.environ.get("LOCALIZE_TTS_PROVIDER", "elevenlabs").strip().lower()
-    return provider if provider in VOICE_PROVIDERS else "elevenlabs"
+    return "elevenlabs"
 
 
 def elevenlabs_characters_left() -> Optional[int]:

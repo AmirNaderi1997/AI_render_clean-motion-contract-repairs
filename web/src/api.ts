@@ -329,7 +329,7 @@ export interface LocalizeProject {
   progress: number;
   cta_number: string;
   music: string | null;
-  voice_provider: "elevenlabs" | "sarovi";
+  voice_provider: "elevenlabs";
   caption_box?: LocalizeBoxColour | null;
   title_box?: LocalizeBoxColour | null;
   end_card?: boolean;

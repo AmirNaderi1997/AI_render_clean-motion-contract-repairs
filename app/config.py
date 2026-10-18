@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     CORRECTION_MODEL: str = ""
     VISION_PROVIDER: str = ""
     VISION_MODEL: str = "gpt-5-5-image"
-    CONTENT_VOICE_PROVIDER: str = "edge"
+    CONTENT_VOICE_PROVIDER: str = "elevenlabs"
     # Per-call Content Creator narration provider. When empty, the legacy
     # CONTENT_VOICE_PROVIDER/TTS_PROVIDER compatibility rules remain active.
     CONTENT_TTS_PROVIDER: str = ""
@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     TTS_VOICE_ID: str = ""
     # TTS_PROVIDER is deliberately independent of optional image/text providers.
     # Edge TTS works without an API key and is the default in restricted networks.
-    TTS_PROVIDER: str = "edge-tts"
+    TTS_PROVIDER: str = "elevenlabs"
     TTS_VOICE: str = "en-US-GuyNeural"
     TTS_RATE: str = "+0%"
     AZURE_SPEECH_KEY: str = ""

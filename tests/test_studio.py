@@ -15,6 +15,9 @@ from app.studio_orchestrator import _intent, _style
 from app.studio_tools import TOOLS, list_tools
 from app.studio_url import PageParser, _public_url, _structured_products, _walk_json_images
 from app.routers.studio import _public_event, _public_project
+from brain.content_creator import _default_elevenlabs_voice, _voice_provider
+from brain.localize import default_voice_provider, tts_model, tts_voice
+from app.jobs import Job, _job_from_local_payload
 
 
 def test_url_parser_reads_visible_product_content_and_all_image_sources():
@@ -64,6 +67,34 @@ def test_intent_routing_and_real_talking_style_selection():
     assert _intent("یک ادیت حرفه‌ای اینستاگرامی بزن", video, None) == "talking"
     assert _intent("از این عکس‌ها یک تیزر بساز", [{"kind": "image"}], None) == "motion"
     assert _style("سبک صحبتی ۳") == "talking_3"
+
+
+def test_every_tts_surface_uses_localize_elevenlabs(monkeypatch):
+    monkeypatch.setenv("CONTENT_TTS_PROVIDER", "sarovi")
+    monkeypatch.setenv("TTS_PROVIDER", "edge-tts")
+    monkeypatch.setenv("LOCALIZE_TTS_PROVIDER", "sarovi")
+    monkeypatch.setenv("LOCALIZE_VOICE_ID", "localize-voice")
+    monkeypatch.setenv("LOCALIZE_TTS_MODEL", "eleven-v3-test")
+
+    assert _voice_provider() == "elevenlabs"
+    assert default_voice_provider() == "elevenlabs"
+    assert _default_elevenlabs_voice("fa") == tts_voice() == "localize-voice"
+    assert _default_elevenlabs_voice("en") == "localize-voice"
+    assert tts_model() == "eleven-v3-test"
+
+
+def test_narration_cache_records_source_text():
+    source = Path(__file__).parents[1].joinpath("brain/content_creator.py").read_text()
+    assert 'cached_narration[scene.index].get("narration_text")' in source
+    assert '"narration_text": scene.narration_text' in source
+
+
+def test_local_job_registry_keeps_generated_motion_plan(tmp_path, monkeypatch):
+    from app import jobs
+    monkeypatch.setattr(jobs, "JOBS_ROOT", tmp_path)
+    original = Job(id="motion-job", dir=tmp_path / "motion-job", plan_data={"content_type": "reel", "segments": []})
+    restored = _job_from_local_payload(original.id, original.to_dict())
+    assert restored.plan_data == original.plan_data
 
 
 def test_fallback_store_persists_conversation_project_version_and_event(tmp_path, monkeypatch):

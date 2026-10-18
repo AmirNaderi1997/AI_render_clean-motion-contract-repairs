@@ -214,7 +214,6 @@ function ProjectEditor({ id, onChanged }: { id: string; onChanged: () => void })
             <label>صدای فارسی
               <select value={draft.voice_provider} disabled={busy} onChange={e => setDraft({ ...draft, voice_provider: e.target.value as LocalizeProject["voice_provider"] })}>
                 <option value="elevenlabs">ElevenLabs</option>
-                <option value="sarovi">Sarovi (Gemini TTS)</option>
               </select>
             </label>
             <label>رنگ کادر متن‌ها

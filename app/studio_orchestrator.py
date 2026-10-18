@@ -72,16 +72,12 @@ def _status_voice(conversation_id: str, seq: int, message: str) -> None:
     try:
         output = Path(jobstore.JOBS_ROOT) / "studio" / "status_audio" / conversation_id / str(seq)
         output.mkdir(parents=True, exist_ok=True)
-        from brain.content_creator import _voice_provider
-        provider = _voice_provider()
-        if provider == "disabled": return
-        if provider == "sarovi":
-            from brain.sarovi_voice import generate_narration
-            result = generate_narration(message[:350], output)
-        else:
-            from brain.tts import generate_narration
-            result = generate_narration(message[:350], output, provider=provider,
-                                        voice_id="fa-IR-DilaraNeural" if provider in {"azure", "edge", "edge-tts"} else "")
+        from brain.localize import tts_model, tts_voice
+        from brain.tts import generate_narration
+        result = generate_narration(
+            message[:350], output, provider="elevenlabs",
+            voice_id=tts_voice(), model_id=tts_model(),
+        )
         source = Path(result.file_path)
         target = output / ("status" + source.suffix)
         if source != target: source.replace(target)
@@ -346,7 +342,9 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
     conversation = await repo.get_conversation(conversation_id, user_key)
     for project in conversation.get("projects", []):
         ref = project.get("external_ref")
-        if not ref or project["status"] in {"canceled", "error"}: continue
+        # Failed engine jobs can be retried from their checkpoints. Re-observe
+        # them so a successful retry can recover the project and auto-render.
+        if not ref or project["status"] == "canceled": continue
         try:
             engine = project["engine"]
             if engine == "localize":
@@ -384,8 +382,13 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                 progress = job.render.progress if job.render.status in {"queued", "running", "done"} else None
                 output = f"/api/jobs/{ref}/exports/{job.render.output}" if job.render.status == "done" and job.render.output else None
                 status = {"generation": generation, "render": job.render.__dict__}
+            failure_message = ""
+            if raw_status == "error" and engine == "motion":
+                failure_message = str((status.get("generation") or {}).get("error") or status.get("message") or "")
+            elif isinstance(status, dict):
+                failure_message = str(status.get("message") or "")
             observed = {"status": raw_status, "stage": stage, "progress": progress, "output": output,
-                        "message": status.get("message", "") if isinstance(status, dict) else ""}
+                        "message": failure_message}
             if observed != project["state"].get("last_observed"):
                 state = {**project["state"], "last_observed": observed}
                 new_status = ("done" if output else "error" if raw_status == "error" else
@@ -394,7 +397,7 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                 event_type = "render.completed" if output else ("tool.failed" if raw_status == "error" else "tool.progress")
                 await repo.emit(conversation_id, event_type, {"project_id": project["id"], "engine": engine,
                     "status": raw_status, "stage": stage, "progress": progress,
-                    "message": _status_message(engine, raw_status, stage), "output_url": output})
+                    "message": failure_message or _status_message(engine, raw_status, stage), "output_url": output})
                 if output:
                     await repo.add_message(conversation_id, user_key, "assistant",
                         "ویدیو آماده شد. می‌توانید آن را پخش یا دانلود کنید و اصلاح بعدی را همین‌جا بگویید.")

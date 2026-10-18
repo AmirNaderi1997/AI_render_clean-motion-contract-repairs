@@ -119,7 +119,6 @@ class Job:
     def to_dict(self) -> dict:
         d = asdict(self)
         d["dir"] = str(self.dir)
-        d.pop("plan_data", None)
         return d
 
 
@@ -279,6 +278,7 @@ def _job_from_local_payload(job_id: str, payload: dict) -> Job:
         qc=QCState(**{k: qc.get(k, getattr(QCState(), k)) for k in QCState.__dataclass_fields__}),
         music=MusicState(**{k: music.get(k, getattr(MusicState(), k)) for k in MusicState.__dataclass_fields__}),
         versions=list(payload.get("versions") or []),
+        plan_data=payload.get("plan_data") if isinstance(payload.get("plan_data"), dict) else None,
     )
 
 

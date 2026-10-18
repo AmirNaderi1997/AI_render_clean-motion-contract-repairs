@@ -156,7 +156,7 @@ def update(project_id: str, changes: dict) -> dict:
         if "voice_provider" in changes:
             from brain.localize import VOICE_PROVIDERS
             if changes["voice_provider"] not in VOICE_PROVIDERS:
-                raise ValueError("voice provider must be elevenlabs or sarovi")
+                raise ValueError("voice provider must be elevenlabs")
             state["voice_provider"] = changes["voice_provider"]
         for key in ("caption_box", "title_box"):
             if key in changes:
@@ -419,7 +419,10 @@ def _render(project_id: str) -> None:
     _stage(project_id, "generating voice")
     clips = {}
     spoken = [l for l in state["lines"] if l["kind"] != "lyrics" and l.get("fa")]
-    provider = state.get("voice_provider") or text.default_voice_provider()
+    # Existing projects may still persist the former Sarovi choice. All new
+    # and resumed renders now use Localize's canonical ElevenLabs pipeline.
+    provider = text.default_voice_provider()
+    state["voice_provider"] = provider
     text.check_voice_budget([l["fa"] for l in spoken], provider, root / "tts")
     if provider == "elevenlabs":
         # One take for the whole narration, cut per line by character timings.
