@@ -106,7 +106,8 @@ def run_qc(
 
         issues = deterministic_checks(plan, frames, audio_clips)
 
-        if not issues and not skip_vision:
+        require_vision = (plan_data.get("generation_meta") or {}).get("renderer") == "remotion"
+        if not skip_vision and (not issues or require_vision):
             result.message = f"Round {round_num}: vision review…"
             _notify(on_status, result)
             try:
@@ -114,6 +115,13 @@ def run_qc(
                 issues.extend(vision_issues)
             except Exception as e:
                 log.warning("Vision QC review failed (continuing with deterministic checks): %s", e)
+                if require_vision:
+                    result.status = "needs_review"
+                    result.message = "Visual review could not finish; export is not approved"
+                    result.finished_at = time.time()
+                    _save_result(qc_dir, result)
+                    _notify(on_status, result)
+                    return result
 
         rd.issues = [iss.to_dict() for iss in issues]
         result.total_issues += len(issues)
@@ -149,7 +157,7 @@ def run_qc(
         if not changes:
             rd.finished_at = time.time()
             result.rounds.append(rd)
-            result.status = "done"
+            result.status = "needs_review" if any(issue.severity == "error" for issue in issues) else "done"
             result.message = f"Round {round_num}: {len(issues)} issue(s) found but no auto-fixes available"
             result.finished_at = time.time()
             _save_result(qc_dir, result)
@@ -164,7 +172,9 @@ def run_qc(
         if round_num == MAX_ROUNDS:
             break
 
-    result.status = "done"
+    # Patches above are proposals, not verified rendered fixes. Never report
+    # success until the patched render has actually been inspected.
+    result.status = "needs_review"
     result.message = f"QC complete after {result.current_round} round(s): {result.total_issues} issue(s), {result.fixed_issues} fixed"
     result.finished_at = time.time()
     _save_result(qc_dir, result)

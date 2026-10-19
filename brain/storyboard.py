@@ -27,6 +27,7 @@ class Scene:
     # Job-relative, server-controlled path. Never accept this value directly
     # from an LLM or a public API request.
     source_asset: str = ""
+    source_asset_index: int | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -280,6 +281,7 @@ def generate_storyboard(
             media_method=media_method,
             media_prompt=s.get("media_prompt", ""),
             estimated_cost=float(s.get("estimated_cost", 0.05)),
+            source_asset_index=s.get("source_asset_index") if type(s.get("source_asset_index")) is int else None,
         ))
 
     total_dur = sum(s.duration_s for s in scenes)

@@ -85,6 +85,11 @@ def create_content(
     content_llm_provider = os.environ.get(
         "CONTENT_LLM_PROVIDER", settings.CONTENT_LLM_PROVIDER
     ).strip().lower()
+    asset_catalog = []
+    if source_assets:
+        from brain.product_assets import inspect_assets, catalog_prompt
+        asset_catalog = inspect_assets([Path(item).resolve() for item in source_assets[:20]], prompt)
+        prompt += catalog_prompt(asset_catalog)
     storyboard = generate_storyboard(
         prompt, ct, language, style, brief,
         provider_name=content_llm_provider or None,
@@ -99,7 +104,10 @@ def create_content(
         import shutil
         asset_dir = generated_dir / "source_assets"
         asset_dir.mkdir(exist_ok=True)
+        asset_map = {}
         for index, original in enumerate(source_assets[:20]):
+            if asset_catalog and index not in {row["index"] for row in asset_catalog}:
+                continue
             source = Path(original).resolve()
             if not source.is_file():
                 continue
@@ -109,11 +117,14 @@ def create_content(
             target = asset_dir / f"asset_{index + 1:02d}{suffix}"
             shutil.copy2(source, target)
             safe_assets.append(str(target.relative_to(job.dir)))
+            asset_map[index] = safe_assets[-1]
         if not safe_assets:
             raise ValueError("No valid source images were supplied")
         for index, scene in enumerate(storyboard.scenes):
             scene.media_method = "upload"
-            scene.source_asset = safe_assets[index % len(safe_assets)]
+            scene.source_asset = asset_map.get(scene.source_asset_index, safe_assets[index % len(safe_assets)])
+    if asset_catalog:
+        (generated_dir / "asset_catalog.json").write_text(json.dumps(asset_catalog, ensure_ascii=False, indent=2))
 
     storyboard_path = job.dir / "storyboard.json"
     storyboard_path.write_text(
@@ -456,8 +467,10 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                     warnings.append(f"Calm music generation failed: {exc}")
         try:
             from .asset_match import music_match
+            from engine.library import scan_category
             from engine.probe import probe
-            for asset in ([] if background_music_path else music_match(top_n=5)):
+            music_candidates = [] if background_music_path else (music_match(top_n=5) or scan_category("music"))
+            for asset in music_candidates:
                 candidate = Path(asset.path)
                 if not candidate.is_absolute():
                     candidate = PROJECT_ROOT / candidate
@@ -489,6 +502,12 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         plan_data["generation_meta"]["warnings"] = warnings
         plan_data["generation_meta"]["voice_provider"] = voice_provider if narration_segments else None
         plan_data["generation_meta"]["music_source"] = music_source
+        if not preset["is_static"] and all(scene.media_method == "upload" for scene in storyboard.scenes):
+            from engine.remotion_renderer import scene_config
+            plan_data["generation_meta"]["renderer"] = "remotion"
+            plan_data["generation_meta"]["remotion"] = scene_config(
+                storyboard, generated_media, narration_segments, job.dir, background_music_path,
+            )
         if music_source == "sarovi_lyria" and plan_data.get("music"):
             plan_data["music"]["volume_db"] = -18.0
         job.plan_data = plan_data

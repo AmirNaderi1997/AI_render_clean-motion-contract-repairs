@@ -1196,13 +1196,20 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
         job.render.message = "rendering"
         if CELERY_AVAILABLE:
             _write_status(job)
-        run_render(
-            mlt, out_path, preview=preview, style_name=plan.style,
-            style_override=style_override, crf_override=plan.export.crf,
-            on_progress=report, apply_loudnorm=loudnorm,
-        )
+        motion_config = (data.get("generation_meta") or {}).get("remotion")
+        if motion_config:
+            from engine.remotion_renderer import render as render_motion
+            job.render.message = "rendering motion scenes"
+            _write_status(job)
+            render_motion(motion_config, out_path, job_dir=job.dir, on_progress=report)
+        else:
+            run_render(
+                mlt, out_path, preview=preview, style_name=plan.style,
+                style_override=style_override, crf_override=plan.export.crf,
+                on_progress=report, apply_loudnorm=loudnorm,
+            )
 
-        if plan.poster:
+        if plan.poster and not motion_config:
             job.render.message = "adding poster to video"
             poster_path = out_path.with_name(out_path.stem + "_poster.jpg")
             export_poster(
@@ -1223,14 +1230,24 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
         except (TypeError, ValueError):
             preview_scale = 0.5
         preview_scale = min(1.0, max(0.1, preview_scale))
-        expected_width = max(2, int(plan.canvas.width * preview_scale) & ~1) if preview else plan.canvas.width
-        expected_height = max(2, int(plan.canvas.height * preview_scale) & ~1) if preview else plan.canvas.height
+        expected_width = max(2, int(plan.canvas.width * preview_scale) & ~1) if preview and not motion_config else plan.canvas.width
+        expected_height = max(2, int(plan.canvas.height * preview_scale) & ~1) if preview and not motion_config else plan.canvas.height
         job.render.message = "checking export"
         job.render.technical_qc = inspect_export(
             out_path, width=expected_width, height=expected_height,
             fps=plan.canvas.fps, duration=plan.output_duration,
-            target_lufs=float(render_cfg.get("loudness_lufs", -14)) if loudnorm else None,
+            target_lufs=float(render_cfg.get("loudness_lufs", -14)) if loudnorm and not motion_config else None,
         )
+
+        if motion_config:
+            from brain.qc_pipeline import run_qc
+            job.render.message = "reviewing motion scenes"
+            _write_status(job)
+            quality = run_qc(job.dir, out_path, data)
+            if quality.status != "done" or any(
+                issue.get("severity") == "error" for rd in quality.rounds for issue in rd.issues
+            ):
+                raise ValueError("Motion quality review needs attention: " + quality.message)
 
         job.render.output = out_name
         job.render.plan_sha256 = render_plan_sha256

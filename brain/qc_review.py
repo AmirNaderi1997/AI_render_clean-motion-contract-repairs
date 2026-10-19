@@ -246,7 +246,6 @@ def vision_review(
     if not selected:
         return []
 
-    image_paths = [f["path"] for f in selected]
     time_labels = ", ".join(f"{f['time']:.1f}s ({f['label']})" for f in selected)
 
     system = (
@@ -254,6 +253,7 @@ def vision_review(
         "For each issue found, output a JSON object with:\n"
         '  frame_index (0-based), type (one of: bad_framing, low_quality, caption_readability),\n'
         '  severity ("error" or "warning"), description (brief), suggested_fix (brief)\n'
+        "Frames are shown in a labeled contact sheet; use the printed FRAME index. "
         "Output a JSON array of issues. Empty array if all frames look good."
     )
     user = (
@@ -264,11 +264,29 @@ def vision_review(
     )
 
     try:
-        result, _usage = chat_vision(
-            system, user, images=image_paths,
-            return_json=True, max_tokens=2048,
-            timeout_seconds=180,
-        )
+        # Keep image payload below relay body limits instead of sending many
+        # full-resolution JPEGs (which previously failed with HTTP 413).
+        from tempfile import TemporaryDirectory
+        from PIL import Image, ImageDraw, ImageOps
+        with TemporaryDirectory(prefix="editorgpt-qc-") as temporary:
+            sheet = Image.new("RGB", (640, ((len(selected)+1)//2)*590), "white")
+            draw = ImageDraw.Draw(sheet)
+            for index, frame in enumerate(selected):
+                x, y = (index % 2)*320, (index//2)*590
+                with Image.open(frame["path"]) as image:
+                    thumbnail = ImageOps.contain(image.convert("RGB"), (310, 555))
+                    sheet.paste(thumbnail, (x+(320-thumbnail.width)//2, y+25))
+                draw.text((x+5,y+5), f"FRAME {index} @ {frame['time']:.1f}s", fill="black")
+            target = Path(temporary) / "frames.jpg"
+            sheet.save(target, quality=45, optimize=True)
+            while target.stat().st_size > 45_000:
+                sheet = sheet.resize((round(sheet.width*.85), round(sheet.height*.85)))
+                sheet.save(target, quality=45, optimize=True)
+            result, _usage = chat_vision(
+                system, user, images=[str(target)],
+                return_json=True, max_tokens=2048,
+                timeout_seconds=180,
+            )
         if not isinstance(result, list):
             raise ValueError("vision reviewer returned a non-list JSON response")
 

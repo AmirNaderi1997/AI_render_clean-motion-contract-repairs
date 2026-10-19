@@ -248,14 +248,24 @@ def inspect_page(url: str, output_dir: Path) -> dict:
             }
             parser.structured.append({key: value for key, value in normalized_product.items() if value not in (None, "", [])})
             parser.text.extend(str(value) for value in (name, description) if value)
-    candidates = list(parser.images)
+    # Product evidence outranks site-wide social previews (often a screenshot
+    # of the SaaS homepage rather than the requested product).
+    candidates = []
     for document in parser.structured:
-        candidates.extend({"url": item, "alt": "structured product image"} for item in _walk_json_images(document))
+        candidates.extend({"url": item, "alt": "structured product image", "role": "product"} for item in _walk_json_images(document))
+    if spa_product:
+        embedded = PageParser()
+        embedded.feed(str(spa_product.get("description_en") or spa_product.get("description") or ""))
+        candidates.extend({**item, "role": "product"} for item in embedded.images)
+    candidates.extend(item for item in parser.images if item.get("alt") != "social preview")
+    if not candidates and not _structured_products(parser.structured):
+        candidates.extend(parser.images)
 
     image_dir = output_dir / "url_images"
     image_dir.mkdir(parents=True, exist_ok=True)
     images: list[dict] = []
     seen: set[str] = set()
+    seen_content: set[str] = set()
     for candidate in candidates:
         if len(images) >= 12:
             break
@@ -267,6 +277,10 @@ def inspect_page(url: str, output_dir: Path) -> dict:
             raw, resolved, media_type = _fetch(absolute, max_bytes=MAX_IMAGE, accept="image/*")
             if not media_type.startswith("image/"):
                 continue
+            import hashlib
+            digest = hashlib.sha256(raw).hexdigest()
+            if digest in seen_content:
+                continue
             suffix = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(media_type, ".img")
             path = image_dir / f"image_{len(images) + 1:02d}{suffix}"
             path.write_bytes(raw)
@@ -277,7 +291,8 @@ def inspect_page(url: str, output_dir: Path) -> dict:
             if width < 280 or height < 280:
                 path.unlink(missing_ok=True)
                 continue
-            images.append({"url": resolved, "file": str(path), "alt": candidate.get("alt", "")[:300], "width": width, "height": height})
+            seen_content.add(digest)
+            images.append({"url": resolved, "file": str(path), "alt": candidate.get("alt", "")[:300], "width": width, "height": height, "role": candidate.get("role", "page_image"), "sha256": digest})
         except (OSError, ValueError, urllib.error.URLError):
             continue
 

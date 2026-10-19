@@ -101,8 +101,8 @@ def still_to_motion_video(
     frames = max(1, round(duration_s * fps))
     out_path = output_dir / f"motion_{generation_id}.mp4"
     zoom_filter = (
-        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height},"
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0xf4f4f1,"
         f"zoompan=z='min(1+0.0002*on,1.08)':"
         f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
         f"d={frames}:s={width}x{height}:fps={fps},format=yuv420p"

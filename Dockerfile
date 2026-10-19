@@ -3,6 +3,11 @@ WORKDIR /build
 COPY requirements.lock .
 RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requirements.lock
 
+FROM node:22-bookworm-slim AS motion
+WORKDIR /motion
+COPY remotion/package*.json ./
+RUN npm ci
+
 FROM python:3.12-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,6 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
     fonts-dejavu-core \
+    chromium \
+    nodejs \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -19,6 +26,9 @@ WORKDIR /app
 ENV PYTHONPATH=/app PATH=/opt/venv/bin:$PATH PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=motion /motion/node_modules /app/remotion/node_modules
+COPY remotion/ remotion/
+ENV REMOTION_BROWSER_EXECUTABLE=/usr/bin/chromium REMOTION_CONCURRENCY=2
 
 COPY app/ app/
 COPY brain/ brain/
