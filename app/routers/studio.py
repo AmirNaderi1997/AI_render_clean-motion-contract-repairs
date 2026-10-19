@@ -262,7 +262,9 @@ async def stream_events(request: Request, conversation_id: str,
             else:
                 idle += 1
                 if idle % 15 == 0: yield ": keep-alive\n\n"
-            await asyncio.sleep(1)
+            # Two seconds is responsive enough for user-facing progress while
+            # avoiding a database poll storm across several open browser tabs.
+            await asyncio.sleep(2)
     return StreamingResponse(generate(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
