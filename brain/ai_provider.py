@@ -1,7 +1,6 @@
 """Unified text-intelligence providers for planning and content creation.
 
-Arvan AI is the primary hosted provider. Legacy Jarvis and Sarovi classes are
-kept only for old saved jobs that explicitly name them.
+Arvan AI is the only hosted intelligence provider.
 Media generation and vision-specific clients remain separate concerns.
 """
 from __future__ import annotations
@@ -24,8 +23,6 @@ from .llm import LLMUsage, _extract_json
 log = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
-_DEFAULT_JARVIS_URL = "https://api.jarvis.you/v1"
-_DEFAULT_SAROVI_URL = "https://api.sarovi.ir/v1"
 _DEFAULT_ARVAN_URL = "https://aiapi.rafiei.co/v1"
 
 
@@ -339,21 +336,7 @@ class ArvanProvider(_ExternalProvider):
         return _extract_json(text), usage
 
     def _chat_json(self, system: str, user: str) -> tuple[dict, LLMUsage]:
-        try:
-            return self._arvan_chat_json(system, user)
-        except Exception as exc:
-            if not _config("GEMINI_API_KEY"):
-                raise
-            log.warning("Arvan AI request failed; using Gemini fallback: %s", exc)
-            from .llm import _gemini_call
-            return _gemini_call(
-                system,
-                user,
-                _config("GEMINI_MODEL", default="gemini-3.5-flash-lite"),
-                16000,
-                0,
-                _timeout_seconds(),
-            )
+        return self._arvan_chat_json(system, user)
 
     def generate_plan(self, video_metadata: dict, transcript: dict) -> tuple[dict, LLMUsage]:
         system = str(video_metadata.get("system_prompt") or "Return a valid edit plan as JSON.")
@@ -384,157 +367,8 @@ class ArvanProvider(_ExternalProvider):
         )
 
 
-class JarvisProvider(_ExternalProvider):
-    name = "jarvis"
-    configured = True
-
-    def __init__(self) -> None:
-        self.api_key = _config("JARVIS_API_KEY")
-        self.api_url = (_config("JARVIS_API_URL", "JARVIS_BASE_URL",
-                                default=_DEFAULT_JARVIS_URL) or _DEFAULT_JARVIS_URL)
-        self.model = _config("JARVIS_MODEL", default="DEEPSEEK_V4_FLASH") or "DEEPSEEK_V4_FLASH"
-
-    def _chat_json(self, system: str, user: str) -> tuple[dict, LLMUsage]:
-        started = time.monotonic()
-        result = _post_json(
-            _endpoint(self.api_url, "chat/completions"),
-            {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "temperature": 0,
-            },
-            self.api_key,
-            _timeout_seconds(),
-        )
-        choices = result.get("choices") or []
-        if not choices or not isinstance(choices[0], dict):
-            raise RuntimeError("Jarvis returned no completion choices")
-        message = choices[0].get("message") or {}
-        text = message.get("content") if isinstance(message, dict) else ""
-        if not isinstance(text, str) or not text.strip():
-            raise RuntimeError("Jarvis returned no text")
-        reported = result.get("usage") or {}
-        usage = LLMUsage(
-            input_tokens=int(reported.get("prompt_tokens") or reported.get("input_tokens") or 0),
-            output_tokens=int(reported.get("completion_tokens") or reported.get("output_tokens") or 0),
-            model=str(result.get("model") or self.model),
-            elapsed_sec=round(time.monotonic() - started, 2),
-        )
-        return _extract_json(text), usage
-
-    def generate_plan(self, video_metadata: dict, transcript: dict) -> tuple[dict, LLMUsage]:
-        system = str(video_metadata.get("system_prompt") or "Return a valid edit plan as JSON.")
-        user = str(video_metadata.get("user_prompt") or json.dumps(transcript, ensure_ascii=False))
-
-        def sarovi_or_local(local: LocalFallbackProvider) -> tuple[dict, LLMUsage]:
-            if _config("SAROVI_API_KEY"):
-                try:
-                    log.warning("Jarvis plan generation unavailable; trying configured Sarovi provider")
-                    return SaroviProvider()._responses_json(system, user)
-                except Exception as exc:
-                    log.warning("Sarovi plan failover also failed (%s); using local fallback", exc)
-                    local = LocalFallbackProvider(
-                        f"Jarvis unavailable and Sarovi failover failed: {exc}"[:300]
-                    )
-            return local.generate_plan(video_metadata, transcript)
-
-        return self._with_fallback(
-            "plan generation",
-            lambda: self._chat_json(system, user),
-            sarovi_or_local,
-        )
-
-    def generate_storyboard(self, prompt: Any, style: Any) -> tuple[dict, LLMUsage]:
-        system, user, context = _prompt_parts(prompt, style, "Return a storyboard as JSON.")
-        return self._with_fallback(
-            "storyboard generation",
-            lambda: self._chat_json(system, user),
-            lambda local: local.generate_storyboard(prompt, context),
-        )
-
-    def suggest_edits(self, scene: dict, context: dict) -> tuple[dict, LLMUsage]:
-        system = str(context.get("system_prompt") or "Suggest concrete render edits as JSON.")
-        user = str(context.get("user_prompt") or json.dumps({"scene": scene, "context": context}, ensure_ascii=False))
-        return self._with_fallback(
-            "edit suggestion",
-            lambda: self._chat_json(system, user),
-            lambda local: local.suggest_edits(scene, context),
-        )
-
-
-class SaroviProvider(_ExternalProvider):
-    name = "sarovi"
-    configured = True
-
-    def __init__(self) -> None:
-        self.api_key = _config("SAROVI_API_KEY")
-        self.api_url = _config("SAROVI_API_URL", default=_DEFAULT_SAROVI_URL) or _DEFAULT_SAROVI_URL
-        self.model = _config(
-            "SAROVI_LLM_MODEL",
-            default=settings.SAROVI_LLM_MODEL,
-        ) or settings.SAROVI_LLM_MODEL
-
-    def _responses_json(self, system: str, user: str) -> tuple[dict, LLMUsage]:
-        started = time.monotonic()
-        result = _post_json(
-            _endpoint(self.api_url, "responses"),
-            {
-                "model": self.model,
-                "instructions": system,
-                "input": user,
-                "max_output_tokens": 16000,
-            },
-            self.api_key,
-            _timeout_seconds(),
-        )
-        from .sarovi import response_output_text
-        text = response_output_text(result)
-        if not isinstance(text, str) or not text.strip():
-            raise RuntimeError("Sarovi returned no text")
-        reported = result.get("usage") or {}
-        usage = LLMUsage(
-            input_tokens=int(reported.get("input_tokens") or 0),
-            output_tokens=int(reported.get("output_tokens") or 0),
-            model=str(result.get("model") or self.model),
-            elapsed_sec=round(time.monotonic() - started, 2),
-        )
-        return _extract_json(text), usage
-
-    def generate_plan(self, video_metadata: dict, transcript: dict) -> tuple[dict, LLMUsage]:
-        system = str(video_metadata.get("system_prompt") or "Return a valid edit plan as JSON.")
-        user = str(video_metadata.get("user_prompt") or json.dumps(transcript, ensure_ascii=False))
-        return self._with_fallback(
-            "plan generation",
-            lambda: self._responses_json(system, user),
-            lambda local: local.generate_plan(video_metadata, transcript),
-        )
-
-    def generate_storyboard(self, prompt: Any, style: Any) -> tuple[dict, LLMUsage]:
-        system, user, context = _prompt_parts(prompt, style, "Return a storyboard as JSON.")
-        return self._with_fallback(
-            "storyboard generation",
-            lambda: self._responses_json(system, user),
-            lambda local: local.generate_storyboard(prompt, context),
-        )
-
-    def suggest_edits(self, scene: dict, context: dict) -> tuple[dict, LLMUsage]:
-        reason = "Sarovi edit suggestions are not configured; using local templates"
-        log.info(reason)
-        return LocalFallbackProvider(reason).suggest_edits(scene, context)
-
-
 def get_provider(provider_name: str | None = None) -> AIProvider:
-    provider = (provider_name or _config("LLM_PROVIDER", default="")).strip().lower()
-    if provider == "arvan" and _config("ARVAN_AI_API_KEY"):
-        return ArvanProvider()
-    if provider == "jarvis" and _config("JARVIS_API_KEY"):
-        return JarvisProvider()
-    if provider == "sarovi" and _config("SAROVI_API_KEY"):
-        return SaroviProvider()
-    return LocalFallbackProvider()
+    return ArvanProvider()
 
 
 def provider_status() -> dict[str, Any]:

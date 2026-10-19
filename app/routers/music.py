@@ -175,26 +175,7 @@ async def generate_music(job_id: str, body: GenerateMusicBody):
     job = jobstore.get(job_id)
     if not job:
         raise HTTPException(404, "job not found")
-    from brain.sarovi_music import MusicGenerationError, generate_clip
-    from engine.probe import probe
-    try:
-        audio = await asyncio.to_thread(generate_clip, body.prompt)
-    except MusicGenerationError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    with tempfile.NamedTemporaryFile(suffix=".mp3") as pending:
-        pending.write(audio)
-        pending.flush()
-        try:
-            metadata = probe(Path(pending.name))
-            if not any(s.get("codec_type") == "audio" for s in metadata.get("streams", [])):
-                raise ValueError("no audio stream")
-            if float(metadata.get("format", {}).get("duration", 0)) <= 0:
-                raise ValueError("no playable duration")
-        except Exception as exc:
-            raise HTTPException(502, "Sarovi returned audio that cannot be played") from exc
-    name = f"sarovi_lyria_{uuid.uuid4().hex[:8]}.mp3"
-    dst = jobstore.save_music(job, name, io.BytesIO(audio))
-    return {"ok": True, "path": f"music/{dst.name}"}
+    raise HTTPException(422, "AI music generation is not configured on Arvan. Choose an existing music track or upload one.")
 
 
 def _music_status(job) -> dict:

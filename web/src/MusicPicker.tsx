@@ -12,7 +12,6 @@ export function MusicPicker({ jobId, file, onSelect }: {
   const [busy, setBusy] = React.useState(false);
   const [loadingTracks, setLoadingTracks] = React.useState(true);
   const [error, setError] = React.useState("");
-  const [prompt, setPrompt] = React.useState("");
   React.useEffect(() => {
     api.getLibrary().then(data => setTracks(data.assets.filter(asset => asset.category === "music")))
       .catch(e => setError(friendlyError(e, "load the music library")))
@@ -46,18 +45,6 @@ export function MusicPicker({ jobId, file, onSelect }: {
     } finally { setBusy(false); }
   }
 
-  async function generate() {
-    if (!prompt.trim()) { setError("Describe the music first."); return; }
-    setBusy(true);
-    setError("");
-    try {
-      const result = await api.generateMusic(jobId, prompt.trim());
-      onSelect(result.path);
-    } catch (e: any) {
-      setError(friendlyError(e, "generate the music"));
-    } finally { setBusy(false); }
-  }
-
   return <div style={{ marginBottom: 12 }}>
     <div className="row" style={{ gap: 12 }}>
       <label>Music library / کتابخانه موسیقی
@@ -72,18 +59,8 @@ export function MusicPicker({ jobId, file, onSelect }: {
           onChange={e => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value = ""; }} />
       </label>
     </div>
-    <div className="row" style={{ gap: 12, alignItems: "end", marginTop: 10 }}>
-      <label style={{ flex: 1 }}>Generate music with Sarovi / ساخت موسیقی با ساروی
-        <input type="text" value={prompt} maxLength={4000} disabled={busy}
-          placeholder="Calm instrumental piano, slow tempo, hopeful mood, no vocals"
-          onChange={e => setPrompt(e.target.value)} />
-      </label>
-      <button type="button" disabled={busy || !prompt.trim()} title={(busy || !prompt.trim()) ? "Enter a prompt first." : undefined} onClick={() => void generate()}>
-        Generate 30-second clip
-      </button>
-    </div>
     {busy && <p className="muted" role="status">Preparing music…</p>}
-    {!loadingTracks && !tracks.length && <p className="muted">No saved tracks yet. Upload a file or generate a clip below.</p>}
+    {!loadingTracks && !tracks.length && <p className="muted">No saved tracks yet. Upload a music file.</p>}
     {preview && <AuthenticatedMedia as="audio" controls src={preview} style={{ width: "100%", marginTop: 8 }} />}
     <p className="muted">Save and render a preview to hear the music mixed with the video. Voiceover stays on its own track.</p>
     {error && <div className="errors" role="alert">{error}</div>}

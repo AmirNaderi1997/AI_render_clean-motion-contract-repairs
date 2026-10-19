@@ -208,7 +208,7 @@ class LocalFixtureProvider(ProviderAdapter):
         )
 
 
-class JarvisImageProvider(ProviderAdapter):
+class ArvanImageProvider(ProviderAdapter):
     """Generate stills with the configured OpenAI-compatible image endpoint.
 
     Reels and Stories use those generated stills as short, gently animated
@@ -217,7 +217,7 @@ class JarvisImageProvider(ProviderAdapter):
     response does not include billing data.
     """
 
-    name = "jarvis_image"
+    name = "arvan_image"
 
     @property
     def capabilities(self) -> list[str]:
@@ -225,26 +225,17 @@ class JarvisImageProvider(ProviderAdapter):
 
     @property
     def has_key(self) -> bool:
-        return bool(
-            os.environ.get("IMAGE_API_KEY")
-            or os.environ.get("JARVIS_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-        )
+        from app.config import settings
+        return bool(settings.ARVAN_AI_API_KEY and settings.ARVAN_IMAGE_MODEL)
 
     @staticmethod
     def _client_config() -> tuple[str, Optional[str], str]:
-        api_key = (os.environ.get("IMAGE_API_KEY") or os.environ.get("JARVIS_API_KEY")
-                   or os.environ.get("OPENAI_API_KEY") or "")
-        if not api_key:
-            raise RuntimeError("Set IMAGE_API_KEY, JARVIS_API_KEY, or OPENAI_API_KEY to use jarvis_image")
-
-        base_url = (os.environ.get("IMAGE_BASE_URL") or os.environ.get("JARVIS_BASE_URL")
-                    or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
-        if base_url.endswith("/images"):
-            base_url = base_url[:-len("/images")]
-        model = os.environ.get("IMAGE_MODEL", "").strip()
-        if not model:
-            raise RuntimeError("IMAGE_MODEL is not configured for jarvis_image")
+        from app.config import settings
+        api_key = settings.ARVAN_AI_API_KEY
+        base_url = settings.ARVAN_AI_API_BASE.rstrip("/")
+        model = settings.ARVAN_IMAGE_MODEL
+        if not api_key or not model:
+            raise RuntimeError("Arvan image generation requires ARVAN_IMAGE_MODEL and credentials; upload real images instead")
         return api_key, base_url, model
 
     def generate_image(self, prompt: str, aspect: str, output_dir: Path) -> MediaResult:
@@ -253,8 +244,6 @@ class JarvisImageProvider(ProviderAdapter):
         output_dir.mkdir(parents=True, exist_ok=True)
         api_key, base_url, model = self._client_config()
 
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key, base_url=base_url, timeout=180, max_retries=0)
         aspect_note = {
             "9:16": (
                 "Create one continuous photograph composed for a central vertical 9:16 crop "
@@ -269,35 +258,25 @@ class JarvisImageProvider(ProviderAdapter):
             f"{prompt.strip()}\n\n{aspect_note} Do not add captions, lettering, "
             "logos, or legible text on paper, clothing, signs, or screens."
         )
-        fallback_model = os.environ.get("IMAGE_FALLBACK_MODEL", "").strip()
-        if not fallback_model and "api.jarvis.you" in base_url:
-            fallback_model = "gemini-3-1-flash-image"
-        try:
-            response = client.images.generate(
-                model=model, prompt=request_prompt, size="1024x1024", n=1,
-            )
-            selected_model = model
-        except Exception as exc:
-            status_code = getattr(exc, "status_code", None)
-            recoverable = isinstance(status_code, int) and status_code >= 500
-            if not recoverable or not fallback_model or fallback_model == model:
-                raise
-            log.warning(
-                "image model %s failed with %s; retrying once with %s",
-                model, f"HTTP {status_code}" if status_code else type(exc).__name__,
-                fallback_model,
-            )
-            response = client.images.generate(
-                model=fallback_model, prompt=request_prompt, size="1024x1024", n=1,
-            )
-            selected_model = fallback_model
-        entries = getattr(response, "data", None) or []
-        entry = entries[0] if entries else None
-        encoded = getattr(entry, "b64_json", None) if entry is not None else None
-        if isinstance(entry, dict):
-            encoded = entry.get("b64_json")
-        if not isinstance(encoded, str) or not encoded:
-            raise RuntimeError("image provider returned no base64 image data")
+        from .llm import _arvan_request
+        response = _arvan_request({
+            "model": model,
+            "messages": [{"role": "user", "content": request_prompt}],
+            "modalities": ["image", "text"],
+            "max_tokens": 1000,
+        }, timeout_seconds=180)
+        choices = response.get("choices") or []
+        message = choices[0].get("message", {}) if choices else {}
+        images = message.get("images") or []
+        if not images and isinstance(message.get("content"), list):
+            images = [part for part in message["content"] if part.get("type") == "image_url"]
+        data_url = (images[0].get("image_url") or {}).get("url", "") if images else ""
+        if not isinstance(data_url, str) or not data_url.startswith(("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,")):
+            raise RuntimeError("Arvan returned no inline image; no placeholder was substituted")
+        encoded = data_url.split(",", 1)[1]
+        if len(encoded) > 40 * 1024 * 1024:
+            raise RuntimeError("Arvan returned an oversized image")
+        selected_model = model
 
         import base64
         try:
@@ -306,16 +285,16 @@ class JarvisImageProvider(ProviderAdapter):
             image = Image.open(io.BytesIO(image_bytes))
             image.load()
             width, height = image.size
-            out_path = output_dir / f"jarvis_{uuid.uuid4().hex[:12]}.png"
+            out_path = output_dir / f"arvan_{uuid.uuid4().hex[:12]}.png"
             image.convert("RGB").save(out_path, format="PNG")
         except Exception as exc:
             raise RuntimeError(f"image provider returned an invalid image: {exc}") from exc
 
         return MediaResult(
             file_path=str(out_path),
-            source="jarvis_image",
+            source="arvan_image",
             cost_usd=None,
-            generation_id=out_path.stem.removeprefix("jarvis_"),
+            generation_id=out_path.stem.removeprefix("arvan_"),
             width=width,
             height=height,
             metadata={"prompt": prompt, "model": selected_model,
@@ -329,101 +308,9 @@ class JarvisImageProvider(ProviderAdapter):
         return still_to_motion_video(
             still.file_path, output_dir, duration, aspect,
             generation_id=still.generation_id, cost_usd=still.cost_usd,
-            source="jarvis_image_motion", metadata=still.metadata,
+            source="arvan_image_motion", metadata=still.metadata,
         )
 
-
-class SaroviImageProvider(ProviderAdapter):
-    """Generate editable content stills with a selected Sarovi image model."""
-
-    def __init__(self, name: str, model: str, *, quality: str = "medium",
-                 fallback_models: tuple[str, ...] = ()):
-        self.name = name
-        self.model = model
-        self.quality = quality
-        self.fallback_models = fallback_models
-
-    @property
-    def capabilities(self) -> list[str]:
-        return ["image", "motion_video_from_image"]
-
-    @property
-    def has_key(self) -> bool:
-        return bool(os.getenv("SAROVI_API_KEY", "").strip())
-
-    def generate_image(self, prompt: str, aspect: str, output_dir: Path) -> MediaResult:
-        import base64
-        import binascii
-        from PIL import Image
-        from .sarovi import request
-
-        if not isinstance(prompt, str) or len(prompt.strip()) < 3:
-            raise ValueError("image prompt must contain at least three characters")
-        if aspect not in ("9:16", "1:1", "16:9", "4:5"):
-            raise ValueError("unsupported image aspect ratio")
-        request_prompt = (
-            prompt.strip() + "\nDo not add captions, lettering, logos, or legible text; "
-            "the caption layer is rendered separately."
-        )
-        if len(request_prompt) > 8000:
-            raise ValueError("image prompt exceeds Sarovi's 8000-character limit")
-        payload = {
-            "model": self.model, "prompt": request_prompt,
-            "aspectRatio": aspect, "count": 1,
-            "quality": self.quality, "outputFormat": "png",
-        }
-        selected_model = self.model
-        candidates = (self.model, *self.fallback_models)
-        last_error: RuntimeError | None = None
-        for selected_model in candidates:
-            try:
-                result = request("/studio/image", {**payload, "model": selected_model})
-                break
-            except RuntimeError as exc:
-                last_error = exc
-                if selected_model == candidates[-1]:
-                    raise
-                log.warning("Sarovi image model %s failed; trying %s", selected_model,
-                            candidates[candidates.index(selected_model) + 1])
-        else:  # pragma: no cover - the loop either succeeds or raises
-            raise last_error or RuntimeError("no image model was available")
-        outputs = result.get("outputs") or []
-        item = outputs[0] if outputs else None
-        if not isinstance(item, dict) or item.get("mediaType") not in ("image/png", "image/jpeg", "image/webp"):
-            raise RuntimeError("Sarovi returned no supported image")
-        encoded = item.get("data")
-        if not isinstance(encoded, str):
-            raise RuntimeError("Sarovi returned no image data")
-        try:
-            raw = base64.b64decode(encoded, validate=True)
-            if len(raw) > 30 * 1024 * 1024:
-                raise ValueError("image is too large")
-            image = Image.open(io.BytesIO(raw))
-            image.load()
-            width, height = image.size
-        except (ValueError, binascii.Error, OSError) as exc:
-            raise RuntimeError("Sarovi returned invalid image data") from exc
-        output_dir.mkdir(parents=True, exist_ok=True)
-        gen_id = uuid.uuid4().hex[:12]
-        out_path = output_dir / f"{self.name}_{gen_id}.png"
-        image.convert("RGB").save(out_path, format="PNG")
-        return MediaResult(
-            file_path=str(out_path), source=self.name, cost_usd=None,
-            generation_id=gen_id, width=width, height=height,
-            metadata={"prompt": prompt, "model": selected_model,
-                      "requested_model": self.model, "fallback_used": selected_model != self.model,
-                      "aspect": aspect, "quality": self.quality,
-                      "billing_reported": False, "sarovi_generation_id": result.get("generationId")},
-        )
-
-    def generate_video(self, prompt: str, duration: float, aspect: str,
-                       output_dir: Path) -> MediaResult:
-        still = self.generate_image(prompt, aspect, output_dir)
-        return still_to_motion_video(
-            still.file_path, output_dir, duration, aspect,
-            generation_id=still.generation_id, cost_usd=still.cost_usd,
-            source=f"{self.name}_motion", metadata=still.metadata,
-        )
 
 _registry: dict[str, ProviderAdapter] = {}
 
@@ -434,6 +321,8 @@ def register_provider(name: str, adapter: ProviderAdapter) -> None:
 
 
 def get_provider(name: str) -> ProviderAdapter:
+    if name != "local_fixture":
+        name = "arvan_image"
     if name not in _registry:
         raise KeyError(f"unknown provider: {name!r}. registered: {list(_registry.keys())}")
     return _registry[name]
@@ -448,13 +337,4 @@ def list_providers() -> list[dict]:
 
 
 register_provider("local_fixture", LocalFixtureProvider())
-register_provider("jarvis_image", JarvisImageProvider())
-register_provider("sarovi_seedream", SaroviImageProvider(
-    "sarovi_seedream", "bytedance-seed/seedream-5-0-lite",
-    fallback_models=("google/gemini-2.5-flash-image",)))
-register_provider("sarovi_nano_banana", SaroviImageProvider(
-    "sarovi_nano_banana", "google/gemini-2.5-flash-image"))
-register_provider("sarovi_nano_banana_pro", SaroviImageProvider(
-    "sarovi_nano_banana_pro", "google/gemini-3-pro-image", quality="high",
-    fallback_models=("google/gemini-nano-banana-2.1", "google/gemini-3.1-flash-image",
-                     "google/gemini-2.5-flash-image")))
+register_provider("arvan_image", ArvanImageProvider())

@@ -58,9 +58,7 @@ export default function ContentCreator() {
       const list = Array.isArray(items) ? items : [];
       setProviders(list);
       setProvider(current => current || (
-        list.find((p: any) => p.name === "sarovi_nano_banana" && p.key_configured)?.name
-        || list.find((p: any) => p.name === "sarovi_seedream" && p.key_configured)?.name
-        || list.find((p: any) => p.name === "jarvis_image" && p.key_configured)?.name
+        list.find((p: any) => p.name === "arvan_image" && p.key_configured)?.name
         || "local_fixture"
       ));
     }).catch((e: Error) => {
@@ -257,10 +255,8 @@ export default function ContentCreator() {
                 <option key={p.name} value={p.name}>
                   {{
                     local_fixture: "Local Fixture — placeholder demo",
-                    jarvis_image: "Generated visuals — Jarvis Image",
-                    sarovi_seedream: "Sarovi Seedream 5.0 Lite — visual concepts",
-                    sarovi_nano_banana: "Sarovi Nano Banana — content visuals",
-                  }[p.name as "local_fixture" | "jarvis_image" | "sarovi_seedream" | "sarovi_nano_banana"] || p.name}
+                    arvan_image: "Generated visuals — Arvan AI",
+                  }[p.name as "local_fixture" | "arvan_image"] || p.name}
                   {p.name !== "local_fixture" && !p.key_configured ? " (not configured)" : ""}
                 </option>
               ))}

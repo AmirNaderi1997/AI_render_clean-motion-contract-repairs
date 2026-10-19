@@ -17,7 +17,7 @@ class ContentCreateBody(BaseModel):
     content_type: str = "reel"
     language: str = "fa"
     style: str = "rafiei_reel"
-    provider: str = "local_fixture"
+    provider: str = "arvan_image"
     creative_brief: dict[str, str] = Field(default_factory=dict)
 
 

@@ -275,9 +275,8 @@ export default function NewReel() {
             </label>
             <label>ASR engine
               <select value={asrEngine} onChange={e => setAsrEngine(e.target.value)}>
-                <option value="auto">Auto (ElevenLabs → Sarovi → Whisper)</option>
+                <option value="auto">Auto (ElevenLabs → Whisper)</option>
                 <option value="elevenlabs">ElevenLabs (best Persian)</option>
-                <option value="sarovi">Sarovi (hosted Whisper, approx. timing)</option>
                 <option value="whisper">Whisper (offline)</option>
               </select>
             </label>

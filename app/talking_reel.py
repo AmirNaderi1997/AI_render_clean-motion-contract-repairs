@@ -586,14 +586,7 @@ def _talking_image_provider() -> str:
     import os
     from brain.media_provider import get_provider
 
-    configured = os.getenv("TALKING_IMAGE_PROVIDER", "").strip()
-    candidates = [configured] if configured else [
-        "sarovi_nano_banana_pro", "jarvis_image", "sarovi_nano_banana",
-    ]
-    for name in candidates:
-        if name and get_provider(name).has_key:
-            return name
-    return candidates[0]
+    return "arvan_image"
 
 
 def _visual_prompt(subject: str, style: str) -> str:

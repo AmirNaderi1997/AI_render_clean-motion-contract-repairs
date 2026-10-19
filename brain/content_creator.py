@@ -70,7 +70,7 @@ def create_content(
     content_type: str,
     language: str = "fa",
     style: str = "rafiei_reel",
-    provider_name: str = "local_fixture",
+    provider_name: str = "arvan_image",
     creative_brief: Optional[dict[str, str]] = None,
     user_id: Optional[str] = None,
     source_assets: Optional[list[Path]] = None,
@@ -441,32 +441,6 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
 
         background_music_path = None
         music_source = None
-        if not preset["is_static"] and settings.SAROVI_API_KEY.strip():
-            cached_music = checkpoint.get("music")
-            if isinstance(cached_music, dict) and Path(cached_music.get("file_path", "")).is_file():
-                background_music_path = cached_music["file_path"]
-                music_source = "sarovi_lyria"
-            else:
-                try:
-                    from .sarovi_music import generate_clip
-                    from engine.probe import probe
-                    music_path = gen_dir / "calm_instrumental.mp3"
-                    music_prompt = (
-                        "Calm, warm instrumental background music for a Persian narrated social video. "
-                        "Gentle piano and soft ambient textures, steady unhurried pulse, no vocals, "
-                        "no speech, no dramatic hits, smooth ending. Theme: " + storyboard.prompt[:500]
-                    )
-                    music_path.write_bytes(generate_clip(music_prompt))
-                    music_probe = probe(music_path)
-                    if not any(s.get("codec_type") == "audio" for s in music_probe.get("streams", [])) or float(music_probe.get("format", {}).get("duration", 0)) <= 0:
-                        raise ValueError("generated music is not playable")
-                    background_music_path = str(music_path)
-                    music_source = "sarovi_lyria"
-                    checkpoint["music"] = {"file_path": background_music_path}
-                    _save_checkpoint(checkpoint_path, checkpoint)
-                except Exception as exc:
-                    (gen_dir / "calm_instrumental.mp3").unlink(missing_ok=True)
-                    warnings.append(f"Calm music generation failed: {exc}")
         try:
             from .asset_match import music_match
             from engine.library import scan_category
@@ -510,7 +484,7 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
             plan_data["generation_meta"]["remotion"] = scene_config(
                 storyboard, generated_media, narration_segments, job.dir, background_music_path,
             )
-        if music_source == "sarovi_lyria" and plan_data.get("music"):
+        if music_source == "generated_music" and plan_data.get("music"):
             plan_data["music"]["volume_db"] = -18.0
         job.plan_data = plan_data
 

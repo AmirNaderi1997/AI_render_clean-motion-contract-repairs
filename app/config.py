@@ -16,21 +16,19 @@ class Settings(BaseSettings):
     AI_CORRECTION_TIMEOUT_SECONDS: int = 45
     LLM_PROVIDER: str = "arvan"
     LLM_MODEL: str = "GPT-5.6-Sol"
-    SAROVI_LLM_MODEL: str = "anthropic/claude-sonnet-5.5"
     # Content Creator can use a dedicated text provider without changing the
     # upload/edit planner used elsewhere in the application.
     CONTENT_LLM_PROVIDER: str = ""
     CORRECTION_PROVIDER: str = ""
     CORRECTION_MODEL: str = ""
     VISION_PROVIDER: str = ""
-    VISION_MODEL: str = "gpt-5-5-image"
+    VISION_MODEL: str = "GPT-5.6-Sol"
+    ARVAN_VISION_MODEL: str = "Gemini-3-Flash-Preview"
+    ARVAN_IMAGE_MODEL: str = "Gemini-3.1-Flash-Image-Preview"
     CONTENT_VOICE_PROVIDER: str = "elevenlabs"
     # Per-call Content Creator narration provider. When empty, the legacy
     # CONTENT_VOICE_PROVIDER/TTS_PROVIDER compatibility rules remain active.
     CONTENT_TTS_PROVIDER: str = ""
-    SAROVI_API_KEY: str = ""
-    SAROVI_TTS_MODEL: str = ""
-    SAROVI_TTS_VOICE: str = ""
     TTS_VOICE_ID: str = ""
     # TTS_PROVIDER is deliberately independent of optional image/text providers.
     # Edge TTS works without an API key and is the default in restricted networks.
@@ -39,10 +37,6 @@ class Settings(BaseSettings):
     TTS_RATE: str = "+0%"
     AZURE_SPEECH_KEY: str = ""
     AZURE_SPEECH_REGION: str = ""
-    JARVIS_API_KEY: str = ""
-    JARVIS_API_URL: str = ""
-    JARVIS_MODEL: str = ""
-    JARVIS_BASE_URL: str = ""
     ARVAN_AI_API_KEY: str = ""
     ARVAN_AI_API_BASE: str = "https://aiapi.rafiei.co/v1"
     ARVAN_AI_MODEL: str = "GPT-5.6-Sol"
@@ -51,7 +45,6 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-3.5-flash-lite"
     GEMINI_RELAY_SECRET: str = ""
     VERCEL_AUTOMATION_BYPASS_SECRET: str = ""
-    SAROVI_API_URL: str = ""
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = ""
     OPENAI_BASE_URL: str = ""
@@ -80,6 +73,16 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     # Visual Composer v2: FFmpeg rough cut + deterministic HyperFrames motion.
     TALKING_HYPERFRAMES_ENABLED: bool = False
+
+    @model_validator(mode="after")
+    def enforce_provider_policy(self):
+        # Old environment values and saved projects cannot re-enable retired services.
+        self.AI_PROVIDER = self.LLM_PROVIDER = self.CONTENT_LLM_PROVIDER = "arvan"
+        self.CORRECTION_PROVIDER = self.VISION_PROVIDER = "arvan"
+        self.LLM_MODEL = self.CORRECTION_MODEL = self.ARVAN_AI_MODEL
+        self.VISION_MODEL = self.ARVAN_VISION_MODEL
+        self.TTS_PROVIDER = self.CONTENT_TTS_PROVIDER = self.CONTENT_VOICE_PROVIDER = "elevenlabs"
+        return self
 
     @model_validator(mode="after")
     def validate_production_hosts(self):

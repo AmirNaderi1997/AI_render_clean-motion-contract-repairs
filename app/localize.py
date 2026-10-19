@@ -419,7 +419,7 @@ def _render(project_id: str) -> None:
     _stage(project_id, "generating voice")
     clips = {}
     spoken = [l for l in state["lines"] if l["kind"] != "lyrics" and l.get("fa")]
-    # Existing projects may still persist the former Sarovi choice. All new
+    # Existing projects may still persist the former voice provider. All new
     # and resumed renders now use Localize's canonical ElevenLabs pipeline.
     provider = text.default_voice_provider()
     state["voice_provider"] = provider

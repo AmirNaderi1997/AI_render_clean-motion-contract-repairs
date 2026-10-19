@@ -458,18 +458,8 @@ def check_voice_budget(texts: list[str], provider: str, cache_dir: Path) -> None
     if needed and left is not None and left < needed:
         raise RuntimeError(
             f"ElevenLabs quota is not enough: {max(0, left)} characters left, this video needs {needed}. "
-            "Upgrade the ElevenLabs plan or choose the Sarovi voice for this project."
+            "Upgrade the ElevenLabs plan or choose another API-enabled ElevenLabs voice."
         )
-
-
-SAROVI_INSTRUCTIONS = (
-    "فارسی محاوره‌ای تهرانی، سریع و پرانرژی و صمیمی، مثل یک تولیدکننده محتوای اینستاگرام "
-    "که دارد یک ترفند را تند و هیجان‌انگیز توضیح می‌دهد؛ بدون مکث اضافه"
-)
-
-
-def _sarovi_instructions() -> str:
-    return os.environ.get("LOCALIZE_SAROVI_INSTRUCTIONS", "").strip() or SAROVI_INSTRUCTIONS
 
 
 def _trim_silence(src: Path, dst: Path) -> Path:
@@ -489,11 +479,8 @@ def _trim_silence(src: Path, dst: Path) -> Path:
 
 
 def _clip_path(text: str, provider: str, out_dir: Path) -> Path:
-    if provider == "sarovi":
-        voice = "|".join((os.environ.get("SAROVI_TTS_VOICE", ""), os.environ.get("SAROVI_TTS_MODEL", ""),
-                          _sarovi_instructions()))
-    else:
-        voice = f"{tts_voice()}|{tts_model()}"
+    provider = "elevenlabs"
+    voice = f"{tts_voice()}|{tts_model()}"
     digest = hashlib.sha256(f"{provider}|{voice}|{speakable(text)}".encode()).hexdigest()[:16]
     return out_dir / f"line_{provider}_{digest}"
 
@@ -505,6 +492,7 @@ def _cached_clip(text: str, provider: str, out_dir: Path) -> Optional[Path]:
 
 def synthesize(text: str, out_dir: Path, provider: str = "elevenlabs") -> tuple[Path, float]:
     """Generate (or reuse) one Persian clip for ``text``; returns (path, seconds)."""
+    provider = "elevenlabs"
     out_dir.mkdir(parents=True, exist_ok=True)
     cached = _cached_clip(text, provider, out_dir)
     if cached:
@@ -517,7 +505,7 @@ def synthesize(text: str, out_dir: Path, provider: str = "elevenlabs") -> tuple[
             message = str(exc)
             if attempt == attempts - 1 or "quota" in message.lower() or "402" in message:
                 raise
-            # Sarovi rate-limits request starts (429); back off much longer.
+            # Back off on upstream rate limits.
             delay = 8 * (attempt + 1) if "429" in message else 2 * (attempt + 1)
             log.warning("voice attempt %d failed (%s); retrying in %ss", attempt + 1, message, delay)
             time.sleep(delay)
@@ -527,15 +515,10 @@ def synthesize(text: str, out_dir: Path, provider: str = "elevenlabs") -> tuple[
 def _synthesize_once(text: str, out_dir: Path, provider: str) -> tuple[Path, float]:
     spoken = speakable(text)
     final = _clip_path(text, provider, out_dir).with_suffix(".wav")
-    if provider == "sarovi":
-        from brain.sarovi_voice import generate_narration
+    from brain.tts import _generate_elevenlabs
 
-        raw = Path(generate_narration(spoken, out_dir, instructions=_sarovi_instructions()).file_path)
-    else:
-        from brain.tts import _generate_elevenlabs
-
-        raw = final.with_name(final.stem + "_raw.mp3")
-        _generate_elevenlabs(spoken, str(raw), tts_voice(), tts_model())
+    raw = final.with_name(final.stem + "_raw.mp3")
+    _generate_elevenlabs(spoken, str(raw), tts_voice(), tts_model())
     _trim_silence(raw, final)
     return final, audio_duration(final)
 

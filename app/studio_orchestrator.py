@@ -48,10 +48,10 @@ def _intent(text: str, attachments: list[dict], current: dict | None) -> str:
 def _provider() -> str:
     from brain.media_provider import list_providers
     items = list_providers()
-    for name in ("sarovi_nano_banana", "sarovi_seedream", "sarovi_nano_banana_pro", "jarvis_image"):
+    for name in ("arvan_image",):
         if any(item["name"] == name and item["key_configured"] for item in items):
             return name
-    return "local_fixture"
+    return "arvan_image"
 
 
 def _assistant(conversation_id: str, user_key: str, content: str) -> None:
