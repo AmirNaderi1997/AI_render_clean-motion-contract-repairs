@@ -205,7 +205,7 @@ function Preview({ project, conversation, sourceAttachment, onCancel }: { projec
 
 function EditWorkspace({ project, onSaved }: { project?: StudioProject; onSaved: () => void }) {
   if (!project) return <div className="eg-empty-workspace"><Icon name="advanced" size={28}/><h2>Nothing to edit yet</h2><p>Once EditorGPT creates a project, relevant controls will appear here.</p></div>;
-  const advanced = project.engine === "talking" ? `/talking?job=${project.external_ref}` : project.engine === "localize" ? `/localize?project=${project.external_ref}` : project.external_ref ? `/jobs/${project.external_ref}` : "";
+  const advanced = project.engine === "talking" ? `/talking?job=${project.external_ref}` : project.engine === "localize" ? `/localize?project=${project.external_ref}` : project.external_ref ? `/jobs/${project.external_ref}/render` : "";
   return <div className="eg-edit-panel"><header><span className="eg-eyebrow">Edit</span><h2>Refine this video</h2><p>Use Chat for caption, pacing, color and audio requests. Controls appear here only when the current engine supports them.</p></header>{project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}<div className="eg-edit-tools">{advanced ? <NavLink to={advanced}><Icon name="advanced"/><span><b>Advanced editor</b><small>Timeline, audio and detailed controls</small></span><Icon name="chevron" size={17}/></NavLink> : <p className="eg-empty-note">Ask for a change in Chat and a new version will be created without overwriting this one.</p>}</div></div>;
 }
 
