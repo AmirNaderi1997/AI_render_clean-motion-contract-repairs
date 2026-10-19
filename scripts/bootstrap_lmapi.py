@@ -23,6 +23,8 @@ def main():
                 print(json.dumps({"capability":capability,"status":"failed","message":gateway.safe(str(exc),300)}),flush=True)
     if args.activate:
         model=store.records("models").get("auto",{})
+        if not {"chat","vision"}.issubset(gateway.capabilities(model)):
+            raise SystemExit("Required chat/vision probes are not verified; deployment must not activate this gateway yet.")
         routes=gateway.defaults(); changed={}
         for key,row in routes.items():
             if key in {"general_chat","editing_agent","subtitles","script"} and "chat" in gateway.capabilities(model):

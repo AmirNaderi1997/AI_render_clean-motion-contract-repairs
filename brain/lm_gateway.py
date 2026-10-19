@@ -232,7 +232,7 @@ def stream_chat(route, messages, model_override=None, probe=False):
     try:
         for mid in candidates[:8] if cfg["automatic_fallback"] else candidates[:1]:
             model = models.get(mid, {})
-            if not model.get("enabled") or (not probe and "streaming" not in capabilities(model)): continue
+            if not model.get("enabled") or not model.get("available",True) or (not probe and not {"chat","streaming"}.issubset(capabilities(model))): continue
             body = adapters.payload("chat", mid, messages, tokens=min(256 if probe else cfg["max_tokens"], 16000), stream=True)
             result = {}; hdr = {}; chunks = []
             try:
