@@ -306,7 +306,7 @@ def _call_correction_llm(
     for attempt in range(1, max_retries + 1):
         try:
             kwargs = {"max_tokens": 2048, "temperature": 0.0}
-            if configured(): kwargs["route"] = "subtitles"
+            if configured(): kwargs["route"] = "transcript_correction"
             if model:
                 kwargs["model"] = model
             provider = _correction_provider()

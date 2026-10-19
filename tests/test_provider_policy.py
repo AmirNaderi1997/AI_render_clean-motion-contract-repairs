@@ -91,4 +91,9 @@ def test_no_retired_providers_in_runtime_source():
     for directory in ("app", "brain", "web/src"):
         for path in (root / directory).rglob("*"):
             if path.suffix in {".py", ".tsx", ".ts"}:
+                if path == root / "brain" / "lm_tasks.py":
+                    # These providers are now allowed only as centrally scoped
+                    # Gateway identities, never as direct network endpoints.
+                    assert "https://" not in path.read_text()
+                    continue
                 assert not any(name in path.read_text().lower() for name in retired), path

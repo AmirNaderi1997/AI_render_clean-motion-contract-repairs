@@ -137,7 +137,7 @@ Output ONLY this JSON:
     )
 
     try:
-        raw, usage = chat_json(system, user, max_tokens=1024, temperature=0.0,
+        raw, usage = chat_json(system, user, route="segment_analysis", max_tokens=1024, temperature=0.0,
                                timeout_seconds=300)
     except Exception as exc:
         log.warning("segment analysis LLM call failed: %s — using heuristic", exc)

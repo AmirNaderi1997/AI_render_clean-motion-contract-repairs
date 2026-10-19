@@ -92,6 +92,12 @@ def defaults():
                 "models": ["auto"], "endpoint": "embeddings" if key == "embeddings" else "chat",
                 "timeout": 90, "max_retries": 0, "temperature": None, "max_tokens": 16000,
                 "streaming": False, "automatic_fallback": True, "specialized_fallback": specialized}
+    from .lm_tasks import TASKS
+    for key, spec in TASKS.items():
+        if key not in existing and key not in new:
+            parent = {**existing, **new}[spec["parent"]]
+            new[key] = {**parent, "id":key, "title":spec["title"], "capability":spec["capability"],
+                        "models":list(parent["models"]), "task_id":key}
     if new: store.save("routes", new)
     return {**existing, **new}
 
@@ -123,7 +129,10 @@ def sync_models():
             "declared": declared, "verified": old.get("verified", []),
             "status": old.get("status", "Untested"), "metadata": item, "synced_at": datetime.now(timezone.utc).isoformat()}
     for mid, old in previous.items():
-        if mid not in updated: updated[mid] = {**old, "available": False}
+        if mid not in updated:
+            # Scoped execution IDs come from registered endpoint models, not the
+            # normalized public catalog. A sync must not discard their probe evidence.
+            updated[mid] = old if old.get("scope_registered") else {**old, "available": False}
     store.save("models", updated)
     store.save("settings", {"discovery": {"paths": paths, "synced_at": datetime.now(timezone.utc).isoformat(), "models": len(rows)}})
     defaults()
@@ -131,7 +140,28 @@ def sync_models():
 
 
 def capabilities(model):
+    if model.get("scope_registered"): return set(model.get("verified", []))
     return set(model.get("verified", [])) | set(model.get("declared", []))
+
+
+def register_task_models():
+    """Register observed execution pairs as Untested; never infer capability."""
+    from .lm_tasks import TASKS
+    previous=store.records("models"); rows={}
+    for task in TASKS.values():
+        for pair in task["preferences"]:
+            mid=pair["id"]
+            if mid not in previous:
+                rows[mid]={"id":mid,"name":pair["model_id"],"provider":pair["provider"],
+                    "enabled":True,"available":True,"verified":[],"declared":[],"status":"Untested",
+                    "scope_registered":True,"metadata":{"registration_source":"authenticated Gateway Keys UI"}}
+    if rows: store.save("models",rows)
+    return {"registered":len(rows)}
+
+
+def model_allowed(mid):
+    # User explicitly disabled this provider. Also guard saved legacy selections.
+    return not (mid.endswith("#vercel-all-models") or mid.startswith("vercel:"))
 
 
 def _wire(endpoint, data, timeout):
@@ -162,7 +192,7 @@ def _record(route, endpoint, requested, started, attempts, response=None, hdr=No
         actual = routed.partition("/")[2] or None
     return {"id": str(uuid.uuid4()), "timestamp": datetime.now(timezone.utc).isoformat(),
         "user_id": user_context.get(), "job_id": job_context.get(), "route": route,
-        "conversation_id": conversation_context.get(),
+        "conversation_id": conversation_context.get(), "task_id":route,
         "endpoint": adapters.PATHS[endpoint], "requested_model": requested, "actual_model": actual,
         "provider": unquote(hdr.get("x-provider", "")) or routed.partition("/")[0] or None,
         "routed_via": routed or None,
@@ -194,6 +224,7 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
     if not _slots.acquire(timeout=2): raise GatewayError("AI request queue is busy", 429)
     try:
         for mid in candidates[:8]:
+            if not model_allowed(mid): continue
             item = models.get(mid)
             if not item or not item.get("enabled") or not item.get("available", True): continue
             if not probe and not required.issubset(capabilities(item)): continue
@@ -206,15 +237,22 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
                 try:
                     remaining = min(300, cfg["timeout"]*2) - (time.monotonic()-started)
                     response, hdr, status = _wire(endpoint, body, max(1, min(cfg["timeout"], remaining)))
+                    if mid.startswith("google:"):
+                        routed=unquote(hdr.get("x-routed-via", ""))
+                        if routed != "google/" + mid.partition(":")[2]:
+                            raise GatewayError("Google provider pin was not honored",502,True)
                     attempts.append({"model": mid, "http_status": status, "latency_ms": round((time.monotonic()-tick)*1000)})
                     record = _record(route, endpoint, candidates[0], started, attempts, response, hdr, request=body)
                     _audit(record)
                     return response, record
                 except GatewayError as exc:
+                    if mid.startswith("google:") and exc.status == 404 and "model_not_found" in str(exc):
+                        # Disabled Google model: skip, without quota preflight or retry.
+                        exc.retryable = True
                     error = exc
                     attempts.append({"model": mid, "http_status": exc.status, "error": safe(str(exc), 300), "latency_ms": round((time.monotonic()-tick)*1000)})
                     if not exc.retryable: raise
-                    if exc.status == 429: break
+                    if exc.status in {404,429}: break
                     # Long Retry-After/quota cooldowns are not slept inside editor workers.
                     if attempt < retries: time.sleep(min(2**attempt, 2))
             if error and not error.retryable: break
@@ -235,6 +273,7 @@ def stream_chat(route, messages, model_override=None, probe=False):
     if not _slots.acquire(timeout=2): raise GatewayError("AI request queue is busy", 429)
     try:
         for mid in candidates[:8] if cfg["automatic_fallback"] else candidates[:1]:
+            if not model_allowed(mid): continue
             model = models.get(mid, {})
             if not model.get("enabled") or not model.get("available",True) or (not probe and not {"chat","streaming"}.issubset(capabilities(model))): continue
             body = adapters.payload("chat", mid, messages, tokens=min(256 if probe else cfg["max_tokens"], 16000), stream=True)

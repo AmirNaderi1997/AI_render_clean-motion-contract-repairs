@@ -38,6 +38,36 @@ def test_fallback_and_audit(monkeypatch,catalog):
     assert store.logs()["total"]==1
 
 
+def test_google_pin_rejects_different_provider_and_falls_back(monkeypatch,catalog):
+    mid="google:gemini-3.5-flash"
+    store.save("models",{mid:{"id":mid,"enabled":True,"available":True,"verified":["chat"],"scope_registered":True}})
+    catalog.update(models=[mid,"Other/2"]);store.save("routes",{"editing_agent":catalog})
+    calls=[]
+    def wire(endpoint,body,timeout):
+        calls.append(body["model"])
+        return {"choices":[{"message":{"content":"ok"}}]}, {"x-routed-via":"custom/gemini-3.5-flash"},200
+    monkeypatch.setattr(g,"_wire",wire)
+    _,record=g.complete("editing_agent",[])
+    assert calls==[mid,"Other/2"]
+    assert record["fallback_count"]==1
+
+
+def test_disabled_vercel_never_runs(monkeypatch,catalog):
+    mid="custom:vendor/model#vercel-all-models"
+    store.save("models",{mid:{"id":mid,"enabled":True,"available":True,"verified":["chat"]}})
+    catalog.update(models=[mid,"Other/2"]);store.save("routes",{"editing_agent":catalog})
+    calls=[]
+    def wire(endpoint,body,timeout):
+        calls.append(body["model"]);return {"choices":[]},{},200
+    monkeypatch.setattr(g,"_wire",wire)
+    g.complete("editing_agent",[])
+    assert calls==["Other/2"]
+
+
+def test_scoped_model_does_not_inherit_catalog_capabilities():
+    assert g.capabilities({"scope_registered":True,"declared":["vision"],"verified":["chat"]})=={"chat"}
+
+
 @pytest.mark.parametrize("status",[400,401,403,422])
 def test_no_fallback_on_invalid_request(monkeypatch,catalog,status):
     calls=[]

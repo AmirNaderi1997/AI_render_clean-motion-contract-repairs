@@ -76,7 +76,7 @@ def public_model(value):
 
 @router.get("/models")
 def models(q: str = Query("", max_length=200), provider: str = "", capability: str = "", page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200)):
-    rows = list(store.records("models").values())
+    rows = [r for r in store.records("models").values() if gateway.model_allowed(r["id"])]
     providers = sorted({r["provider"] for r in rows if r.get("provider")})
     if q: rows = [r for r in rows if q.lower() in (r["id"]+" "+r["name"]).lower()]
     if provider: rows = [r for r in rows if r.get("provider") == provider]
@@ -124,7 +124,9 @@ def update_route(route_id: str, body: RouteUpdate):
     catalog = store.records("models")
     if len(set(body.models)) != len(body.models) or any(mid not in catalog for mid in body.models):
         raise HTTPException(422, "Choose unique IDs from the actual model catalog")
-    if route_id in {"image", "audio", "video", "transcription"} and body.enabled:
+    if any(not gateway.model_allowed(mid) for mid in body.models):
+        raise HTTPException(422, "Vercel is disabled by installation policy")
+    if row["capability"] in {"image", "speech", "video", "transcription", "music"} and body.enabled:
         raise HTTPException(422, "Specialized LM media execution is not verified; the existing editor provider remains active")
     if route_id == "embeddings" and (body.endpoint != "embeddings" or len(body.models) != 1):
         raise HTTPException(422, "Embeddings require one pinned model family to preserve vector compatibility")
