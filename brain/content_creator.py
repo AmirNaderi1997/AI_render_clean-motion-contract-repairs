@@ -122,6 +122,8 @@ def create_content(
             raise ValueError("No valid source images were supplied")
         for index, scene in enumerate(storyboard.scenes):
             scene.media_method = "upload"
+            if asset_catalog and scene.source_asset_index not in asset_map:
+                raise ValueError(f"Scene {index + 1} did not select a verified product image; revise the storyboard")
             scene.source_asset = asset_map.get(scene.source_asset_index, safe_assets[index % len(safe_assets)])
     if asset_catalog:
         (generated_dir / "asset_catalog.json").write_text(json.dumps(asset_catalog, ensure_ascii=False, indent=2))

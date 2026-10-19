@@ -1251,6 +1251,14 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
             job.render.message = "reviewing motion scenes"
             _write_status(job)
             quality = run_qc(job.dir, out_path, data)
+            job.qc = QCState(
+                status=quality.status, message=quality.message,
+                current_round=quality.current_round, total_issues=quality.total_issues,
+                fixed_issues=quality.fixed_issues,
+                issues=[issue for rd in quality.rounds for issue in rd.issues],
+                changes=[change for rd in quality.rounds for change in rd.changes],
+                started_at=quality.started_at, finished_at=quality.finished_at,
+            )
             if quality.status != "done" or any(
                 issue.get("severity") == "error" for rd in quality.rounds for issue in rd.issues
             ):
