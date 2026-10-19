@@ -1034,5 +1034,8 @@ export const api = {
         if (line) { try { onEvent(JSON.parse(line.slice(6))); } catch { /* ignore malformed event */ } }
       }
     }
+    // A proxy may close an otherwise healthy SSE response. Avoid a tight
+    // reconnect loop that would repeatedly authenticate and query PostgreSQL.
+    if (!signal.aborted) await new Promise(resolve => setTimeout(resolve, 750));
   },
 };

@@ -62,21 +62,26 @@ export default function Studio() {
   const cursorRef = React.useRef(0);
   const filesRef = React.useRef<PendingFile[]>([]);
   const voiceEnabledRef = React.useRef(false);
+  const legacyOpenRef = React.useRef("");
+  const refreshTimerRef = React.useRef<number | null>(null);
+  const listTimerRef = React.useRef<number | null>(null);
   const activeId = conversationId || null;
   const authenticated = isAuthenticated();
   const hasSpeech = typeof window !== "undefined" && Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
 
   React.useEffect(() => { voiceEnabledRef.current = Boolean(conversation?.status_voice_enabled); }, [conversation?.status_voice_enabled]);
   React.useEffect(() => { filesRef.current = files; }, [files]);
-  const refreshList = React.useCallback(() => authenticated ? api.listStudioConversations().then(value => { setConversations(value); window.dispatchEvent(new Event("editorgpt:conversations-updated")); }).catch(error => setError(friendlyError(error, "load conversations"))) : Promise.resolve(), [authenticated]);
+  const refreshList = React.useCallback(() => authenticated ? api.listStudioConversations().then(setConversations).catch(error => setError(friendlyError(error, "load conversations"))) : Promise.resolve(), [authenticated]);
   const refresh = React.useCallback(async (id = activeId) => { if (!id) return; try { setConversation(await api.getStudioConversation(id)); } catch (error) { setError(friendlyError(error, "load conversation")); } }, [activeId]);
   React.useEffect(() => { void refreshList(); }, [refreshList]);
   React.useEffect(() => { if (authenticated && activeId) void refresh(activeId); else setConversation(null); setEvents([]); cursorRef.current = 0; }, [authenticated, activeId, refresh]);
   React.useEffect(() => {
     const legacy = searchParams.get("legacy");
     if (!legacy || !authenticated) return;
+    if (legacyOpenRef.current === legacy) return;
     const [engine, externalRef] = legacy.split(":", 2);
     if (!externalRef || !["motion", "talking", "localize"].includes(engine)) return;
+    legacyOpenRef.current = legacy;
     setBusy(true);
     void api.openLegacyInStudio(engine as "motion" | "talking" | "localize", externalRef, searchParams.get("title") || "Video project")
       .then(value => { setConversation(value); navigate(`/studio/${value.id}`, { replace:true }); })
@@ -88,10 +93,21 @@ export default function Studio() {
     const connect = async () => { while (!stopped) { try { await api.streamStudioEvents(activeId, cursorRef.current, event => {
       cursorRef.current = Math.max(cursorRef.current, event.seq);
       setEvents(value => value.some(item => item.seq === event.seq) ? value : [...value, event]);
-      void refresh(activeId); void refreshList();
+      if (refreshTimerRef.current != null) window.clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = window.setTimeout(() => void refresh(activeId), 180);
+      if (listTimerRef.current == null) listTimerRef.current = window.setTimeout(() => {
+        listTimerRef.current = null;
+        void refreshList();
+        window.dispatchEvent(new Event("editorgpt:conversations-updated"));
+      }, 1200);
       if (event.type === "narration.ready" && voiceEnabledRef.current) void api.authenticatedObjectUrl(api.studioEventAudioUrl(activeId, event.data.event_seq)).then(url => { const audio = new Audio(url); void audio.play().finally(() => URL.revokeObjectURL(url)); });
     }, controller.signal); } catch { if (!controller.signal.aborted) await new Promise(resolve => setTimeout(resolve, 1200)); } } };
-    void connect(); return () => { stopped = true; controller.abort(); };
+    void connect(); return () => {
+      stopped = true; controller.abort();
+      if (refreshTimerRef.current != null) window.clearTimeout(refreshTimerRef.current);
+      if (listTimerRef.current != null) window.clearTimeout(listTimerRef.current);
+      refreshTimerRef.current = null; listTimerRef.current = null;
+    };
   }, [activeId, refresh, refreshList]);
   React.useEffect(() => { if (view === "chat") bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [conversation?.messages?.length, events.length, view]);
   React.useEffect(() => () => filesRef.current.forEach(item => URL.revokeObjectURL(item.url)), []);

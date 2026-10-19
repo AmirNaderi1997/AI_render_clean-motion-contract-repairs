@@ -14,7 +14,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from hermes.config import settings
 from hermes.models import TABLES
 
-_engine = create_async_engine(settings.DATABASE_URL) if settings.DATABASE_URL else None
+_engine = create_async_engine(
+    settings.DATABASE_URL,
+    pool_size=int(os.getenv("DB_POOL_SIZE", "3")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "1")),
+    pool_timeout=float(os.getenv("DB_POOL_TIMEOUT", "20")),
+    pool_recycle=int(os.getenv("DB_POOL_RECYCLE", "300")),
+    pool_pre_ping=True,
+) if settings.DATABASE_URL else None
 Session = async_sessionmaker(_engine, expire_on_commit=False) if _engine else None
 _lock = threading.RLock()
 
