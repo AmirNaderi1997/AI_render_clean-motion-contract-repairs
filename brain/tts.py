@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+from .lm_gateway import observe_specialized
 
 
 @dataclass
@@ -39,6 +40,7 @@ def _configured_provider(provider: str | None = None) -> str:
     return "disabled" if provider == "disabled" else "elevenlabs"
 
 
+@observe_specialized("audio", "elevenlabs-vercel-relay")
 def _generate_elevenlabs(
     text: str, output_path: str, voice_id: str = "", model_id: str = "",
 ) -> None:

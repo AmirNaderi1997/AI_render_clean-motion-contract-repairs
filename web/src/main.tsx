@@ -12,6 +12,7 @@ const Studio = React.lazy(() => import("./Studio"));
 const Projects = React.lazy(() => import("./Jobs"));
 const Templates = React.lazy(() => import("./Templates"));
 const Settings = React.lazy(() => import("./Settings"));
+const AIModels = React.lazy(() => import("./AIModels"));
 const Render = React.lazy(() => import("./Render"));
 const MyEffects = React.lazy(() => import("./MyEffects"));
 const StyleLibrary = React.lazy(() => import("./StyleLibrary"));
@@ -68,6 +69,7 @@ function App() {
     <Route element={<EditorShell/>}>
       <Route index element={<Studio/>}/><Route path="studio" element={<Studio/>}/><Route path="studio/:conversationId" element={<Studio/>}/>
       <Route path="projects" element={<RequireAuth><Projects/></RequireAuth>}/><Route path="templates" element={<Templates/>}/><Route path="settings" element={<RequireAuth><Settings/></RequireAuth>}/>
+      <Route path="settings/ai" element={<RequireAuth><AIModels/></RequireAuth>}/>
       <Route path="new" element={<Navigate to="/studio" replace/>}/><Route path="content" element={<RequireAuth><ContentCreator/></RequireAuth>}/><Route path="localize" element={<RequireAuth><Localize/></RequireAuth>}/><Route path="talking" element={<RequireAuth><TalkingReels/></RequireAuth>}/>
       <Route path="jobs" element={<Navigate to="/projects" replace/>}/><Route path="jobs/:id" element={<RequireAuth><LegacyJobRedirect/></RequireAuth>}/><Route path="jobs/:id/render" element={<RequireAuth><Render/></RequireAuth>}/>
       <Route path="my-effects" element={<RequireAuth><MyEffects/></RequireAuth>}/><Route path="library" element={<RequireAuth><Library/></RequireAuth>}/><Route path="style-library" element={<RequireAuth><StyleLibrary/></RequireAuth>}/><Route path="style-learner" element={<RequireAuth><StyleLearner/></RequireAuth>}/><Route path="fonts" element={<Navigate to="/style-library#fonts" replace/>}/>

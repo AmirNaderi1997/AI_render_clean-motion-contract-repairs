@@ -1,0 +1,8 @@
+# Optional low-disk VPS upgrade; tag the current working runtime :pre-lmapi first.
+# Fresh installs use Dockerfile. This file never copies a credential or .env.
+FROM ai-render-runtime:pre-lmapi
+COPY app/ /app/app/
+COPY brain/ /app/brain/
+COPY scripts/ /app/scripts/
+COPY alembic/ /app/alembic/
+COPY alembic.ini request_context.py /app/

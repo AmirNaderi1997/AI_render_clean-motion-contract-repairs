@@ -1,0 +1,377 @@
+"""Central, bounded Rafiei LM gateway used by the existing editor adapters."""
+from __future__ import annotations
+import contextvars
+import functools
+import json
+import logging
+import os
+import re
+import threading
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse, unquote
+import httpx
+from app.config import settings
+from app import lm_store as store
+from . import lm_adapters as adapters
+
+log = logging.getLogger(__name__)
+user_context = contextvars.ContextVar("ai_user", default=None)
+job_context = contextvars.ContextVar("ai_job", default=None)
+route_context = contextvars.ContextVar("ai_route", default=None)
+conversation_context = contextvars.ContextVar("ai_conversation", default=None)
+_slots = threading.BoundedSemaphore(4)
+ROUTES = {
+    "general_chat": ("General Chat", "chat"), "editing_agent": ("Video Editing Agent", "chat"),
+    "video_understanding": ("Video Understanding", "vision"), "transcription": ("Transcription", "transcription"),
+    "subtitles": ("Subtitle Processing", "chat"), "script": ("Script Generation", "chat"),
+    "image": ("Image Generation", "image"), "audio": ("Audio Generation", "speech"),
+    "video": ("Video Generation", "video"), "embeddings": ("Embeddings", "embeddings"),
+}
+
+
+class GatewayError(RuntimeError):
+    def __init__(self, message, status=502, retryable=False):
+        super().__init__(message); self.status = status; self.retryable = retryable
+
+
+def secret():
+    if settings.LMAPI_API_KEY: return settings.LMAPI_API_KEY.strip()
+    path = Path(settings.LMAPI_API_KEY_FILE)
+    if not path.is_absolute(): path = Path(__file__).parents[1] / path
+    return path.read_text().strip() if path.is_file() else ""
+
+
+def configured():
+    return bool(secret())
+
+
+def safe(value, limit=6000):
+    text = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
+    for key in (secret(), settings.ARVAN_AI_API_KEY, settings.ELEVENLABS_API_KEY):
+        if key: text = text.replace(key, "[REDACTED]")
+    text = re.sub(r'data:[^;\s]+;base64,[A-Za-z0-9+/=]+', '[media omitted]', text)
+    text = re.sub(r'(?i)(bearer\s+|(?:api[_-]?key|token|secret)[=:]\s*)[^\s"&]+', r'\1[REDACTED]', text)
+    text = re.sub(r'\b(?:sk-|freellmapi-)[A-Za-z0-9_.-]+', '[REDACTED]', text)
+    return text[:limit]
+
+
+def gateway_settings():
+    value = store.records("settings").get("global", {})
+    return {"enabled": True, "capture_messages": True, "log_char_limit": 6000, **value}
+
+
+def _client(timeout):
+    from .http_ssl import ssl_context
+    return httpx.Client(timeout=httpx.Timeout(timeout, connect=min(timeout, 10)), verify=ssl_context(), follow_redirects=False)
+
+
+def _url(path):
+    base = settings.LMAPI_BASE_URL.rstrip("/")
+    parsed = urlparse(base)
+    if parsed.scheme != "https" or parsed.hostname != "lmapi.rafiei.co" or parsed.username or parsed.query:
+        raise GatewayError("LM API must use the approved HTTPS host", 422)
+    return base + "/" + path
+
+
+def headers():
+    key = secret()
+    if not key: raise GatewayError("LM API is not configured", 503)
+    return {"Authorization": "Bearer " + key, "Content-Type": "application/json", "X-FreeLLM-Cache": "off"}
+
+
+def defaults():
+    existing = store.records("routes")
+    new = {}
+    for key, (title, capability) in ROUTES.items():
+        if key not in existing:
+            specialized = capability in {"image", "speech", "transcription", "video"}
+            new[key] = {"id": key, "title": title, "capability": capability, "enabled": not specialized,
+                "models": ["auto"], "endpoint": "embeddings" if key == "embeddings" else "chat",
+                "timeout": 90, "max_retries": 0, "temperature": None, "max_tokens": 16000,
+                "streaming": False, "automatic_fallback": True, "specialized_fallback": specialized}
+    if new: store.save("routes", new)
+    return {**existing, **new}
+
+
+def sync_models():
+    with _client(30) as client:
+        response = client.get(_url("models"), headers=headers()); response.raise_for_status()
+        catalog = response.json()
+        spec_response = client.get(_url("openapi.json"), headers=headers())
+        paths = list(spec_response.json().get("paths", {})) if spec_response.is_success else []
+    rows = catalog.get("data")
+    if not isinstance(rows, list) or len(rows) > 20000: raise GatewayError("Invalid model catalog")
+    previous = store.records("models"); updated = {}
+    for item in rows:
+        mid = item.get("id")
+        if not isinstance(mid, str) or not mid or len(mid) > 512: continue
+        old = previous.get(mid, {})
+        # Only explicit catalog metadata is evidence; IDs/names never imply capability.
+        declared = []
+        metadata_caps = item.get("capabilities", {})
+        if isinstance(metadata_caps, dict): declared = [k for k,v in metadata_caps.items() if v is True]
+        elif isinstance(metadata_caps, list): declared = [v for v in metadata_caps if isinstance(v, str)]
+        parameters = item.get("supported_parameters") or []
+        for parameter, capability in (("reasoning_effort","reasoning"),("tools","tools"),("response_format","structured"),("stream","streaming")):
+            if parameter in parameters and capability not in declared: declared.append(capability)
+        updated[mid] = {**old, "id": mid, "name": item.get("name") or item.get("display_name") or mid,
+            "provider": item.get("owned_by") or item.get("provider") or None,
+            "available": item.get("available", True), "enabled": old.get("enabled", True),
+            "declared": declared, "verified": old.get("verified", []),
+            "status": old.get("status", "Untested"), "metadata": item, "synced_at": datetime.now(timezone.utc).isoformat()}
+    for mid, old in previous.items():
+        if mid not in updated: updated[mid] = {**old, "available": False}
+    store.save("models", updated)
+    store.save("settings", {"discovery": {"paths": paths, "synced_at": datetime.now(timezone.utc).isoformat(), "models": len(rows)}})
+    defaults()
+    return {"models": len(rows), "paths": paths}
+
+
+def capabilities(model):
+    return set(model.get("verified", [])) | set(model.get("declared", []))
+
+
+def _wire(endpoint, data, timeout):
+    try:
+        with _client(timeout) as client:
+            request_headers = headers()
+            if endpoint == "messages": request_headers["anthropic-version"] = "2023-06-01"
+            response = client.post(_url(adapters.PATHS[endpoint]), headers=request_headers, json=data)
+            if not response.is_success:
+                raise GatewayError(f"LM API HTTP {response.status_code}: {safe(response.text, 350)}",
+                    response.status_code, response.status_code in {408, 429, 500, 502, 503, 504})
+            return response.json(), dict(response.headers), response.status_code
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise GatewayError(f"LM API {type(exc).__name__}", 504, True) from exc
+
+
+def _audit(record):
+    try: store.log(record)
+    except Exception: log.exception("AI audit persistence failed request=%s", record["id"])
+
+
+def _record(route, endpoint, requested, started, attempts, response=None, hdr=None, error=None, request=None):
+    cfg = gateway_settings(); response = response or {}; hdr = hdr or {}
+    usage = adapters.usage(response)
+    actual = response.get("model") or unquote(hdr.get("x-routed-via", "")) or None
+    return {"id": str(uuid.uuid4()), "timestamp": datetime.now(timezone.utc).isoformat(),
+        "user_id": user_context.get(), "job_id": job_context.get(), "route": route,
+        "conversation_id": conversation_context.get(),
+        "endpoint": adapters.PATHS[endpoint], "requested_model": requested, "actual_model": actual,
+        "provider": unquote(hdr.get("x-provider") or hdr.get("x-routed-via") or "") or None,
+        "status": "failed" if error else "success", "latency_ms": round((time.monotonic()-started)*1000),
+        **usage, "http_status": attempts[-1].get("http_status") if attempts else None,
+        "retry_count": len(attempts)-len({a["model"] for a in attempts}), "fallback_history": attempts,
+        "fallback_count": max(0,len({a["model"] for a in attempts})-1),
+        "gateway_fallback_attempts": hdr.get("x-fallback-attempts"),
+        "gateway_fallback_history": safe(hdr.get("x-fallback-trail", ""), 1000) or None,
+        "error": safe(str(error), 500) if error else None,
+        "correlation_id": __import__("request_context").current_request_id(),
+        "request_message": safe(request, cfg["log_char_limit"]) if cfg["capture_messages"] else None,
+        "response_message": safe(response, cfg["log_char_limit"]) if cfg["capture_messages"] else None}
+
+
+def complete(route, messages, *, required=None, tokens=None, extra=None, endpoint=None, model_override=None, probe=False):
+    cfg = defaults().get(route)
+    if not cfg or not gateway_settings()["enabled"] or (not cfg["enabled"] and not probe):
+        raise GatewayError("This AI route is disabled", 503)
+    endpoint = endpoint or cfg["endpoint"]
+    required = set(required or {endpoint})
+    if extra and extra.get("tools"): required.add("tools")
+    if extra and extra.get("response_format"): required.add("structured")
+    models = store.records("models")
+    candidates = [model_override] if model_override else cfg["models"]
+    if not cfg["automatic_fallback"] or endpoint == "embeddings": candidates = candidates[:1]
+    started = time.monotonic(); attempts = []; error = None; response = hdr = None
+    # One bounded retry owner. The upstream gateway's own fallback is observed, never recursively replayed.
+    if not _slots.acquire(timeout=2): raise GatewayError("AI request queue is busy", 429)
+    try:
+        for mid in candidates[:8]:
+            item = models.get(mid)
+            if not item or not item.get("enabled") or not item.get("available", True): continue
+            if not probe and not required.issubset(capabilities(item)): continue
+            retries = 0 if probe or mid.startswith("auto") or mid == "fusion" else cfg["max_retries"]
+            for attempt in range(retries+1):
+                if time.monotonic()-started > min(300, cfg["timeout"]*2): break
+                body = adapters.payload(endpoint, mid, messages, tokens=min(tokens or cfg["max_tokens"], cfg["max_tokens"]),
+                    temperature=cfg["temperature"], extra=extra)
+                tick = time.monotonic()
+                try:
+                    remaining = min(300, cfg["timeout"]*2) - (time.monotonic()-started)
+                    response, hdr, status = _wire(endpoint, body, max(1, min(cfg["timeout"], remaining)))
+                    attempts.append({"model": mid, "http_status": status, "latency_ms": round((time.monotonic()-tick)*1000)})
+                    record = _record(route, endpoint, candidates[0], started, attempts, response, hdr, request=body)
+                    _audit(record)
+                    return response, record
+                except GatewayError as exc:
+                    error = exc
+                    attempts.append({"model": mid, "http_status": exc.status, "error": safe(str(exc), 300), "latency_ms": round((time.monotonic()-tick)*1000)})
+                    if not exc.retryable: raise
+                    if exc.status == 429: break
+                    # Long Retry-After/quota cooldowns are not slept inside editor workers.
+                    if attempt < retries: time.sleep(min(2**attempt, 2))
+            if error and not error.retryable: break
+        raise error or GatewayError("No enabled, capability-verified model for this route; configure AI Models & Logs", 422)
+    except Exception as exc:
+        _audit(_record(route, endpoint, candidates[0] if candidates else "", started, attempts, error=exc, request=messages))
+        raise
+    finally:
+        _slots.release()
+
+
+def stream_chat(route, messages, model_override=None, probe=False):
+    cfg = defaults()[route]; models = store.records("models")
+    candidates = [model_override] if model_override else cfg["models"]
+    if not cfg["enabled"] or not gateway_settings()["enabled"]: raise GatewayError("Route disabled", 503)
+    if not probe and not cfg["streaming"]: raise GatewayError("Streaming disabled on route", 422)
+    started = time.monotonic(); attempts = []; emitted = False; last = None
+    if not _slots.acquire(timeout=2): raise GatewayError("AI request queue is busy", 429)
+    try:
+        for mid in candidates[:8] if cfg["automatic_fallback"] else candidates[:1]:
+            model = models.get(mid, {})
+            if not model.get("enabled") or (not probe and "streaming" not in capabilities(model)): continue
+            body = adapters.payload("chat", mid, messages, tokens=min(256 if probe else cfg["max_tokens"], 16000), stream=True)
+            result = {}; hdr = {}; chunks = []
+            try:
+                with _client(cfg["timeout"]) as client:
+                    with client.stream("POST", _url("chat/completions"), headers=headers(), json=body) as response:
+                        hdr = dict(response.headers)
+                        if not response.is_success:
+                            raise GatewayError(f"LM stream HTTP {response.status_code}", response.status_code, response.status_code in {429,500,502,503,504})
+                        completed = False
+                        for line in response.iter_lines():
+                            if time.monotonic()-started > 300: raise GatewayError("Stream deadline exceeded", 504)
+                            if not line.startswith("data:"): continue
+                            value = line[5:].strip()
+                            if value == "[DONE]": completed = True; break
+                            chunk = json.loads(value)
+                            if chunk.get("error"): raise GatewayError("LM stream reported an error")
+                            if chunk.get("model"): result["model"] = chunk["model"]
+                            if chunk.get("usage"): result["usage"] = chunk["usage"]
+                            choices = chunk.get("choices") or []
+                            if choices and choices[0].get("finish_reason"): completed = True
+                            delta = choices[0].get("delta", {}).get("content") if choices else None
+                            if delta:
+                                emitted = True; chunks.append(delta); yield delta
+                        if not completed: raise GatewayError("LM stream ended before completion", 502, True)
+                attempts.append({"model": mid, "http_status": 200})
+                result["output_text"] = "".join(chunks)
+                _audit(_record(route, "chat", candidates[0], started, attempts, result, hdr, request=body))
+                return
+            except (GatewayError, httpx.TimeoutException, httpx.NetworkError) as exc:
+                last = exc; attempts.append({"model": mid, "http_status": getattr(exc, "status", 504), "error": safe(str(exc), 300)})
+                if emitted or not getattr(exc, "retryable", isinstance(exc, httpx.TransportError)): raise
+        raise last or GatewayError("No streaming-verified model available", 422)
+    except BaseException as exc:
+        _audit(_record(route, "chat", candidates[0], started, attempts, error=exc, request=messages))
+        raise
+    finally:
+        _slots.release()
+
+
+def probe_model(mid, capability="chat"):
+    models = store.records("models")
+    if mid not in models: raise GatewayError("Unknown catalog model", 404)
+    allowed = {"chat", "responses", "messages", "embeddings", "vision", "structured", "tools", "streaming"}
+    if capability not in allowed: raise GatewayError("Unsupported probe; costly media tests are not enabled", 422)
+    messages = [{"role": "user", "content": 'Return only {"ok":true}.'}]
+    endpoint = capability if capability in {"responses", "messages", "embeddings"} else "chat"
+    extra = None
+    if capability == "vision":
+        import base64, io
+        from PIL import Image
+        buffer = io.BytesIO(); Image.new("RGB", (32,32), "blue").save(buffer, format="PNG")
+        messages = [{"role":"user","content":[{"type":"text","text":"What is the dominant color? Answer one word."},
+                    {"type":"image_url","image_url":{"url":"data:image/png;base64,"+base64.b64encode(buffer.getvalue()).decode()}}]}]
+    if capability == "structured": extra = {"response_format":{"type":"json_object"}}
+    if capability == "tools":
+        extra = {"tools":[{"type":"function","function":{"name":"ping","description":"Connectivity test","parameters":{"type":"object","properties":{}}}}],"tool_choice":"required"}
+    started = time.monotonic()
+    probe_record = None
+    try:
+        if capability == "streaming":
+            output = "".join(stream_chat("general_chat", messages, mid, probe=True))
+            if not output: raise GatewayError("Empty streamed response")
+        else:
+            data, probe_record = complete("embeddings" if endpoint == "embeddings" else "general_chat",
+                "probe" if endpoint == "embeddings" else messages, tokens=120, extra=extra,
+                endpoint=endpoint, model_override=mid, probe=True)
+            output = adapters.text(endpoint, data)
+            if capability == "embeddings":
+                vectors = data.get("data") or []
+                if not vectors or not isinstance(vectors[0].get("embedding"), list) or not vectors[0]["embedding"]:
+                    raise GatewayError("No embedding vector returned")
+            elif capability == "tools":
+                if not (data.get("choices") or [{}])[0].get("message", {}).get("tool_calls"): raise GatewayError("Tool call not returned")
+            elif capability == "vision":
+                if "blue" not in output.lower(): raise GatewayError("Vision test failed semantic check")
+            elif capability == "structured": json.loads(output)
+            elif not output: raise GatewayError("Empty model response")
+        row = {"verified": [capability],
+               "status":"Healthy", "last_test":datetime.now(timezone.utc).isoformat(), "test_latency_ms":round((time.monotonic()-started)*1000), "last_error":None}
+    except Exception as exc:
+        if probe_record:
+            probe_record.update(status="failed",error=safe(str(exc),500),probe_capability=capability)
+            _audit(probe_record)
+        store.patch("models",mid,{"status":"Degraded" if models[mid].get("verified") else "Failed", "last_test":datetime.now(timezone.utc).isoformat(), "last_error":safe(str(exc),500)})
+        raise
+    if probe_record:
+        probe_record["probe_capability"] = capability; _audit(probe_record)
+    return store.patch("models",mid,row,union=("verified",))
+
+
+def job_scope(function):
+    @functools.wraps(function)
+    def wrapped(*args, **kwargs):
+        obj = args[0] if args else kwargs.get("job_id")
+        token = job_context.set(str(getattr(obj, "id", obj)) if obj is not None else job_context.get())
+        owner = getattr(obj,"user_id",None)
+        if owner is None and isinstance(obj,str):
+            from app.jobs import get
+            job = get(obj)
+            owner = getattr(job,"user_id",None) if job else None
+        user = user_context.set(str(owner) if owner is not None else user_context.get())
+        try: return function(*args, **kwargs)
+        finally: job_context.reset(token); user_context.reset(user)
+    return wrapped
+
+
+def conversation_scope(function):
+    @functools.wraps(function)
+    def wrapped(conversation_id, user_key, *args, **kwargs):
+        user=user_context.set(str(user_key)); conversation=conversation_context.set(conversation_id)
+        try:return function(conversation_id,user_key,*args,**kwargs)
+        finally:user_context.reset(user);conversation_context.reset(conversation)
+    return wrapped
+
+
+def observe_specialized(route, provider, endpoint=None):
+    """Audit preserved specialist calls without pretending they passed through LM API."""
+    def decorate(function):
+        @functools.wraps(function)
+        def wrapped(*args, **kwargs):
+            if not configured(): return function(*args,**kwargs)
+            started=time.monotonic(); error=None
+            is_audio=route=="audio"
+            from .localize import tts_model
+            model=(kwargs.get("model_id") or (args[3] if len(args)>3 else "") or tts_model()) if is_audio else settings.ARVAN_IMAGE_MODEL
+            prompt=args[0] if is_audio else (args[1] if len(args)>1 else kwargs.get("prompt",""))
+            try:return function(*args,**kwargs)
+            except Exception as exc:error=exc;raise
+            finally:
+                try: cfg=gateway_settings()
+                except Exception: cfg={"capture_messages":False,"log_char_limit":256}
+                _audit({"id":str(uuid.uuid4()),"timestamp":datetime.now(timezone.utc).isoformat(),
+                    "user_id":user_context.get(),"job_id":job_context.get(),"conversation_id":conversation_context.get(),
+                    "route":route,"endpoint":endpoint or ("v1/text-to-speech" if is_audio else "chat/completions"),
+                    "requested_model":model,"actual_model":None,"provider":provider,"transport":"preserved-specialist",
+                    "status":"failed" if error else "success","latency_ms":round((time.monotonic()-started)*1000),
+                    "input_tokens":None,"output_tokens":None,"cost":None,"http_status":None,
+                    "retry_count":0,"fallback_history":[],"error":safe(str(error),500) if error else None,
+                    "request_message":safe(prompt,cfg["log_char_limit"]) if cfg["capture_messages"] else None,
+                    "response_message":"Binary media omitted" if not error else None})
+        return wrapped
+    return decorate

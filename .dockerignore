@@ -8,6 +8,7 @@ __pycache__/
 .env
 /certs/
 .jwt_secret
+.lmapi_key
 backups/
 .DS_Store
 Claude outputs/

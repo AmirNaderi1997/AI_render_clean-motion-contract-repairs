@@ -267,6 +267,9 @@ def _coalesce_caption_cards(cards: list[dict], target: int) -> None:
 def _chat_with_fallback(system: str, request: str) -> tuple[dict, object]:
     """Call the configured Arvan text model with bounded retries."""
     from brain.llm import chat_json
+    from brain.lm_gateway import configured
+    if configured():
+        return chat_json(system, request, max_tokens=3000, route="subtitles")
 
     errors = []
     for attempt in range(3):
@@ -554,6 +557,10 @@ def _narration_paths(full: str, out_dir: Path) -> tuple[Path, Path]:
     return base.with_suffix(".mp3"), base.with_suffix(".json")
 
 
+from brain.lm_gateway import observe_specialized
+
+
+@observe_specialized("audio", "elevenlabs-vercel-relay", "v1/text-to-speech/with-timestamps")
 def _elevenlabs_with_timestamps(text: str) -> tuple[bytes, dict]:
     import base64
 

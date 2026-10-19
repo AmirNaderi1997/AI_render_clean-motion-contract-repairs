@@ -241,6 +241,10 @@ def approve_and_generate(job, provider_name: Optional[str] = None) -> None:
         ).start()
 
 
+from brain.lm_gateway import job_scope
+
+
+@job_scope
 def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = False) -> None:
     from app.jobs import get as get_job, _write_status
 

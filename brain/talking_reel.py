@@ -62,6 +62,11 @@ def _sentences_prompt(sentences: list[dict]) -> str:
 
 
 def _chat(system: str, user: str) -> dict:
+    from .lm_gateway import configured
+    if configured():
+        from .llm import gateway_json
+        data, _ = gateway_json(system, user, "editing_agent")
+        return data
     from .ai_provider import ArvanProvider
 
     errors = []

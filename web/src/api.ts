@@ -188,6 +188,18 @@ async function authFetch(url: string, init?: RequestInit): Promise<Response> {
   return r;
 }
 
+export async function aiAdminRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  return j<T>(await authFetch(`${BASE}/admin/ai${path}`, init));
+}
+
+export async function aiAdminCsv(query: string): Promise<void> {
+  const response = await authFetch(`${BASE}/admin/ai/logs.csv?${query}`);
+  if (!response.ok) { await j(response); return; }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a"); link.href = url; link.download = "ai-requests.csv"; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 async function authenticatedObjectUrl(url: string): Promise<string> {
   const response = await authFetch(url);
   if (!response.ok) {

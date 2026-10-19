@@ -336,6 +336,10 @@ class ArvanProvider(_ExternalProvider):
         return _extract_json(text), usage
 
     def _chat_json(self, system: str, user: str) -> tuple[dict, LLMUsage]:
+        from .lm_gateway import configured
+        if configured():
+            from .llm import gateway_json
+            return gateway_json(system, user)
         return self._arvan_chat_json(system, user)
 
     def generate_plan(self, video_metadata: dict, transcript: dict) -> tuple[dict, LLMUsage]:
@@ -349,6 +353,10 @@ class ArvanProvider(_ExternalProvider):
 
     def generate_storyboard(self, prompt: Any, style: Any) -> tuple[dict, LLMUsage]:
         system, user, context = _prompt_parts(prompt, style, "Return a storyboard as JSON.")
+        from .lm_gateway import configured
+        if configured():
+            from .llm import gateway_json
+            return gateway_json(system, user, "script")
         return self._with_fallback(
             "storyboard generation",
             lambda: self._chat_json(system, user),
@@ -368,7 +376,12 @@ class ArvanProvider(_ExternalProvider):
 
 
 def get_provider(provider_name: str | None = None) -> AIProvider:
-    return ArvanProvider()
+    provider = ArvanProvider()
+    from .lm_gateway import configured
+    if configured():
+        provider.name = "lmapi"
+        provider.model = "route-managed"
+    return provider
 
 
 def provider_status() -> dict[str, Any]:

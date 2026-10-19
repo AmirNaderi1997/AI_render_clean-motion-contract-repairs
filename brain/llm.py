@@ -1,4 +1,4 @@
-"""Provider-agnostic LLM client.
+"""Existing editor intelligence contract, centrally routed through Rafiei LM API.
 
 Chosen by env vars:
   LLM_PROVIDER   (arvan|anthropic|openai|openai_compatible) – default: arvan
@@ -6,7 +6,8 @@ Chosen by env vars:
   VISION_PROVIDER (arvan|anthropic|openai|openai_compatible) – default: same as LLM_PROVIDER
   VISION_MODEL   – image-capable model (content gen/editing/hints) – default: gpt-5-5-image
 
-Arvan AI uses its OpenAI-compatible endpoint with the provider-specific
+When LM API is configured, database routes take precedence over legacy model
+environment settings. Arvan remains the compatibility/specialist transport and uses
 ``Authorization: apikey ...`` scheme.
 
 Two top-level functions:
@@ -110,6 +111,8 @@ _PRESETS: dict[str, tuple[str, str]] = {}
 
 
 def provider_configured() -> bool:
+    from .lm_gateway import configured
+    if configured(): return True
     return bool(_getenv_ci("ARVAN_AI_API_KEY") and _getenv_ci("ARVAN_AI_API_BASE"))
 
 
@@ -124,13 +127,27 @@ def chat_json(
     temperature: float = 0.0,
     timeout_seconds: Optional[float] = None,
     provider: Optional[str] = None,
+    route: Optional[str] = None,
 ) -> tuple[dict, LLMUsage]:
     """Send a single-turn request expecting a JSON response.
 
     Uses LLM_PROVIDER + LLM_MODEL (default: CLAUDE_SONNET_5_5).
     Returns (parsed_json, usage).
     """
+    from .lm_gateway import configured, route_context
+    if configured():
+        return gateway_json(system, user, route or route_context.get() or "editing_agent", max_tokens)
     return _arvan_call(system, user, model or _model("arvan"), max_tokens, temperature, timeout_seconds)
+
+
+def gateway_json(system, user, route="editing_agent", max_tokens=16000):
+    from .lm_gateway import complete
+    from .lm_adapters import text, PATHS
+    result, record = complete(route, [{"role":"system","content":system}, {"role":"user","content":user}], tokens=max_tokens)
+    endpoint = next(key for key,value in PATHS.items() if value == record["endpoint"])
+    return _extract_json(text(endpoint, result)), LLMUsage(
+        input_tokens=record.get("input_tokens") or 0, output_tokens=record.get("output_tokens") or 0,
+        model=record.get("actual_model") or record["requested_model"], elapsed_sec=record["latency_ms"]/1000)
 
 
 # ── vision / content-analysis model ──────────────────────────────────────────
@@ -154,6 +171,24 @@ def chat_vision(
     return_json: if True, parse the response as JSON and return a dict.
     Returns (text_or_dict, usage).
     """
+    from .lm_gateway import configured, complete
+    if configured():
+        from .lm_adapters import text
+        content = []
+        for img in images or []:
+            if isinstance(img, str) and img.startswith("https://"):
+                url = img
+            else:
+                b64, media_type = _encode_image(img)
+                url = f"data:{media_type};base64,{b64}"
+            content.append({"type":"image_url","image_url":{"url":url}})
+        content.append({"type":"text","text":user})
+        data, record = complete("video_understanding", [{"role":"system","content":system},
+            {"role":"user","content":content}], required={"chat","vision"}, tokens=max_tokens)
+        value = text("chat", data)
+        usage = LLMUsage(input_tokens=record.get("input_tokens") or 0, output_tokens=record.get("output_tokens") or 0,
+            model=record.get("actual_model") or record["requested_model"], elapsed_sec=record["latency_ms"]/1000)
+        return (_extract_json(value) if return_json else value), usage
     result = _arvan_vision_call(
         system, user, images or [], model or _vision_model(), max_tokens, temperature,
         timeout_seconds=timeout_seconds,

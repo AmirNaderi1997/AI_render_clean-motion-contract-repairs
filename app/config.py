@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     JWT_ACCESS_HOURS: int = 24
     JWT_REFRESH_DAYS: int = 30
     AI_PROVIDER: str = "arvan"
+    LMAPI_BASE_URL: str = "https://lmapi.rafiei.co/v1"
+    LMAPI_API_KEY: str = ""
+    LMAPI_API_KEY_FILE: str = ".lmapi_key"
+    AI_ADMIN_EMAILS: str = ""
+    AI_ADMIN_USER_IDS: str = ""
     AI_PROVIDER_TIMEOUT_SECONDS: int = 300
     AI_TIMEOUT_SECONDS: int = 60
     AI_CORRECTION_TIMEOUT_SECONDS: int = 45

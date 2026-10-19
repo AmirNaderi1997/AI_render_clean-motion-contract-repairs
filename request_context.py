@@ -26,7 +26,11 @@ def current_request_id() -> str | None:
 def celery_request_headers() -> dict[str, str]:
     """Return trace headers without changing any Celery task signature."""
     request_id = current_request_id()
-    return {"request_id": request_id} if request_id else {}
+    result = {"request_id": request_id} if request_id else {}
+    from brain.lm_gateway import user_context, job_context
+    if user_context.get(): result["ai_user"] = str(user_context.get())
+    if job_context.get(): result["ai_job"] = str(job_context.get())
+    return result
 
 
 class RequestContextFilter(logging.Filter):

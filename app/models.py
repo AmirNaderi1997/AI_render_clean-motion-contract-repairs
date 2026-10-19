@@ -12,6 +12,36 @@ class Base(DeclarativeBase):
     pass
 
 
+class AIModel(Base):
+    __tablename__ = "ai_models"
+    key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class AIModelRoute(Base):
+    __tablename__ = "ai_model_routes"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class AIGatewaySettings(Base):
+    __tablename__ = "ai_gateway_settings"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class AIRequestLog(Base):
+    __tablename__ = "ai_request_logs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[str] = mapped_column(String(40), index=True)
+    route: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    job_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    model: Mapped[str] = mapped_column(String(512), index=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class UserModel(Base):
     __tablename__ = "users"
 

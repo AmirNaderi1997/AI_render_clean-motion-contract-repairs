@@ -834,6 +834,10 @@ def start_generate(
         ).start()
 
 
+from brain.lm_gateway import job_scope
+
+
+@job_scope
 def _run_generate(
     job: Job,
     style: str,
@@ -1150,6 +1154,7 @@ def _run_auto_correct(job: Job, transcript: dict, style: str) -> None:
             logging.getLogger(__name__).warning("auto-correct save failed: %s", exc)
 
 
+@job_scope
 def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: bool = False) -> None:
     try:
         job.render.status = "running"

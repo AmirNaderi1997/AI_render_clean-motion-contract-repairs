@@ -301,9 +301,12 @@ def _call_correction_llm(
 ) -> tuple[Optional[dict], LLMUsage]:
     """Call LLM for correction with retry. Returns (parsed_response, usage)."""
     total_usage = LLMUsage()
+    from brain.lm_gateway import configured
+    if configured(): max_retries = 1
     for attempt in range(1, max_retries + 1):
         try:
             kwargs = {"max_tokens": 2048, "temperature": 0.0}
+            if configured(): kwargs["route"] = "subtitles"
             if model:
                 kwargs["model"] = model
             provider = _correction_provider()

@@ -18,6 +18,9 @@ _NON_RETRYABLE = (ValueError, KeyError, FileNotFoundError)
 def _execute(task, name: str, job_id: str, operation, on_error=None) -> None:
     headers = getattr(task.request, "headers", None) or {}
     token = request_id_var.set(headers.get("request_id"))
+    from brain.lm_gateway import user_context, job_context
+    user_token = user_context.set(headers.get("ai_user"))
+    job_token = job_context.set(str(job_id))
     logger.info("%s started for job %s", name, job_id)
     try:
         operation()
@@ -32,6 +35,8 @@ def _execute(task, name: str, job_id: str, operation, on_error=None) -> None:
         logger.info("%s completed for job %s", name, job_id)
     finally:
         request_id_var.reset(token)
+        user_context.reset(user_token)
+        job_context.reset(job_token)
 
 
 def _job(job_id: str):
@@ -158,4 +163,7 @@ if CELERY_AVAILABLE:
 
         # The orchestrator persists its own user-facing failure event.  A
         # retry is reserved for worker/transport loss, not validation errors.
-        process_message(conversation_id, user_key, message_id, text, attachment_ids)
+        headers = getattr(self.request,"headers",None) or {}
+        token = request_id_var.set(headers.get("request_id"))
+        try: process_message(conversation_id, user_key, message_id, text, attachment_ids)
+        finally: request_id_var.reset(token)

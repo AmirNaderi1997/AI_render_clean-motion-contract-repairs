@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
+from .lm_gateway import observe_specialized
 
 
 @dataclass
@@ -238,6 +239,7 @@ class ArvanImageProvider(ProviderAdapter):
             raise RuntimeError("Arvan image generation requires ARVAN_IMAGE_MODEL and credentials; upload real images instead")
         return api_key, base_url, model
 
+    @observe_specialized("image", "arvan-specialist")
     def generate_image(self, prompt: str, aspect: str, output_dir: Path) -> MediaResult:
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("image prompt must not be empty")

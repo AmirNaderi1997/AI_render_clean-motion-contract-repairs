@@ -1,0 +1,217 @@
+"""Server-enforced administration for AI models, routes and audit logs."""
+from __future__ import annotations
+import csv
+import io
+import json
+import threading
+import time
+from collections import Counter, defaultdict
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, Field, ConfigDict
+from app.config import settings
+from app.job_access import is_local_auth_bypass
+from app import lm_store as store
+from brain import lm_gateway as gateway
+
+
+def allowed(request):
+    user = getattr(request.state, "user", None)
+    if not user: return False
+    if settings.APP_ENV != "production" and is_local_auth_bypass(request) and str(user.id) == "local_dev": return True
+    ids = {x.strip() for x in settings.AI_ADMIN_USER_IDS.split(",") if x.strip()}
+    emails = {x.strip().lower() for x in settings.AI_ADMIN_EMAILS.split(",") if x.strip()}
+    return str(user.id) in ids or str(user.email).lower() in emails
+
+
+def admin(request: Request):
+    if not allowed(request): raise HTTPException(403, "Administrator access required")
+
+
+access_router = APIRouter(prefix="/admin/ai", tags=["AI administration"])
+router = APIRouter(prefix="/admin/ai", tags=["AI administration"], dependencies=[Depends(admin)])
+
+
+@access_router.get("/access")
+def access(request: Request):
+    return {"allowed": allowed(request)}
+
+
+class Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ModelUpdate(Strict):
+    id: str = Field(min_length=1, max_length=512)
+    enabled: bool
+
+
+class Probe(Strict):
+    id: str = Field(min_length=1, max_length=512)
+    capability: str = Field(pattern="^(chat|responses|messages|embeddings|vision|structured|tools|streaming)$")
+
+
+class RouteUpdate(Strict):
+    models: list[str] = Field(min_length=1, max_length=8)
+    endpoint: str = Field(pattern="^(chat|responses|messages|embeddings)$")
+    enabled: bool = True
+    timeout: int = Field(default=90, ge=5, le=180)
+    max_retries: int = Field(default=0, ge=0, le=2)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_tokens: int = Field(default=16000, ge=32, le=32000)
+    streaming: bool = False
+    automatic_fallback: bool = True
+
+
+class SettingsUpdate(Strict):
+    enabled: bool
+    capture_messages: bool
+    log_char_limit: int = Field(ge=256, le=12000)
+
+
+def public_model(value):
+    return {k:v for k,v in value.items() if k != "metadata"}
+
+
+@router.get("/models")
+def models(q: str = Query("", max_length=200), provider: str = "", capability: str = "", page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200)):
+    rows = list(store.records("models").values())
+    providers = sorted({r["provider"] for r in rows if r.get("provider")})
+    if q: rows = [r for r in rows if q.lower() in (r["id"]+" "+r["name"]).lower()]
+    if provider: rows = [r for r in rows if r.get("provider") == provider]
+    if capability: rows = [r for r in rows if capability in gateway.capabilities(r)]
+    rows.sort(key=lambda r:r["id"])
+    return {"items":[public_model(r) for r in rows[(page-1)*size:page*size]], "total":len(rows), "providers":providers}
+
+
+@router.post("/models/sync")
+def sync():
+    try: return gateway.sync_models()
+    except Exception as exc: raise HTTPException(502, gateway.safe(str(exc), 500)) from exc
+
+
+@router.patch("/models")
+def update_model(body: ModelUpdate):
+    row = store.records("models").get(body.id)
+    if row is None: raise HTTPException(404, "Model not found")
+    return public_model(store.patch("models",body.id,{"enabled":body.enabled}))
+
+
+_probes = defaultdict(list)
+_lock = threading.Lock()
+
+
+@router.post("/models/test")
+def probe(body: Probe, request: Request):
+    with _lock:
+        uid = str(request.state.user.id); now = time.monotonic()
+        _probes[uid] = [v for v in _probes[uid] if now-v < 60]
+        if len(_probes[uid]) >= 8: raise HTTPException(429, "At most eight bounded probes per minute")
+        _probes[uid].append(now)
+    try: return public_model(gateway.probe_model(body.id, body.capability))
+    except Exception as exc: raise HTTPException(422, gateway.safe(str(exc),500)) from exc
+
+
+@router.get("/routes")
+def routes(): return list(gateway.defaults().values())
+
+
+@router.put("/routes/{route_id}")
+def update_route(route_id: str, body: RouteUpdate):
+    row = gateway.defaults().get(route_id)
+    if row is None: raise HTTPException(404, "Unknown route")
+    catalog = store.records("models")
+    if len(set(body.models)) != len(body.models) or any(mid not in catalog for mid in body.models):
+        raise HTTPException(422, "Choose unique IDs from the actual model catalog")
+    if route_id in {"image", "audio", "video", "transcription"} and body.enabled:
+        raise HTTPException(422, "Specialized LM media execution is not verified; the existing editor provider remains active")
+    if route_id == "embeddings" and (body.endpoint != "embeddings" or len(body.models) != 1):
+        raise HTTPException(422, "Embeddings require one pinned model family to preserve vector compatibility")
+    if route_id == "video_understanding" and body.endpoint != "chat":
+        raise HTTPException(422, "Vision currently requires the verified chat image-input adapter")
+    if body.streaming and body.endpoint != "chat": raise HTTPException(422, "Only verified chat streaming is exposed")
+    required = row["capability"] if row["capability"] == "vision" else body.endpoint
+    if body.enabled:
+        for mid in body.models:
+            caps = gateway.capabilities(catalog[mid])
+            if required not in caps or (body.streaming and "streaming" not in caps):
+                raise HTTPException(422, f"Test the required capability first: {mid}")
+            if body.temperature is not None and "temperature" not in catalog[mid].get("metadata",{}).get("supported_parameters",[]):
+                raise HTTPException(422, f"Temperature support is not declared for {mid}; leave it blank")
+    row.update(body.model_dump()); store.save("routes", {route_id:row}); return row
+
+
+@router.get("/settings")
+def get_settings():
+    return {**gateway.gateway_settings(), "configured":gateway.configured(), "base_url":settings.LMAPI_BASE_URL,
+            "discovery":store.records("settings").get("discovery"), "concurrency_per_worker":4}
+
+
+@router.put("/settings")
+def put_settings(body: SettingsUpdate):
+    store.save("settings", {"global":body.model_dump()}); return get_settings()
+
+
+def filters(model="", status="", user_id="", route="", id="", since=None, until=None):
+    return {"model":model,"status":status,"user_id":user_id,"route":route,"id":id,
+            "since":since.isoformat() if since else None,"until":until.isoformat() if until else None}
+
+
+@router.get("/logs")
+def logs(model: str="", status: str="", user_id: str="", route: str="", id: str="",
+         since: datetime|None=None, until: datetime|None=None,
+         page: int=Query(1,ge=1), size: int=Query(50,ge=1,le=200)):
+    return store.logs(filters(model,status,user_id,route,id,since,until),page,size)
+
+
+@router.get("/logs.csv")
+def export_logs(model: str="", status: str="", user_id: str="", route: str="", id: str="",
+                since: datetime|None=None, until: datetime|None=None):
+    query = filters(model,status,user_id,route,id,since,until)
+    if store.logs(query,size=1)["total"] > 10000: raise HTTPException(422,"Narrow the export date range to 10,000 requests or fewer")
+    result = store.logs(query,size=10000)
+    fields = ["timestamp","id","job_id","user_id","route","requested_model","actual_model","provider","status","latency_ms","input_tokens","output_tokens","cost"]
+    output=io.StringIO(); writer=csv.DictWriter(output,fieldnames=fields,extrasaction="ignore"); writer.writeheader()
+    for row in result["items"]:
+        # CSV formula injection protection for model/user-controlled values.
+        writer.writerow({k:("'"+v if isinstance(v,str) and v[:1] in "=+-@\t\r" else v) for k,v in row.items()})
+    return Response(output.getvalue(),media_type="text/csv",headers={"Content-Disposition":"attachment; filename=ai-requests.csv","Cache-Control":"no-store"})
+
+
+@router.get("/analytics")
+def analytics(since: datetime|None=None, until: datetime|None=None):
+    result = store.logs(filters(since=since,until=until),size=50000)
+    rows=result["items"]; count=len(rows)
+    groups=defaultdict(list); days=defaultdict(Counter)
+    for row in rows:
+        groups[row["requested_model"]].append(row)
+        day=days[row["timestamp"][:10]]; day["requests"]+=1; day["failed"]+=row["status"]!="success"
+    def summary(items):
+        known_cost=[r["cost"] for r in items if isinstance(r.get("cost"),(int,float))]
+        known_tokens=[r for r in items if r.get("input_tokens") is not None or r.get("output_tokens") is not None]
+        return {"requests":len(items),"successful":sum(r["status"]=="success" for r in items),
+            "failed":sum(r["status"]!="success" for r in items),
+            "average_latency_ms":round(sum(r["latency_ms"] for r in items)/len(items)) if items else None,
+            "tokens":sum((r.get("input_tokens") or 0)+(r.get("output_tokens") or 0) for r in known_tokens) if known_tokens else None,
+            "cost":sum(known_cost) if known_cost else None,"cost_reported_requests":len(known_cost)}
+    return {**summary(rows),"total_matching":result["total"],"truncated":result["total"]>count,
+            "models":[{"id":mid,**summary(items)} for mid,items in groups.items()],
+            "daily":[{"date":day,**counts} for day,counts in sorted(days.items())]}
+
+
+class StreamProbe(Strict):
+    route: str = "general_chat"
+
+
+@router.post("/stream-check")
+def stream_check(body: StreamProbe):
+    if body.route not in gateway.ROUTES: raise HTTPException(422,"Unknown route")
+    def events():
+        try:
+            for delta in gateway.stream_chat(body.route,[{"role":"user","content":"Say hello briefly."}]):
+                yield "data: "+json.dumps({"delta":delta})+"\n\n"
+            yield "event: done\ndata: {}\n\n"
+        except Exception as exc:
+            yield "event: error\ndata: "+json.dumps({"error":gateway.safe(str(exc),300)})+"\n\n"
+    return StreamingResponse(events(),media_type="text/event-stream",headers={"Cache-Control":"no-store","X-Accel-Buffering":"no"})

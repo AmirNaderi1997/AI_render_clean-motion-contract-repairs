@@ -1,0 +1,153 @@
+from types import SimpleNamespace
+import json
+import pytest
+import httpx
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from app import lm_store as store
+from app.config import settings
+from app.routers import lm_admin
+from brain import lm_gateway as g, lm_adapters as a
+
+
+@pytest.fixture
+def catalog(monkeypatch):
+    monkeypatch.setattr(settings,"LMAPI_API_KEY","private-test-credential")
+    store.save("models",{mid:{"id":mid,"name":mid,"provider":"test","enabled":True,"available":True,
+        "verified":["chat","vision","responses","messages","embeddings","streaming"],"declared":[],"status":"Healthy"} for mid in ("Exact/Case:1","Other/2")})
+    cfg=g.defaults()["editing_agent"]
+    cfg.update(models=["Exact/Case:1","Other/2"],max_retries=0)
+    store.save("routes",{"editing_agent":cfg})
+    return cfg
+
+
+def test_fallback_and_audit(monkeypatch,catalog):
+    calls=[]
+    def wire(endpoint,body,timeout):
+        calls.append(body["model"])
+        if len(calls)==1: raise g.GatewayError("rate limit",429,True)
+        return {"model":"Actual/Case","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}, {"x-routed-via":"provider/Actual"},200
+    monkeypatch.setattr(g,"_wire",wire)
+    token=g.job_context.set("job-123")
+    try: data,record=g.complete("editing_agent",[{"role":"user","content":"hello"}])
+    finally:g.job_context.reset(token)
+    assert calls==["Exact/Case:1","Other/2"]
+    assert record["job_id"]=="job-123" and record["actual_model"]=="Actual/Case"
+    assert record["cost"] is None and record["input_tokens"]==3
+    assert len(record["fallback_history"])==2
+    assert store.logs()["total"]==1
+
+
+@pytest.mark.parametrize("status",[400,401,403,422])
+def test_no_fallback_on_invalid_request(monkeypatch,catalog,status):
+    calls=[]
+    def wire(*args):calls.append(1);raise g.GatewayError("invalid",status,False)
+    monkeypatch.setattr(g,"_wire",wire)
+    with pytest.raises(g.GatewayError):g.complete("editing_agent",[])
+    assert len(calls)==1 and store.logs()["items"][0]["status"]=="failed"
+
+
+def test_timeout_retries_are_bounded(monkeypatch,catalog):
+    catalog.update(max_retries=1,models=["Exact/Case:1"]);store.save("routes",{"editing_agent":catalog})
+    calls=[]
+    monkeypatch.setattr(g.time,"sleep",lambda _:None)
+    def wire(*args):calls.append(1);raise g.GatewayError("timeout",504,True)
+    monkeypatch.setattr(g,"_wire",wire)
+    with pytest.raises(g.GatewayError):g.complete("editing_agent",[])
+    assert len(calls)==2
+
+
+def test_route_changes_apply_without_restart(monkeypatch,catalog):
+    calls=[]
+    def wire(endpoint,body,timeout):calls.append(body["model"]);return {"choices":[]},{},200
+    monkeypatch.setattr(g,"_wire",wire)
+    g.complete("editing_agent",[])
+    catalog["models"]=["Other/2"];store.save("routes",{"editing_agent":catalog})
+    g.complete("editing_agent",[])
+    assert calls==["Exact/Case:1","Other/2"]
+
+
+def test_unverified_capability_is_not_executed(monkeypatch,catalog):
+    def wire(*args):raise AssertionError("must not call provider")
+    monkeypatch.setattr(g,"_wire",wire)
+    with pytest.raises(g.GatewayError,match="verified"):g.complete("editing_agent",[],required={"image"})
+
+
+def test_adapters_keep_protocols_separate():
+    messages=[{"role":"system","content":"rules"},{"role":"user","content":"hi"}]
+    assert a.payload("responses","Case/Id",messages)["input"]==messages
+    assert a.payload("messages","Case/Id",messages)["system"]=="rules"
+    assert a.payload("embeddings","bge-m3",["hello"])["input"]==["hello"]
+    assert a.text("responses",{"output":[{"content":[{"type":"output_text","text":"ok"}]}]})=="ok"
+    assert a.text("messages",{"content":[{"type":"text","text":"ok"}]})=="ok"
+
+
+def test_redaction(catalog):
+    text=g.safe('private-test-credential Bearer other-secret data:image/png;base64,AAAA')
+    assert "private-test-credential" not in text and "other-secret" not in text and "AAAA" not in text
+
+
+def test_log_filters_pagination(catalog):
+    for index in range(4):
+        store.log({"id":str(index),"timestamp":f"2026-10-20T00:00:0{index}","route":"editing_agent",
+                   "requested_model":"Exact/Case:1","status":"failed" if index%2 else "success"})
+    assert store.logs({"status":"failed"},size=1)["total"]==2
+    assert store.logs({"status":"failed"},page=2,size=1)["items"][0]["id"]=="1"
+
+
+def admin_client(is_admin):
+    app=FastAPI()
+    @app.middleware("http")
+    async def user(request,call_next):
+        request.state.user=SimpleNamespace(id="owner" if is_admin else "regular",email="person@example.com")
+        return await call_next(request)
+    app.include_router(lm_admin.access_router);app.include_router(lm_admin.router)
+    return TestClient(app)
+
+
+def test_admin_authorization_and_key_secrecy(monkeypatch,catalog):
+    monkeypatch.setattr(settings,"AI_ADMIN_USER_IDS","owner")
+    assert admin_client(False).get("/admin/ai/models").status_code==403
+    client=admin_client(True)
+    response=client.get("/admin/ai/settings")
+    assert response.status_code==200 and "private-test-credential" not in response.text
+    assert client.get("/admin/ai/models").status_code==200
+    assert client.put("/admin/ai/routes/embeddings",json={"models":["Exact/Case:1","Other/2"],"endpoint":"embeddings"}).status_code==422
+
+
+def test_stream_does_not_switch_after_first_token(monkeypatch,catalog):
+    catalog.update(streaming=True);store.save("routes",{"editing_agent":catalog})
+    calls=[]
+    class Stream:
+        is_success=True;headers={}
+        def __enter__(self):return self
+        def __exit__(self,*args):return False
+        def iter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"first"}}]}'
+            raise httpx.ReadTimeout("interrupted")
+    class Client:
+        def __enter__(self):return self
+        def __exit__(self,*args):return False
+        def stream(self,*args,**kwargs):calls.append(kwargs["json"]["model"]);return Stream()
+    monkeypatch.setattr(g,"_client",lambda _:Client())
+    stream=g.stream_chat("editing_agent",[])
+    assert next(stream)=="first"
+    with pytest.raises(httpx.ReadTimeout):next(stream)
+    assert calls==["Exact/Case:1"]
+    assert store.logs()["items"][0]["status"]=="failed"
+
+
+def test_catalog_preserves_case_and_no_name_guessing(monkeypatch,catalog):
+    class Response:
+        is_success=True
+        def __init__(self,value):self.value=value
+        def raise_for_status(self):pass
+        def json(self):return self.value
+    class Client:
+        def __enter__(self):return self
+        def __exit__(self,*args):return False
+        def get(self,url,**kwargs):
+            return Response({"data":[{"id":"Vendor/IMAGE-Vision:MiXeD","owned_by":"vendor"}]}) if url.endswith("models") else Response({"paths":{}})
+    monkeypatch.setattr(g,"_client",lambda _:Client())
+    g.sync_models(); row=store.records("models")["Vendor/IMAGE-Vision:MiXeD"]
+    assert row["verified"]==[] and row["declared"]==[] and row["status"]=="Untested"

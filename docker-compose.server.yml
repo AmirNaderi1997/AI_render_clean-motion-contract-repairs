@@ -3,6 +3,15 @@
 services:
   app:
     image: ai-render-runtime:latest
+    environment:
+      LMAPI_API_KEY_FILE: /run/secrets/lmapi_key
+    volumes:
+      - type: bind
+        source: ./.lmapi_key
+        target: /run/secrets/lmapi_key
+        read_only: true
+        bind:
+          create_host_path: false
     ports: !override
       - "127.0.0.1:8300:8000"
     command:
@@ -26,6 +35,15 @@ services:
     # multi-gigabyte images on the VPS.
     build: !reset null
     image: ai-render-runtime:latest
+    environment:
+      LMAPI_API_KEY_FILE: /run/secrets/lmapi_key
+    volumes:
+      - type: bind
+        source: ./.lmapi_key
+        target: /run/secrets/lmapi_key
+        read_only: true
+        bind:
+          create_host_path: false
     command: >-
       celery -A app.celery_app.celery worker
       --concurrency=1

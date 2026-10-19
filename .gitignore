@@ -50,6 +50,7 @@ assets/effect_previews/
 /docs/asr_compare/
 
 # Docker
+.lmapi_key
 backups/
 nginx/certs/
 /certs/

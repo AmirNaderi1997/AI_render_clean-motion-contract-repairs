@@ -189,6 +189,9 @@ app.include_router(fonts.router)
 app.include_router(fonts.legacy_router)
 app.include_router(localize.router)
 app.include_router(studio.router)
+from app.routers import lm_admin
+app.include_router(lm_admin.access_router)
+app.include_router(lm_admin.router)
 
 
 @app.middleware("http")
@@ -204,7 +207,10 @@ async def auth_middleware(request: Request, call_next):
     if _is_loopback_development_request(request):
         request.state.user = _local_development_user()
         request.state.local_auth_bypass = True
-        return await call_next(request)
+        from brain.lm_gateway import user_context
+        token = user_context.set("local_dev")
+        try: return await call_next(request)
+        finally: user_context.reset(token)
 
     path = request.url.path
     if request.method == "OPTIONS" or path in {"/", "/health", "/api/health/ready"} or path.startswith("/auth/"):
@@ -226,7 +232,10 @@ async def auth_middleware(request: Request, call_next):
         request.state.user = user
     except ValueError:
         return unauthorized()
-    return await call_next(request)
+    from brain.lm_gateway import user_context
+    token = user_context.set(str(user.id))
+    try: return await call_next(request)
+    finally: user_context.reset(token)
 
 
 @app.middleware("http")
