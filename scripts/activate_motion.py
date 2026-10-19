@@ -12,6 +12,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("job_dir", type=Path)
 parser.add_argument("config", type=Path)
 parser.add_argument("--api", default="http://127.0.0.1:8000")
+parser.add_argument("--hero-asset")
 args = parser.parse_args()
 root = args.job_dir.resolve()
 config = json.loads(args.config.read_text())
@@ -20,6 +21,11 @@ for scene in config["scenes"]:
         if scene.get(key):
             scene[key] = str(Path(scene[key]).resolve().relative_to(root))
     scene["supporting_assets"] = [str(Path(item).resolve().relative_to(root)) for item in scene.get("supporting_assets", [])]
+if args.hero_asset:
+    asset = (root / args.hero_asset).resolve()
+    if not asset.is_relative_to(root) or not asset.is_file():
+        raise ValueError("Hero image must belong to the current job")
+    config["scenes"][0]["asset"] = str(asset.relative_to(root))
 music = root / "generated/motion_music.mp3"
 if not music.exists():
     source = Path(__file__).resolve().parents[1] / "assets/music/cinematic_pulse.mp3"

@@ -1222,6 +1222,13 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
                 crf=int(render_cfg.get("preview_crf", 22) if preview else plan.export.crf),
                 preset="veryfast" if preview else render_cfg.get("preset", "medium"),
             )
+        elif motion_config:
+            import subprocess
+            poster_path = out_path.with_name(out_path.stem + "_poster.jpg")
+            subprocess.run([
+                "ffmpeg", "-y", "-v", "error", "-ss", "1.2", "-i", str(out_path),
+                "-frames:v", "1", str(poster_path),
+            ], check=True, capture_output=True, timeout=30)
 
         from engine.technical_qc import inspect_export
         render_cfg = (style_override or load_style(plan.style)).get("render", {})

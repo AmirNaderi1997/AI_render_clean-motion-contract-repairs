@@ -47,5 +47,6 @@ def catalog_prompt(catalog: list[dict]) -> str:
     return ("\nVerified available product photos: " + json.dumps(public, ensure_ascii=False)
             + "\nFor each scene return source_asset_index from this catalog. Match the title and narration "
             "to what that image actually shows. Use the full kit for the hook and CTA; "
+            "prefer clean product photos over photos containing tables or long paragraphs for these scenes; "
             "use distinct detail photos as product B-roll for features. No invented workshop shots or hands. "
             "Vary shot composition and use short Persian titles. Never invent a link-in-bio or guarantee.")
