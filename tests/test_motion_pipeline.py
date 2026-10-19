@@ -59,3 +59,14 @@ def test_qc_does_not_approve_unfixable_framing_errors(tmp_path, monkeypatch):
     result = qc_pipeline.run_qc(tmp_path, tmp_path / "out.mp4", {}, skip_vision=True)
     assert result.status == "needs_review"
     assert result.total_issues == 1
+
+
+def test_remotion_cannot_read_arbitrary_server_file_as_music(tmp_path):
+    root = tmp_path / "job"
+    root.mkdir()
+    (root / "image.jpg").write_bytes(b"owned")
+    private = tmp_path / "private.env"
+    private.write_bytes(b"private")
+    with pytest.raises(ValueError, match="Music must belong"):
+        render({"scenes": [{"asset": "image.jpg", "frames": 30}], "music": str(private)},
+               root / "out.mp4", job_dir=root)

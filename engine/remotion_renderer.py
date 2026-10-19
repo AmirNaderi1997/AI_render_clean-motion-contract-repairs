@@ -18,6 +18,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def render(config: dict, output: Path, *, job_dir: Path, on_progress=None) -> None:
     root = job_dir.resolve()
     config = json.loads(json.dumps(config))
+    if not 1 <= len(config.get("scenes", [])) <= 30:
+        raise ValueError("Motion scene count is outside render limits")
+    if sum(scene.get("frames", 0) for scene in config["scenes"]) > 2700:
+        raise ValueError("Motion duration exceeds 90 seconds")
     for scene in config["scenes"]:
         for field in ("asset", "narration"):
             if not scene.get(field):
@@ -40,6 +44,9 @@ def render(config: dict, output: Path, *, job_dir: Path, on_progress=None) -> No
         if not music.is_absolute():
             music = root / music
         # Music is selected by the server from its approved library.
+        music = music.resolve()
+        if not (music.is_relative_to(root) or music.is_relative_to((ROOT / "assets/music").resolve())):
+            raise ValueError("Music must belong to the job or approved library")
         if not music.is_file():
             raise ValueError("Music asset is missing")
         config["music"] = str(music.resolve())
