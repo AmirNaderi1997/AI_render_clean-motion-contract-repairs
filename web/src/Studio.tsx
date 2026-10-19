@@ -35,7 +35,10 @@ const stageLabels: Record<string, string> = {
   analyzing: "Analyzing your video", transcribed: "Speech transcription is ready", storyboard: "Preparing the storyboard",
 };
 
-function projectOutput(project?: StudioProject) { return project?.state?.last_observed?.output ? api.studioOutputUrl(project.id) : undefined; }
+function projectOutput(project?: StudioProject) {
+  const output = project?.state?.last_observed?.output;
+  return output && project ? `${api.studioOutputUrl(project.id)}?version=${encodeURIComponent(output)}` : undefined;
+}
 function statusLabel(status?: string) {
   if (["done", "ready"].includes(status || "")) return "Ready";
   if (["error", "failed"].includes(status || "")) return "Needs attention";
