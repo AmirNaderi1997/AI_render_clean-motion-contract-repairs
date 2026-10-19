@@ -28,11 +28,9 @@ export default function ForgotPassword() {
   return (
     <div className="auth-page">
       <div className="auth-card">
-        <div className="auth-brand">
-          <div className="nav-brand-icon">R</div>
-          <span className="nav-brand-text">AI Render</span>
-        </div>
-        <h2>Reset your password</h2>
+        <div className="auth-logo" aria-hidden="true">✦</div>
+        <h1>Reset your password</h1>
+        <p className="auth-subtitle">We'll send you a link to get back into EditorGPT</p>
         {sent ? (
           <>
             <div className="ok">If this email is registered, you'll receive a reset link.</div>

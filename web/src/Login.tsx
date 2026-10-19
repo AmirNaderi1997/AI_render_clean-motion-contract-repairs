@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "./api";
 import { friendlyError } from "./ui";
 
@@ -9,6 +9,7 @@ export default function Login() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -16,7 +17,7 @@ export default function Login() {
     setLoading(true);
     try {
       await api.login(email, password);
-      navigate("/new");
+      navigate((location.state as { from?: string } | null)?.from || "/studio", { replace: true });
     } catch (err: any) {
       setError(friendlyError(err, "sign you in"));
     } finally {
@@ -27,17 +28,13 @@ export default function Login() {
   return (
     <div className="auth-page">
       <form className="auth-card" onSubmit={submit}>
-        <div className="auth-brand">
-          <div className="nav-brand-icon">R</div>
-          <span className="nav-brand-text">AI Render</span>
-        </div>
-        <h2>Welcome back</h2>
+        <div className="auth-logo" aria-hidden="true">✦</div>
+        <h1>Welcome back</h1>
+        <p className="auth-subtitle">Log in to continue to EditorGPT</p>
         {error && <div className="auth-error" role="alert">{error}</div>}
-        <label htmlFor="login-email">Email</label>
-        <input id="login-email" type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required autoFocus />
-        <label htmlFor="login-password">Password</label>
-        <input id="login-password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required />
-        <button type="submit" disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}>{loading ? "Logging in..." : "Log in"}</button>
+        <input aria-label="Email address" id="login-email" type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address" required autoFocus />
+        <input aria-label="Password" id="login-password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" required />
+        <button type="submit" disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}>{loading ? "Logging in…" : "Continue"}</button>
         <div className="auth-links">
           <Link to="/forgot-password">Forgot password?</Link>
           <span>Don't have an account? <Link to="/signup">Sign up</Link></span>

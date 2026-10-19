@@ -44,11 +44,9 @@ export default function ResetPassword() {
   return (
     <div className="auth-page">
       <form className="auth-card" onSubmit={submit}>
-        <div className="auth-brand">
-          <div className="nav-brand-icon">R</div>
-          <span className="nav-brand-text">AI Render</span>
-        </div>
-        <h2>Set a new password</h2>
+        <div className="auth-logo" aria-hidden="true">✦</div>
+        <h1>Set a new password</h1>
+        <p className="auth-subtitle">Choose a secure password for EditorGPT</p>
         {success && <div className="ok">Password reset successfully! Redirecting to login...</div>}
         {error && <div className="auth-error" role="alert">{error}</div>}
         {!success && (

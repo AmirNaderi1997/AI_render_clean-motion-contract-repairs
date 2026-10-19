@@ -17,6 +17,7 @@ from app import jobs as jobstore
 from app.studio_orchestrator import cancel_project, confirm_action, dispatch_message, sync_conversation
 from app.studio_store import ROOT, repo
 from app.studio_tools import list_tools
+from app.job_access import get_job_for_request, is_local_auth_bypass
 
 router = APIRouter(prefix="/studio", tags=["studio"])
 
@@ -93,6 +94,12 @@ class StoryboardUpdate(BaseModel):
     scenes: list[dict] = Field(min_length=1, max_length=20)
 
 
+class LegacyProjectOpen(BaseModel):
+    engine: str = Field(pattern="^(motion|talking|localize)$")
+    external_ref: str = Field(min_length=4, max_length=64, pattern="^[A-Za-z0-9_-]+$")
+    title: str = Field(default="Video project", max_length=255)
+
+
 @router.post("/conversations", status_code=201)
 async def create_conversation(request: Request, body: ConversationCreate):
     return await repo.create_conversation(_user(request), body.title.strip() or "گفتگوی جدید")
@@ -101,6 +108,37 @@ async def create_conversation(request: Request, body: ConversationCreate):
 @router.get("/conversations")
 async def list_conversations(request: Request):
     return await repo.list_conversations(_user(request))
+
+
+@router.post("/legacy/open")
+async def open_legacy_project(request: Request, body: LegacyProjectOpen):
+    """Attach an existing owned job to Studio without duplicating the engine job."""
+    user_key = _user(request)
+    for summary in await repo.list_conversations(user_key):
+        conversation = await repo.get_conversation(summary["id"], user_key)
+        if any(project.get("external_ref") == body.external_ref for project in conversation.get("projects", [])):
+            return _public_conversation(conversation)
+
+    if body.engine == "localize":
+        from app import localize
+        try:
+            legacy = localize.load(body.external_ref)
+        except KeyError as exc:
+            raise HTTPException(404, "project not found") from exc
+        if not is_local_auth_bypass(request) and str(legacy.get("user_id")) != user_key:
+            raise HTTPException(403, "You do not have access to this project")
+        title = str(legacy.get("title") or legacy.get("name") or body.title)
+    else:
+        job = get_job_for_request(request, body.external_ref)
+        title = str(job.raw_name or (job.plan or {}).get("title") or body.title)
+
+    conversation = await repo.create_conversation(user_key, title)
+    project = await repo.create_project(conversation["id"], user_key, body.engine, title,
+        {"last_observed": {}, "imported_legacy": True}, body.external_ref)
+    await repo.add_message(conversation["id"], user_key, "assistant",
+        "این پروژه به Studio اضافه شد. می‌توانید ادامهٔ تدوین و تغییرات بعدی را همین‌جا درخواست کنید.")
+    await sync_conversation(conversation["id"], user_key)
+    return _public_conversation(await repo.get_conversation(conversation["id"], user_key))
 
 
 @router.get("/conversations/{conversation_id}")

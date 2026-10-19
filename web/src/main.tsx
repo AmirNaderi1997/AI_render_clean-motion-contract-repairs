@@ -12,7 +12,6 @@ const Studio = React.lazy(() => import("./Studio"));
 const Projects = React.lazy(() => import("./Jobs"));
 const Templates = React.lazy(() => import("./Templates"));
 const Settings = React.lazy(() => import("./Settings"));
-const NewReel = React.lazy(() => import("./NewReel"));
 const PlanReview = React.lazy(() => import("./PlanReview"));
 const Render = React.lazy(() => import("./Render"));
 const MyEffects = React.lazy(() => import("./MyEffects"));
@@ -51,10 +50,9 @@ function SessionBootstrap({ children }: { children: React.ReactNode }) {
   return ready ? <>{children}</> : <LoadingSpinner/>;
 }
 
-function ProtectedShell() {
+function RequireAuth({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  if (isAuthenticated()) return <EditorShell/>;
-  return location.pathname === "/" ? <Landing/> : <Navigate to="/login" replace/>;
+  return isAuthenticated() ? <>{children}</> : <Navigate to="/login" replace state={{ from: location.pathname + location.search }}/>;
 }
 
 function App() {
@@ -63,13 +61,13 @@ function App() {
     <Route path="/signup" element={isAuthenticated() ? <Navigate to="/studio" replace/> : <Signup/>}/>
     <Route path="/forgot-password" element={<ForgotPassword/>}/><Route path="/reset-password" element={<ResetPassword/>}/>
     <Route path="/welcome" element={<Landing/>}/>
-    <Route element={<ProtectedShell/>}>
+    <Route element={<EditorShell/>}>
       <Route index element={<Studio/>}/><Route path="studio" element={<Studio/>}/><Route path="studio/:conversationId" element={<Studio/>}/>
-      <Route path="projects" element={<Projects/>}/><Route path="templates" element={<Templates/>}/><Route path="settings" element={<Settings/>}/>
-      <Route path="new" element={<NewReel/>}/><Route path="content" element={<ContentCreator/>}/><Route path="localize" element={<Localize/>}/><Route path="talking" element={<TalkingReels/>}/>
-      <Route path="jobs" element={<Navigate to="/projects" replace/>}/><Route path="jobs/:id" element={<PlanReview/>}/><Route path="jobs/:id/render" element={<Render/>}/>
-      <Route path="my-effects" element={<MyEffects/>}/><Route path="library" element={<Library/>}/><Route path="style-library" element={<StyleLibrary/>}/><Route path="style-learner" element={<StyleLearner/>}/><Route path="fonts" element={<Navigate to="/style-library#fonts" replace/>}/>
-      <Route path="hermes" element={<HermesLayout/>}><Route index element={<HermesDashboard/>}/><Route path="connect" element={<HermesConnect/>}/><Route path="scheduler" element={<HermesScheduler/>}/><Route path="post/new" element={<HermesPostEditor/>}/><Route path="post/:id" element={<HermesPostEditor/>}/><Route path="analytics" element={<HermesAnalytics/>}/><Route path="advisor" element={<HermesAdvisor/>}/><Route path="content-plan" element={<HermesContentPlan/>}/><Route path="settings" element={<HermesSettings/>}/></Route>
+      <Route path="projects" element={<RequireAuth><Projects/></RequireAuth>}/><Route path="templates" element={<Templates/>}/><Route path="settings" element={<RequireAuth><Settings/></RequireAuth>}/>
+      <Route path="new" element={<Navigate to="/studio" replace/>}/><Route path="content" element={<RequireAuth><ContentCreator/></RequireAuth>}/><Route path="localize" element={<RequireAuth><Localize/></RequireAuth>}/><Route path="talking" element={<RequireAuth><TalkingReels/></RequireAuth>}/>
+      <Route path="jobs" element={<Navigate to="/projects" replace/>}/><Route path="jobs/:id" element={<RequireAuth><PlanReview/></RequireAuth>}/><Route path="jobs/:id/render" element={<RequireAuth><Render/></RequireAuth>}/>
+      <Route path="my-effects" element={<RequireAuth><MyEffects/></RequireAuth>}/><Route path="library" element={<RequireAuth><Library/></RequireAuth>}/><Route path="style-library" element={<RequireAuth><StyleLibrary/></RequireAuth>}/><Route path="style-learner" element={<RequireAuth><StyleLearner/></RequireAuth>}/><Route path="fonts" element={<Navigate to="/style-library#fonts" replace/>}/>
+      <Route path="hermes" element={<RequireAuth><HermesLayout/></RequireAuth>}><Route index element={<HermesDashboard/>}/><Route path="connect" element={<HermesConnect/>}/><Route path="scheduler" element={<HermesScheduler/>}/><Route path="post/new" element={<HermesPostEditor/>}/><Route path="post/:id" element={<HermesPostEditor/>}/><Route path="analytics" element={<HermesAnalytics/>}/><Route path="advisor" element={<HermesAdvisor/>}/><Route path="content-plan" element={<HermesContentPlan/>}/><Route path="settings" element={<HermesSettings/>}/></Route>
       <Route path="*" element={<Navigate to="/studio" replace/>}/>
     </Route>
   </Routes></React.Suspense><ToastHost/></JobCacheProvider></SessionBootstrap></AppErrorBoundary></BrowserRouter>;

@@ -54,16 +54,19 @@ export default function Projects() {
     const talkingIds = new Set(talking.map(item => item.job_id));
     for (const item of talking) if (!linkedRefs.has(item.job_id)) {
       const [statusLabel, status] = humanStatus(item.status);
-      items.push({ key: `talking-${item.job_id}`, title: item.name || item.hook || "Talking-head video", type: "Talking Head", status, statusLabel, updated: item.updated_at * 1000, to: `/talking?job=${item.job_id}` });
+      const title = item.name || item.hook || "Talking-head video";
+      items.push({ key: `talking-${item.job_id}`, title, type: "Talking Head", status, statusLabel, updated: item.updated_at * 1000, to: `/studio?legacy=talking:${item.job_id}&title=${encodeURIComponent(title)}` });
     }
     for (const item of localize) if (!linkedRefs.has(item.id)) {
       const [statusLabel, status] = humanStatus(item.status);
-      items.push({ key: `localize-${item.id}`, title: item.title || item.name || "Localized video", type: "Localization", status, statusLabel, progress: item.progress, updated: (item.updated_at || item.created_at || 0) * 1000, to: `/localize?project=${item.id}` });
+      const title = item.title || item.name || "Localized video";
+      items.push({ key: `localize-${item.id}`, title, type: "Localization", status, statusLabel, progress: item.progress, updated: (item.updated_at || item.created_at || 0) * 1000, to: `/studio?legacy=localize:${item.id}&title=${encodeURIComponent(title)}` });
     }
     for (const job of jobs) if (!linkedRefs.has(job.id) && !talkingIds.has(job.id)) {
       const active = job.render.status !== "idle" ? job.render.status : job.generate.status;
       const [statusLabel, status] = humanStatus(active);
-      items.push({ key: `job-${job.id}`, title: job.raw_name || job.plan?.title || "Video edit", type: job.plan?.content_type === "reel" ? "Social video" : "Video edit", status, statusLabel, progress: job.render.status === "running" ? job.render.progress : undefined, updated: 0, to: `/jobs/${job.id}`, thumbnail: job.render.status === "done" && job.render.output ? api.exportUrl(job.id, job.render.output.replace(/\.mp4$/, "_poster.jpg")) : undefined });
+      const title = job.raw_name || job.plan?.title || "Video edit";
+      items.push({ key: `job-${job.id}`, title, type: job.plan?.content_type === "reel" ? "Social video" : "Video edit", status, statusLabel, progress: job.render.status === "running" ? job.render.progress : undefined, updated: 0, to: `/studio?legacy=motion:${job.id}&title=${encodeURIComponent(title)}`, thumbnail: job.render.status === "done" && job.render.output ? api.exportUrl(job.id, job.render.output.replace(/\.mp4$/, "_poster.jpg")) : undefined });
     }
     const normalized = query.trim().toLocaleLowerCase();
     return items.filter(item => (!normalized || `${item.title} ${item.type}`.toLocaleLowerCase().includes(normalized)) && (filter === "all" || item.status === filter)).sort((a, b) => sort === "oldest" ? a.updated - b.updated : b.updated - a.updated);

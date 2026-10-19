@@ -1,8 +1,9 @@
 import React from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { clearToken, getUser, isLocalDevelopment } from "./auth";
+import { api, StudioConversation } from "./api";
+import { clearToken, getUser, isAuthenticated, isLocalDevelopment } from "./auth";
 
-export type IconName = "spark" | "projects" | "templates" | "settings" | "menu" | "close" | "user" | "chevron" | "advanced";
+export type IconName = "spark" | "projects" | "templates" | "settings" | "menu" | "close" | "user" | "chevron" | "advanced" | "login";
 
 export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, React.ReactNode> = {
@@ -15,48 +16,49 @@ export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
     user: <><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></>,
     chevron: <><path d="m9 18 6-6-6-6"/></>,
     advanced: <><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></>,
+    login: <><path d="M10 17l5-5-5-5M15 12H3"/><path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5"/></>,
   };
   return <svg className="eg-icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
 
-const navigation = [
-  { to: "/studio", label: "New Edit", icon: "spark" as IconName },
-  { to: "/projects", label: "Projects", icon: "projects" as IconName },
-  { to: "/templates", label: "Templates", icon: "templates" as IconName },
-  { to: "/settings", label: "Settings", icon: "settings" as IconName },
-];
-
 export default function EditorShell() {
+  const authenticated = isAuthenticated();
   const [collapsed, setCollapsed] = React.useState(() => localStorage.getItem("editorgpt.sidebar") === "collapsed");
   const [drawer, setDrawer] = React.useState(false);
+  const [conversations, setConversations] = React.useState<StudioConversation[]>([]);
+  const [search, setSearch] = React.useState("");
   const location = useLocation();
   const navigate = useNavigate();
   const user = getUser();
+  const refreshChats = React.useCallback(() => { if (authenticated) void api.listStudioConversations().then(setConversations).catch(() => undefined); }, [authenticated]);
   React.useEffect(() => { document.documentElement.dataset.theme = localStorage.getItem("editorgpt.theme") || "dark"; }, []);
-  React.useEffect(() => setDrawer(false), [location.pathname]);
+  React.useEffect(() => { setDrawer(false); refreshChats(); }, [location.pathname, refreshChats]);
+  React.useEffect(() => {
+    const open = () => setDrawer(true); const refresh = () => refreshChats();
+    window.addEventListener("editorgpt:open-nav", open); window.addEventListener("editorgpt:conversations-updated", refresh);
+    return () => { window.removeEventListener("editorgpt:open-nav", open); window.removeEventListener("editorgpt:conversations-updated", refresh); };
+  }, [refreshChats]);
   React.useEffect(() => localStorage.setItem("editorgpt.sidebar", collapsed ? "collapsed" : "open"), [collapsed]);
 
   async function logout() {
     if (!isLocalDevelopment) await fetch("/api/auth/logout", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => undefined);
-    clearToken(); navigate("/login");
+    clearToken(); navigate("/studio");
   }
+  const visibleChats = conversations.filter(item => item.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
 
-  const links = <>{navigation.map(item => <NavLink key={item.to} to={item.to} className={({ isActive }) => `eg-nav-link ${isActive ? "active" : ""}`}>
-    <Icon name={item.icon}/><span>{item.label}</span>
-  </NavLink>)}</>;
-
-  return <div className={`eg-app ${collapsed ? "sidebar-collapsed" : ""}`}>
+  return <div className={`eg-app ${collapsed ? "sidebar-collapsed" : ""} ${authenticated ? "" : "guest"}`}>
     <a className="skip-link" href="#main-content">Skip to content</a>
     <aside className={`eg-sidebar ${drawer ? "drawer-open" : ""}`} aria-label="Main navigation">
-      <div className="eg-brand"><span className="eg-mark"><Icon name="spark" size={19}/></span><span className="eg-brand-copy"><b>EditorGPT</b><small>AI video editor</small></span><button className="eg-icon-button eg-close-drawer" onClick={() => setDrawer(false)} aria-label="Close navigation"><Icon name="close"/></button></div>
+      <div className="eg-brand"><span className="eg-brand-copy"><b>EditorGPT</b></span><button className="eg-icon-button eg-close-drawer" onClick={() => setDrawer(false)} aria-label="Close navigation"><Icon name="close"/></button></div>
       <button className="eg-new-edit" onClick={() => navigate("/studio")}><Icon name="spark"/><span>New edit</span></button>
-      <nav className="eg-nav-links">{links}</nav>
-      <div className="eg-user-card"><span className="eg-avatar">{user?.name?.trim()?.[0]?.toUpperCase() || <Icon name="user" size={17}/>}</span><span className="eg-user-copy"><b>{user?.name || "Local editor"}</b><small>{isLocalDevelopment ? "Local workspace" : user?.email}</small></span>{!isLocalDevelopment && <button onClick={() => void logout()} className="eg-quiet-button">Log out</button>}</div>
+      <nav className="eg-nav-links"><NavLink to="/projects"><Icon name="projects"/><span>Projects</span></NavLink><NavLink to="/templates"><Icon name="templates"/><span>Templates</span></NavLink></nav>
+      {authenticated ? <section className="eg-sidebar-chats"><div className="eg-sidebar-chats-head"><span>Chats</span><small>{conversations.length}</small></div><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search chats" aria-label="Search chats"/><div className="eg-sidebar-chat-list">{visibleChats.map(chat => <NavLink key={chat.id} to={`/studio/${chat.id}`}><span>{chat.title}</span><small>{new Intl.DateTimeFormat(undefined, { month:"short", day:"numeric" }).format(Date.parse(chat.updated_at))}</small></NavLink>)}</div></section> : <div className="eg-guest-note"><p>Sign in to create videos and keep your projects synced.</p><NavLink to="/login" state={{ from: location.pathname + location.search }}><Icon name="login" size={18}/>Log in</NavLink></div>}
+      <div className="eg-sidebar-bottom"><NavLink className="eg-nav-link" to="/settings"><Icon name="settings"/><span>Settings</span></NavLink>{authenticated ? <div className="eg-user-card"><span className="eg-avatar">{user?.name?.trim()?.[0]?.toUpperCase() || <Icon name="user" size={17}/>}</span><span className="eg-user-copy"><b>{user?.name || "Editor"}</b><small>{isLocalDevelopment ? "Local workspace" : user?.email}</small></span>{!isLocalDevelopment && <button onClick={() => void logout()} className="eg-quiet-button">Log out</button>}</div> : null}</div>
       <button className="eg-collapse" onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}><Icon name="chevron"/><span>Collapse</span></button>
     </aside>
     {drawer && <button className="eg-drawer-backdrop" onClick={() => setDrawer(false)} aria-label="Close navigation"/>}
-    <header className="eg-mobile-header"><button className="eg-icon-button" onClick={() => setDrawer(true)} aria-label="Open navigation"><Icon name="menu"/></button><span className="eg-mobile-brand"><span className="eg-mark"><Icon name="spark" size={17}/></span>EditorGPT</span><span className="eg-avatar">{user?.name?.trim()?.[0]?.toUpperCase() || "E"}</span></header>
+    <button className="eg-floating-menu" onClick={() => setDrawer(true)} aria-label="Open navigation"><Icon name="menu"/></button>
     <main id="main-content" className="eg-main" tabIndex={-1}><Outlet/></main>
-    <nav className="eg-mobile-nav" aria-label="Mobile navigation">{links}</nav>
+    <nav className="eg-mobile-nav" aria-label="Mobile navigation"><NavLink to="/studio"><Icon name="spark"/><span>Chat</span></NavLink><NavLink to="/projects"><Icon name="projects"/><span>Projects</span></NavLink><NavLink to="/templates"><Icon name="templates"/><span>Templates</span></NavLink></nav>
   </div>;
 }

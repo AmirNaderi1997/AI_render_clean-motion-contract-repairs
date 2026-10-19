@@ -988,6 +988,9 @@ export const api = {
   async listStudioConversations(): Promise<StudioConversation[]> {
     return j(await authFetch(`${BASE}/studio/conversations`));
   },
+  async openLegacyInStudio(engine: "motion" | "talking" | "localize", external_ref: string, title: string): Promise<StudioConversation> {
+    return j(await authFetch(`${BASE}/studio/legacy/open`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ engine, external_ref, title }) }));
+  },
   async getStudioConversation(id: string): Promise<StudioConversation> {
     return j(await authFetch(`${BASE}/studio/conversations/${id}`));
   },

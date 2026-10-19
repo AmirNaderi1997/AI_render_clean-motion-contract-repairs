@@ -325,40 +325,12 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         narration_segments: list[dict] = []
         warnings: list[str] = []
         voice_provider = _voice_provider()
-        if voice_provider == "sarovi":
-            voice_settings = ":".join((
-                os.environ.get("SAROVI_TTS_MODEL", "google/gemini-3.8-flash-tts"),
-                os.environ.get("SAROVI_TTS_VOICE", "Sulafat"),
-                os.environ.get("SAROVI_TTS_INSTRUCTIONS", ""),
-            ))
-        elif voice_provider == "azure":
-            # Include fallback voice and credential availability so prior audio
-            # is not reused after Azure becomes available.
-            voice_settings = (
-                f"fa={_default_narration_voice('fa')}:"
-                f"en={_default_narration_voice('en')}:"
-                f"fallback_fa={_default_elevenlabs_voice('fa')}:"
-                f"fallback_en={_default_elevenlabs_voice('en')}:"
-                f"configured={bool(os.environ.get('AZURE_SPEECH_KEY', '').strip() and os.environ.get('AZURE_SPEECH_REGION', '').strip())}"
-            )
-        elif voice_provider == "elevenlabs":
-            from .localize import tts_model
-            # The voice ID is safe checkpoint metadata; never persist the key.
-            voice_settings = (
-                f"fa={_default_elevenlabs_voice('fa')}:"
-                f"en={_default_elevenlabs_voice('en')}:model={tts_model()}"
-            )
-        elif voice_provider in ("edge", "edge-tts"):
-            voice_settings = (
-                f"fa={_default_narration_voice('fa')}:"
-                f"en={_default_narration_voice('en')}:"
-                f"rate={os.environ.get('TTS_RATE', settings.TTS_RATE)}"
-            )
-        else:
-            voice_settings = (
-                f"{os.environ.get('TTS_VOICE', settings.TTS_VOICE)}:"
-                f"{os.environ.get('TTS_RATE', settings.TTS_RATE)}"
-            )
+        from .localize import tts_model
+        # Use Localize's ElevenLabs identity and Vercel relay for every generated voice.
+        voice_settings = (
+            f"fa={_default_elevenlabs_voice('fa')}:"
+            f"en={_default_elevenlabs_voice('en')}:model={tts_model()}"
+        )
         voice_signature = f"{voice_provider}:{voice_settings}"
         if checkpoint.get("voice_signature") != voice_signature:
             checkpoint["narration"] = []
@@ -366,80 +338,47 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         cached_narration = {
             n["scene_index"]: n for n in checkpoint["narration"]
             if isinstance(n, dict) and Path(n.get("file_path", "")).is_file()
-            and (voice_provider != "azure" or n.get("provider") == "azure")
+            and n.get("provider") == "elevenlabs"
         }
-        if voice_provider == "disabled":
-            log.info("narration skipped for generated content because TTS_PROVIDER=disabled")
-            warnings.append("Narration skipped because TTS_PROVIDER=disabled")
-        else:
-            try:
-                if voice_provider == "sarovi":
-                    from .sarovi_voice import generate_narration
-                else:
-                    from .tts import generate_narration
-                for scene in storyboard.scenes:
-                    if not isinstance(scene.narration_text, str) or not scene.narration_text.strip():
-                        continue
-                    try:
-                        if (
-                            scene.index in cached_narration
-                            and cached_narration[scene.index].get("narration_text")
-                            == scene.narration_text
-                        ):
-                            record = cached_narration[scene.index]
-                        else:
-                            voice = scene.narration_voice.strip() if isinstance(scene.narration_voice, str) else "default"
-                            voice_kwargs = {}
-                            if voice_provider in ("azure", "edge", "edge-tts"):
-                                voice_kwargs["voice_id"] = (
-                                    voice if voice and voice != "default"
-                                    else _default_narration_voice(storyboard.language)
-                                )
-                                if voice_provider == "azure":
-                                    voice_kwargs["fallback_voice_id"] = _default_elevenlabs_voice(storyboard.language)
-                            elif voice_provider == "elevenlabs":
-                                from .localize import tts_model
-                                voice_kwargs["voice_id"] = _default_elevenlabs_voice(storyboard.language)
-                                voice_kwargs["model_id"] = tts_model()
-                                if not voice_kwargs["voice_id"]:
-                                    if storyboard.language.lower().strip() in {
-                                        "fa", "per", "fas", "persian", "farsi",
-                                    }:
-                                        raise ValueError(
-                                            "Set CONTENT_TTS_ELEVENLABS_VOICE_FA to a "
-                                            "Persian-native ElevenLabs voice ID for Persian content."
-                                        )
-                                    raise ValueError(
-                                        "Set ELEVENLABS_VOICE_ID or "
-                                        "CONTENT_TTS_ELEVENLABS_VOICE_EN for English content."
-                                    )
-                            if voice_provider == "sarovi":
-                                tts_result = generate_narration(scene.narration_text, gen_dir)
-                            else:
-                                tts_result = generate_narration(
-                                    scene.narration_text,
-                                    gen_dir,
-                                    provider=voice_provider,
-                                    **voice_kwargs,
-                                )
-                            record = {
-                                "scene_index": scene.index,
-                                "narration_text": scene.narration_text,
-                                "file_path": tts_result.file_path,
-                                "duration_s": tts_result.duration_s,
-                                "provider": getattr(tts_result, "provider", "") or voice_provider,
-                            }
-                        if preset["is_static"]:
-                            record = _fit_post_narration(record, gen_dir, preset, warnings)
-                        narration_segments.append(record)
-                        cached_narration[scene.index] = record
-                        checkpoint["narration"] = [cached_narration[index] for index in sorted(cached_narration)]
-                        _save_checkpoint(checkpoint_path, checkpoint)
-                    except Exception as tts_exc:
-                        raise RuntimeError(f"Voiceover failed for scene {scene.index + 1}: {tts_exc}") from tts_exc
-            except ImportError as exc:
-                if any(scene.narration_text for scene in storyboard.scenes):
-                    raise RuntimeError(f"Voiceover requires the {voice_provider} provider") from exc
+        try:
+            from .tts import generate_narration
+            for scene in storyboard.scenes:
+                if not isinstance(scene.narration_text, str) or not scene.narration_text.strip():
+                    continue
+                try:
+                    if (
+                        scene.index in cached_narration
+                        and cached_narration[scene.index].get("narration_text") == scene.narration_text
+                    ):
+                        record = cached_narration[scene.index]
+                    else:
+                        voice_kwargs = {
+                            "voice_id": _default_elevenlabs_voice(storyboard.language),
+                            "model_id": tts_model(),
+                        }
+                        if not voice_kwargs["voice_id"]:
+                            raise ValueError("Set an ElevenLabs voice ID for generated narration.")
+                        tts_result = generate_narration(
+                            scene.narration_text, gen_dir, provider="elevenlabs", **voice_kwargs,
+                        )
+                        record = {
+                            "scene_index": scene.index,
+                            "narration_text": scene.narration_text,
+                            "file_path": tts_result.file_path,
+                            "duration_s": tts_result.duration_s,
+                            "provider": "elevenlabs",
+                        }
+                    if preset["is_static"]:
+                        record = _fit_post_narration(record, gen_dir, preset, warnings)
+                    narration_segments.append(record)
+                    cached_narration[scene.index] = record
+                    checkpoint["narration"] = [cached_narration[index] for index in sorted(cached_narration)]
+                    _save_checkpoint(checkpoint_path, checkpoint)
+                except Exception as tts_exc:
+                    raise RuntimeError(f"Voiceover failed for scene {scene.index + 1}: {tts_exc}") from tts_exc
+        except ImportError as exc:
+            if any(scene.narration_text for scene in storyboard.scenes):
+                raise RuntimeError("Voiceover requires the ElevenLabs provider") from exc
 
         if preset["is_static"]:
             if not generated_media:

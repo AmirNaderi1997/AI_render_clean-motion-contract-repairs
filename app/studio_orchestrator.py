@@ -276,10 +276,7 @@ def _modify(conversation_id: str, user_key: str, project: dict, text: str) -> No
         return
     if engine == "localize":
         from app import localize
-        lower = text.lower(); changes = {}
-        if "eleven" in lower or "الون" in lower: changes["voice_provider"] = "elevenlabs"
-        elif "sarovi" in lower or "سارووی" in lower: changes["voice_provider"] = "sarovi"
-        if not changes: raise ValueError("برای Localize فعلاً تغییر صدا را با نام ElevenLabs یا Sarovi مشخص کنید")
+        changes = {"voice_provider": "elevenlabs"}
         localize.update(ref, changes); localize.start_render(ref)
         run(repo.update_project(project["id"], user_key, status="running",
                                 state={**project["state"], "last_observed": {}}, source="chat"))

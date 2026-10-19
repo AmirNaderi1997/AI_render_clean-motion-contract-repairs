@@ -4,6 +4,7 @@ import { api, StudioAttachment, StudioConversation, StudioEvent, StudioProject }
 import { AuthenticatedMedia } from "./AuthenticatedMedia";
 import { Icon } from "./EditorShell";
 import { friendlyError } from "./ui";
+import { isAuthenticated } from "./auth";
 
 type PendingFile = { file: File; progress: number; attachment?: StudioAttachment; url: string };
 type WorkspaceView = "chat" | "preview" | "edit";
@@ -54,9 +55,7 @@ export default function Studio() {
   const [files, setFiles] = React.useState<PendingFile[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
-  const [search, setSearch] = React.useState("");
   const [view, setView] = React.useState<WorkspaceView>("chat");
-  const [historyOpen, setHistoryOpen] = React.useState(false);
   const [activitiesOpen, setActivitiesOpen] = React.useState(true);
   const [listening, setListening] = React.useState(false);
   const bottomRef = React.useRef<HTMLDivElement>(null);
@@ -64,14 +63,25 @@ export default function Studio() {
   const filesRef = React.useRef<PendingFile[]>([]);
   const voiceEnabledRef = React.useRef(false);
   const activeId = conversationId || null;
+  const authenticated = isAuthenticated();
   const hasSpeech = typeof window !== "undefined" && Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
 
   React.useEffect(() => { voiceEnabledRef.current = Boolean(conversation?.status_voice_enabled); }, [conversation?.status_voice_enabled]);
   React.useEffect(() => { filesRef.current = files; }, [files]);
-  const refreshList = React.useCallback(() => api.listStudioConversations().then(setConversations).catch(error => setError(friendlyError(error, "load conversations"))), []);
+  const refreshList = React.useCallback(() => authenticated ? api.listStudioConversations().then(value => { setConversations(value); window.dispatchEvent(new Event("editorgpt:conversations-updated")); }).catch(error => setError(friendlyError(error, "load conversations"))) : Promise.resolve(), [authenticated]);
   const refresh = React.useCallback(async (id = activeId) => { if (!id) return; try { setConversation(await api.getStudioConversation(id)); } catch (error) { setError(friendlyError(error, "load conversation")); } }, [activeId]);
   React.useEffect(() => { void refreshList(); }, [refreshList]);
-  React.useEffect(() => { if (activeId) void refresh(activeId); else setConversation(null); setEvents([]); cursorRef.current = 0; }, [activeId, refresh]);
+  React.useEffect(() => { if (authenticated && activeId) void refresh(activeId); else setConversation(null); setEvents([]); cursorRef.current = 0; }, [authenticated, activeId, refresh]);
+  React.useEffect(() => {
+    const legacy = searchParams.get("legacy");
+    if (!legacy || !authenticated) return;
+    const [engine, externalRef] = legacy.split(":", 2);
+    if (!externalRef || !["motion", "talking", "localize"].includes(engine)) return;
+    setBusy(true);
+    void api.openLegacyInStudio(engine as "motion" | "talking" | "localize", externalRef, searchParams.get("title") || "Video project")
+      .then(value => { setConversation(value); navigate(`/studio/${value.id}`, { replace:true }); })
+      .catch(error => setError(friendlyError(error, "open project"))).finally(() => setBusy(false));
+  }, [authenticated, navigate, searchParams]);
   React.useEffect(() => {
     if (!activeId) return;
     const controller = new AbortController(); let stopped = false;
@@ -86,14 +96,16 @@ export default function Studio() {
   React.useEffect(() => { if (view === "chat") bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [conversation?.messages?.length, events.length, view]);
   React.useEffect(() => () => filesRef.current.forEach(item => URL.revokeObjectURL(item.url)), []);
 
-  async function createConversation() { setError(""); const created = await api.createStudioConversation(); setConversations(value => [created, ...value]); navigate(`/studio/${created.id}`); setHistoryOpen(false); }
-  function selectConversation(id: string) { navigate(`/studio/${id}`); setHistoryOpen(false); }
+  function requireLogin() { navigate("/login", { state:{ from: window.location.pathname + window.location.search } }); }
+  function selectConversation(id: string) { navigate(`/studio/${id}`); }
   async function ensureConversation(title = "گفتگوی جدید") { if (activeId) return activeId; const created = await api.createStudioConversation(title); setConversations(value => [created, ...value]); navigate(`/studio/${created.id}`, { replace: true }); return created.id; }
   async function addFiles(list: FileList | File[]) {
+    if (!authenticated) { requireLogin(); return; }
     const id = await ensureConversation("New media edit");
     for (const file of Array.from(list).slice(0, 12)) { const pending: PendingFile = { file, progress: 0, url: URL.createObjectURL(file) }; setFiles(value => [...value, pending]); try { const attachment = await api.uploadStudioAttachment(id, file, progress => setFiles(value => value.map(item => item === pending ? { ...item, progress } : item))); setFiles(value => value.map(item => item === pending ? { ...item, progress: 100, attachment } : item)); } catch (error) { setError(friendlyError(error, "upload attachment")); setFiles(value => value.filter(item => item !== pending)); URL.revokeObjectURL(pending.url); } }
   }
   async function send(content = text) {
+    if (!authenticated) { requireLogin(); return; }
     const finalText = content.trim() || (files.length ? "این فایل را بررسی کن و برای تدوین آماده کن" : "");
     if (!finalText || busy) return;
     const id = await ensureConversation(finalText.slice(0, 70));
@@ -117,18 +129,14 @@ export default function Studio() {
   const styles = current?.state?.styles || [];
   const sourceAttachment = current?.state?.attachment_ids?.[0];
   const activity = events.filter(item => ["tool.progress", "tool.started", "tool.failed", "render.started", "render.progress", "render.completed", "storyboard.ready"].includes(item.type)).slice(-12);
-  const visibleConversations = conversations.filter(item => item.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
   const isHome = !conversation;
 
   return <div className={`eg-studio ${isHome ? "home" : "active"} view-${view}`} dir="auto">
-    <aside className={`eg-history ${historyOpen ? "open" : ""}`}><div className="eg-history-head"><b>Conversations</b><button className="eg-icon-button" onClick={() => setHistoryOpen(false)} aria-label="Close history"><Icon name="close"/></button></div><button className="eg-history-new" onClick={() => void createConversation()}><Icon name="spark" size={17}/>New conversation</button><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search" aria-label="Search conversations"/><div className="eg-history-list">{visibleConversations.map(item => <button className={item.id === activeId ? "active" : ""} key={item.id} onClick={() => selectConversation(item.id)}><span>{item.title}</span><small>{new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(Date.parse(item.updated_at))}</small></button>)}</div></aside>
-    {historyOpen && <button className="eg-history-backdrop" onClick={() => setHistoryOpen(false)} aria-label="Close conversation history"/>}
     <section className="eg-conversation">
-      {!isHome && <header className="eg-conversation-header"><button className="eg-icon-button" onClick={() => setHistoryOpen(true)} aria-label="Open conversations"><Icon name="menu"/></button><div><b>{conversation.title}</b><small>{current ? `${current.title} · ${statusLabel(current.status)}` : "Conversation"}</small></div><button className={`eg-voice-toggle ${conversation.status_voice_enabled ? "active" : ""}`} onClick={() => api.updateStudioConversation(conversation.id, { status_voice_enabled: !conversation.status_voice_enabled }).then(setConversation)} aria-label="Toggle spoken status updates">Voice status</button></header>}
       <div className="eg-view-tabs" role="tablist">{(["chat", "preview", "edit"] as WorkspaceView[]).map(item => <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)} role="tab">{item[0].toUpperCase() + item.slice(1)}</button>)}</div>
       <div className={`eg-chat-view ${view !== "chat" ? "eg-view-hidden" : ""}`}>
         <div className="eg-message-scroll">
-          {isHome ? <HomeWelcome conversations={conversations} onSuggestion={setText} onOpen={selectConversation}/> : <>
+          {isHome ? <HomeWelcome conversations={conversations} onSuggestion={setText} onOpen={selectConversation} guest={!authenticated} composer={<Composer text={text} setText={setText} files={files} busy={busy} error={error} hasSpeech={hasSpeech} listening={listening} onListen={startVoiceInput} onFiles={addFiles} onSend={send} onRequireLogin={!authenticated ? requireLogin : undefined}/>}/> : <>
             {conversation.messages?.map(message => <article key={`${message.role}-${message.id}`} className={`eg-message ${message.role}`}><div className="eg-message-role">{message.role === "assistant" ? <span className="eg-mark"><Icon name="spark" size={15}/></span> : null}</div><div className="eg-message-content"><p>{message.content}</p>{message.attachments?.length ? <div className="eg-message-files">{message.attachments.map(id => <span key={id}>Attached media</span>)}</div> : null}</div></article>)}
             {activity.length ? <section className="eg-activity"><button className="eg-activity-summary" onClick={() => setActivitiesOpen(value => !value)} aria-expanded={activitiesOpen}><span><i className={current?.status === "running" ? "pulse" : ""}/>{current?.status === "done" ? "Edit complete" : current?.status === "error" ? "Needs attention" : "Editing activity"}</span><Icon name="chevron" size={16}/></button>{activitiesOpen ? <div className="eg-activity-list">{activity.map(event => <ActivityItem event={event} key={event.seq}/>)}</div> : null}</section> : null}
             {styles.length > 0 && current?.status === "awaiting_input" ? <div className="eg-action-card"><span className="eg-eyebrow">Choose a style</span><h3>How should this video feel?</h3><div className="eg-style-options">{styles.map((style: any) => <button key={style.id || style.key} onClick={() => void send(`سبک ${style.id || style.key}`)}><b>{style.label || style.title || style.name}</b><small>{style.description || "Talking Reel style"}</small></button>)}</div></div> : null}
@@ -136,7 +144,7 @@ export default function Studio() {
           </>}
           <div ref={bottomRef}/>
         </div>
-        <Composer text={text} setText={setText} files={files} busy={busy} error={error} hasSpeech={hasSpeech} listening={listening} onListen={startVoiceInput} onFiles={addFiles} onSend={send}/>
+        {!isHome ? <Composer text={text} setText={setText} files={files} busy={busy} error={error} hasSpeech={hasSpeech} listening={listening} onListen={startVoiceInput} onFiles={addFiles} onSend={send}/> : null}
       </div>
       <div className={`eg-preview-view ${view !== "preview" ? "eg-view-hidden" : ""}`}><Preview project={current} conversation={conversation} sourceAttachment={sourceAttachment} onCancel={() => current && api.cancelStudioProject(current.id).then(() => refresh())}/></div>
       <div className={`eg-edit-view ${view !== "edit" ? "eg-view-hidden" : ""}`}><EditWorkspace project={current} onSaved={() => refresh()}/></div>
@@ -145,15 +153,15 @@ export default function Studio() {
   </div>;
 }
 
-function HomeWelcome({ conversations, onSuggestion, onOpen }: { conversations: StudioConversation[]; onSuggestion: (value: string) => void; onOpen: (id: string) => void }) {
-  return <div className="eg-home-welcome"><span className="eg-home-mark"><Icon name="spark" size={26}/></span><h1>What would you like to edit?</h1><p>Describe the result. Add a video, image, audio file or product link when you are ready.</p><div className="eg-suggestion-row">{suggestions.map(item => <button key={item} onClick={() => onSuggestion(item)}>{item}</button>)}</div>{conversations.length ? <div className="eg-recent"><div><b>Recent projects</b><NavLink to="/projects">View all</NavLink></div>{conversations.slice(0, 3).map(item => <button key={item.id} onClick={() => onOpen(item.id)}><span>{item.title}</span><small>{new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(Date.parse(item.updated_at))}</small><Icon name="chevron" size={16}/></button>)}</div> : null}</div>;
+function HomeWelcome({ conversations, onSuggestion, onOpen, guest, composer }: { conversations: StudioConversation[]; onSuggestion: (value: string) => void; onOpen: (id: string) => void; guest: boolean; composer: React.ReactNode }) {
+  return <div className="eg-home-welcome"><h1>EditorGPT</h1><p className="eg-home-tagline">Your AI video editor</p>{composer}<div className="eg-suggestion-row">{suggestions.slice(0, 4).map(item => <button key={item} onClick={() => onSuggestion(item)}>{item}</button>)}</div>{!guest && conversations.length ? <div className="eg-recent"><div><b>Recent projects</b><NavLink to="/projects">View all</NavLink></div>{conversations.slice(0, 3).map(item => <button key={item.id} onClick={() => onOpen(item.id)}><span>{item.title}</span><small>{new Intl.DateTimeFormat(undefined, { month: "short", day:"numeric" }).format(Date.parse(item.updated_at))}</small><Icon name="chevron" size={16}/></button>)}</div> : null}</div>;
 }
 
-function Composer({ text, setText, files, busy, error, hasSpeech, listening, onListen, onFiles, onSend }: { text: string; setText: (value: string) => void; files: PendingFile[]; busy: boolean; error: string; hasSpeech: boolean; listening: boolean; onListen: () => void; onFiles: (files: FileList | File[]) => void; onSend: (text?: string) => void }) {
+function Composer({ text, setText, files, busy, error, hasSpeech, listening, onListen, onFiles, onSend, onRequireLogin }: { text: string; setText: (value: string) => void; files: PendingFile[]; busy: boolean; error: string; hasSpeech: boolean; listening: boolean; onListen: () => void; onFiles: (files: FileList | File[]) => void; onSend: (text?: string) => void; onRequireLogin?: () => void }) {
   return <div className="eg-composer-wrap"><div className="eg-composer" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); void onFiles(event.dataTransfer.files); }}>
     {files.length ? <div className="eg-attachments">{files.map((item, index) => <div key={`${item.file.name}-${index}`}>{item.file.type.startsWith("image/") ? <img src={item.url} alt=""/> : <span>{item.file.type.startsWith("video/") ? "Video" : "Audio"}</span>}<small>{item.file.name}</small><i style={{ width: `${item.progress}%` }}/></div>)}</div> : null}
     {error ? <div className="eg-composer-error" role="alert">{error}</div> : null}
-    <textarea value={text} onChange={event => setText(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void onSend(); } }} placeholder="Describe the video you want to create or edit…" rows={1}/>
+    <textarea value={text} onFocus={() => onRequireLogin?.()} onChange={event => setText(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void onSend(); } }} placeholder="Describe the video you want to create or edit…" rows={1}/>
     <div className="eg-composer-tools"><div><label className="eg-tool-button" aria-label="Attach media"><span>+</span><input type="file" multiple accept="video/*,image/*,audio/*" onChange={event => event.target.files && void onFiles(event.target.files)}/></label><select aria-label="Editing template" onChange={event => event.target.value && setText(templatePrompts[event.target.value] || "")} defaultValue=""><option value="">Choose template</option><option value="talking">Talking Head</option><option value="reel">Instagram Reel</option><option value="localize">Video Localization</option><option value="product">Product Commercial</option></select>{hasSpeech ? <button className={`eg-tool-button ${listening ? "active" : ""}`} onClick={onListen} aria-label="Use voice input">Mic</button> : null}</div><button className="eg-send" onClick={() => void onSend()} disabled={busy || (!text.trim() && !files.length)} aria-label="Send request">{busy ? <i/> : "↑"}</button></div>
   </div><small className="eg-composer-note">EditorGPT can make mistakes. Review important details before exporting.</small></div>;
 }
