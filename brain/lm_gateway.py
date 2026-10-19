@@ -156,12 +156,16 @@ def _audit(record):
 def _record(route, endpoint, requested, started, attempts, response=None, hdr=None, error=None, request=None):
     cfg = gateway_settings(); response = response or {}; hdr = hdr or {}
     usage = adapters.usage(response)
-    actual = response.get("model") or unquote(hdr.get("x-routed-via", "")) or None
+    routed = unquote(hdr.get("x-routed-via", ""))
+    actual = response.get("model")
+    if not actual or actual in {"auto","fusion"} or str(actual).startswith("auto:"):
+        actual = routed.partition("/")[2] or None
     return {"id": str(uuid.uuid4()), "timestamp": datetime.now(timezone.utc).isoformat(),
         "user_id": user_context.get(), "job_id": job_context.get(), "route": route,
         "conversation_id": conversation_context.get(),
         "endpoint": adapters.PATHS[endpoint], "requested_model": requested, "actual_model": actual,
-        "provider": unquote(hdr.get("x-provider") or hdr.get("x-routed-via") or "") or None,
+        "provider": unquote(hdr.get("x-provider", "")) or routed.partition("/")[0] or None,
+        "routed_via": routed or None,
         "status": "failed" if error else "success", "latency_ms": round((time.monotonic()-started)*1000),
         **usage, "http_status": attempts[-1].get("http_status") if attempts else None,
         "retry_count": len(attempts)-len({a["model"] for a in attempts}), "fallback_history": attempts,

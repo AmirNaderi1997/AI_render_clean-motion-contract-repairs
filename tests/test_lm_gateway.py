@@ -82,6 +82,13 @@ def test_adapters_keep_protocols_separate():
     assert a.text("messages",{"content":[{"type":"text","text":"ok"}]})=="ok"
 
 
+def test_actual_auto_model_comes_from_gateway_header(catalog):
+    import time
+    row=g._record("general_chat","messages","auto",time.monotonic(),[],
+        {"model":"auto"},{"x-routed-via":"custom/Vendor%2FCase:Model"})
+    assert row["actual_model"]=="Vendor/Case:Model" and row["provider"]=="custom"
+
+
 def test_redaction(catalog):
     text=g.safe('private-test-credential Bearer other-secret data:image/png;base64,AAAA')
     assert "private-test-credential" not in text and "other-secret" not in text and "AAAA" not in text
