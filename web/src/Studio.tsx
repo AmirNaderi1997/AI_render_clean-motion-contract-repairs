@@ -198,10 +198,11 @@ function Preview({ project, conversation, sourceAttachment, onCancel }: { projec
   const output = projectOutput(project);
   if (!project) return <div className="eg-empty-workspace"><span className="eg-mark"><Icon name="spark"/></span><h2>Your preview will appear here</h2><p>Start in Chat by describing an edit or uploading media.</p></div>;
   const progress = project.state?.last_observed?.progress;
+  const exportVersion = String(project.state?.last_observed?.output || "").match(/\/v(\d+)(?:_preview)?\.mp4(?:$|\?)/)?.[1] || project.current_version;
   return <div className="eg-preview-panel"><header><div><span className="eg-eyebrow">Preview</span><h2>{project.title}</h2></div><span className={`eg-status ${project.status === "done" ? "ready" : project.status === "error" ? "failed" : "working"}`}><i/>{statusLabel(project.status)}</span></header>
-    <div className="eg-player">{output ? <AuthenticatedMedia as="video" controls src={api.studioOutputUrl(project.id)}/> : sourceAttachment && conversation ? <AuthenticatedMedia as="video" controls src={api.studioAttachmentUrl(conversation.id, sourceAttachment)}/> : <div className="eg-player-placeholder"><Icon name="spark" size={28}/><span>{stageLabels[project.state?.last_observed?.stage] || "Preparing preview"}</span></div>}</div>
+    <div className="eg-player">{output ? <AuthenticatedMedia as="video" controls src={output}/> : sourceAttachment && conversation ? <AuthenticatedMedia as="video" controls src={api.studioAttachmentUrl(conversation.id, sourceAttachment)}/> : <div className="eg-player-placeholder"><Icon name="spark" size={28}/><span>{stageLabels[project.state?.last_observed?.stage] || "Preparing preview"}</span></div>}</div>
     {typeof progress === "number" && project.status === "running" ? <div className="eg-render-progress"><span><b>{stageLabels[project.state?.last_observed?.stage] || "Working"}</b><small>{progress}%</small></span><i><b style={{ width: `${progress}%` }}/></i></div> : null}
-    <div className="eg-preview-meta"><span>Version {project.current_version}</span><span>{output ? "Final quality" : "Source preview"}</span></div>
+    <div className="eg-preview-meta"><span>Version {exportVersion}</span><span>{output ? "Final quality" : "Source preview"}</span></div>
     <div className="eg-preview-actions">{output ? <button onClick={() => void api.downloadAuthenticated(api.studioOutputUrl(project.id), `${project.title}.mp4`)}>Download video</button> : null}{project.status === "running" ? <button className="secondary" onClick={onCancel}>Cancel</button> : null}</div>
   </div>;
 }
