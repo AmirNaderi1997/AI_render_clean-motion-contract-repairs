@@ -2,7 +2,7 @@
 # only loopback API ports are published from this Compose project.
 services:
   app:
-    image: ai-render-runtime:latest
+    image: ${AI_RENDER_RUNTIME_IMAGE:-ai-render-runtime:latest}
     environment:
       LMAPI_API_KEY_FILE: /run/secrets/lmapi_key
     volumes:
@@ -34,7 +34,7 @@ services:
     # Reuse the exact app runtime instead of materializing four identical
     # multi-gigabyte images on the VPS.
     build: !reset null
-    image: ai-render-runtime:latest
+    image: ${AI_RENDER_RUNTIME_IMAGE:-ai-render-runtime:latest}
     environment:
       LMAPI_API_KEY_FILE: /run/secrets/lmapi_key
     volumes:
@@ -54,13 +54,13 @@ services:
 
   celery-beat:
     build: !reset null
-    image: ai-render-runtime:latest
+    image: ${AI_RENDER_RUNTIME_IMAGE:-ai-render-runtime:latest}
     mem_limit: 256m
     cpus: 0.25
 
   hermes:
     build: !reset null
-    image: ai-render-runtime:latest
+    image: ${AI_RENDER_RUNTIME_IMAGE:-ai-render-runtime:latest}
     ports: !override
       - "127.0.0.1:8301:8001"
     command: >-
