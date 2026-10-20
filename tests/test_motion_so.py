@@ -81,7 +81,8 @@ def test_confirmation_before_generation(monkeypatch,tmp_path):
     assert error.value.status_code==409
 
 
-def test_native_talking_two_panel_real_ffmpeg(monkeypatch,tmp_path):
+@pytest.mark.parametrize('shot_count',[1,24])
+def test_native_talking_two_panel_real_ffmpeg(monkeypatch,tmp_path,shot_count):
     from engine.talking_styles import talking_2 as split
     from engine.render_ass import ass_burner_ffmpeg
     if not ass_burner_ffmpeg():pytest.skip('libass ffmpeg unavailable')
@@ -92,10 +93,10 @@ def test_native_talking_two_panel_real_ffmpeg(monkeypatch,tmp_path):
         '-f','lavfi','-i','sine=frequency=330','-t','1','-c:v','libx264','-c:a','aac',str(speaker)],check=True)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=c=green:s=320x284:r=30',
         '-t','1','-c:v','libx264',str(panel)],check=True)
-    plan=split.ReelPlan(shots=[split.Shot(0,1,split=True,picture=str(panel),slot=0)],duration=1)
+    plan=split.ReelPlan(shots=[split.Shot(0,1,split=True,picture=str(panel),slot=k) for k in range(shot_count)],duration=shot_count)
     split.render_plain(speaker,plan,out,work_dir=tmp_path/'work',render_settings={'grade':{'vignette':0}})
     from engine.probe import has_audio,probe_duration
-    assert has_audio(out) and abs(probe_duration(out)-1)<.1
+    assert has_audio(out) and abs(probe_duration(out)-shot_count)<.1
     from PIL import Image
     import io
     frame=subprocess.run(['ffmpeg','-v','error','-ss','0.3','-i',str(out),'-frames:v','1','-f','image2pipe','-c:v','png','-'],check=True,capture_output=True).stdout

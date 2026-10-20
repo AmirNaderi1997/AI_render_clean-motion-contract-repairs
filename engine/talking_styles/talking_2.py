@@ -450,7 +450,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
 
     n = len(plan.shots)
     source_colour = base.source_colour_filter(video)
-    inputs = ["-i", str(video)]
+    inputs = ["-threads", "1", "-i", str(video)]
     vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
           f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
     next_input = 1
@@ -466,19 +466,19 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
             if shot.picture and Path(shot.picture).suffix.lower()=='.mp4':
                 from ..probe import probe_duration
                 seek=min(shot.picture_in,max(0,probe_duration(Path(shot.picture))-1/fps_value))
-                inputs += ['-ss',f'{seek:.3f}','-i',shot.picture]
+                inputs += ['-threads','1','-ss',f'{seek:.3f}','-i',shot.picture]
                 vf.append(f'[{next_input}:v]setpts=PTS-STARTPTS,scale={W}:{SPLIT_Y}:force_original_aspect_ratio=decrease,'
                           f'pad={W}:{SPLIT_Y}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps},'
-                          f'tpad=stop_mode=clone:stop_duration={shot.length:.3f},trim=duration={shot.length:.3f},setsar=1[t{k}]')
+                          f'tpad=stop_mode=clone:stop_duration={shot.length:.3f},trim=duration={shot.length:.3f},setsar=1,format=yuv420p[t{k}]')
             else:
-                inputs += ["-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(panel_for(shot))]
+                inputs += ["-threads", "1", "-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(panel_for(shot))]
                 vf.append(f"[{next_input}:v]zoompan=z='1.0+{PICTURE_ZOOM * zoom_amount:.4f}*on/{frames}':"
-                          f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={W}x{SPLIT_Y}:fps={fps},setsar=1[t{k}]")
-            vf.append(f"{cut},{source_colour},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{grade}[b{k}]")
+                          f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={W}x{SPLIT_Y}:fps={fps},setsar=1,format=yuv420p[t{k}]")
+            vf.append(f"{cut},{source_colour},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{grade},format=yuv420p[b{k}]")
             vf.append(f"[t{k}][b{k}]vstack=inputs=2[v{k}]")
             next_input += 1
         else:
-            vf.append(f"{cut},{source_colour},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{grade}[v{k}]")
+            vf.append(f"{cut},{source_colour},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{grade},format=yuv420p[v{k}]")
         fade = min(0.012, shot.length / 4)
         vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
@@ -512,8 +512,10 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         vf.append(f"[vo][duck]amix=inputs=2:normalize=0:duration=first,{loud}")
     else:
         vf.append(f"[cpad]{loud}")
-    cmd = [ffmpeg, "-hide_banner", "-y", *inputs, "-filter_complex", ";".join(vf),
-           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "17", "-preset", "medium",
+    # Container CPU quotas do not limit FFmpeg's auto-detected host thread count.
+    # Many split/picture branches otherwise spawn hundreds of scaler workers.
+    cmd = [ffmpeg, "-hide_banner", "-y", "-filter_complex_threads", "1", "-filter_threads", "1", *inputs, "-filter_complex", ";".join(vf),
+           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-threads", "2", "-crf", "17", "-preset", "medium",
            "-profile:v", "high", "-pix_fmt", "yuv420p",
            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",

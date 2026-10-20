@@ -54,7 +54,7 @@ class Probe(Strict):
 
 class RouteUpdate(Strict):
     models: list[str] = Field(min_length=1, max_length=8)
-    endpoint: str = Field(pattern="^(chat|responses|messages|embeddings|image|speech)$")
+    endpoint: str = Field(pattern="^(chat|responses|messages|embeddings|image|speech|video|transcription|music)$")
     enabled: bool = True
     timeout: int = Field(default=90, ge=5, le=3600)
     max_retries: int = Field(default=0, ge=0, le=2)
@@ -246,9 +246,16 @@ class DirectProvider(Strict):
     extra_header_name: str = Field(default="", max_length=60)
 
 
+class LocalSTTFallback(Strict):
+    enabled: bool = True
+    model: str = Field(default="small", pattern="^(base|small|medium|large-v3)$")
+    improve_low_quality: bool = True
+
+
 class DirectUpdate(Strict):
     enabled: bool
     providers: list[DirectProvider] = Field(max_length=8)
+    stt: LocalSTTFallback | None = None
 
 
 class SecretUpdate(Strict):
@@ -264,7 +271,7 @@ def direct_status():
 @router.put("/direct")
 def direct_update(body: DirectUpdate):
     try:
-        return lm_direct.save_config(body.enabled, [item.model_dump() for item in body.providers])
+        return lm_direct.save_config(body.enabled, [item.model_dump() for item in body.providers], body.stt.model_dump() if body.stt else None)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 

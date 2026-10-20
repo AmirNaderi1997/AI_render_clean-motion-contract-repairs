@@ -295,36 +295,12 @@ def _transcribe(video: Path, root: Path) -> tuple[dict, float, str]:
     exhausted plan must not block analysis. Whisper gives the word timings
     caption detection needs and handles English sources well.
     """
-    import hashlib
-
-    from brain.transcribe_elevenlabs import transcribe_elevenlabs
-
-    from brain.localize import elevenlabs_characters_left
-
-    digest = hashlib.sha256(video.read_bytes()).hexdigest()[:16]
-    error: Exception | None = None
-    attempts = 3
-    if elevenlabs_characters_left() == 0:
-        error, attempts = RuntimeError("ElevenLabs credit is used up"), 0
-    for _ in range(attempts):
-        try:
-            transcript, cost = transcribe_elevenlabs(video, root, language=None, file_digest=digest)
-            return transcript, cost, "elevenlabs"
-        except RuntimeError as exc:
-            error = exc
-            if "quota" in str(exc).lower() or "not set" in str(exc).lower():
-                break  # permanent: do not retry
-    log.warning("ElevenLabs transcription unavailable (%s); using local Whisper", str(error)[:200])
     from brain.transcribe import transcribe
-
-    try:
-        transcript = transcribe(video, root / "whisper", language=None, initial_prompt="", engine="whisper")
-    except Exception as exc:
-        raise RuntimeError(f"transcription failed (ElevenLabs: {str(error)[:200]}; Whisper: {exc})") from exc
+    transcript = transcribe(video, root, language=None, initial_prompt="", engine="elevenlabs")
     if not transcript.get("words"):
-        raise RuntimeError(f"transcription failed: ElevenLabs unavailable ({str(error)[:200]}) "
-                           "and local Whisper found no speech")
-    return transcript, 0.0, "whisper"
+        raise RuntimeError('Primary STT and local Whisper returned no usable speech; review audio before retrying')
+    info=json.loads((root/'asr_cost.json').read_text())
+    return transcript, info.get('cost_usd'), transcript.get('engine','unknown')
 
 
 def _analyze(project_id: str) -> None:
@@ -366,7 +342,7 @@ def _analyze(project_id: str) -> None:
         title=title, title_emojis=emojis, source_headline=headline,
         title_layout=title_layout, lines=lines, english_regions=english,
         caption_detector="visual-outline-v2",
-        cost_usd=round(state.get("cost_usd", 0.0) + asr_cost + usage["cost_usd"], 4),
+        cost_usd=(round((state.get("cost_usd") or 0.0) + asr_cost + usage["cost_usd"], 4) if asr_cost is not None else None),
     )
     save(state)
 

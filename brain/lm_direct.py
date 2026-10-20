@@ -110,7 +110,8 @@ def config() -> dict:
             "format": saved_p.get("format") if saved_p.get("format") in FORMATS else base["format"],
             "extra_header_name": saved_p.get("extra_header_name", ""),
         })
-    return {"enabled": bool(saved.get("enabled", True)), "providers": providers}
+    return {"enabled": bool(saved.get("enabled", True)), "providers": providers,
+            "stt": {"enabled": True, "model": "small", "improve_low_quality": True, **saved.get("stt", {})}}
 
 
 def _env_key(provider: str) -> str:
@@ -140,7 +141,7 @@ def status() -> dict:
     return result
 
 
-def save_config(enabled: bool, providers: list[dict]) -> dict:
+def save_config(enabled: bool, providers: list[dict], stt: dict | None = None) -> dict:
     seen, order, overrides = set(), [], {}
     for item in providers:
         pid = item.get("id")
@@ -154,7 +155,10 @@ def save_config(enabled: bool, providers: list[dict]) -> dict:
         if header and not all(c.isalnum() or c in "-_" for c in header):
             raise ValueError("Header names may contain letters, digits, - and _ only")
         overrides[pid] = {"enabled": bool(item.get("enabled", True)), "base_url": base, "model": model, "format": fmt, "extra_header_name": header}
-    _store().save("settings", {"direct": {"enabled": bool(enabled), "order": order, "providers": overrides}})
+    stt = stt if stt is not None else config()["stt"]
+    if stt.get('model') not in {'base','small','medium','large-v3'}:
+        raise ValueError('Unsupported local Whisper model')
+    _store().save("settings", {"direct": {"enabled": bool(enabled), "order": order, "providers": overrides, "stt": stt}})
     return status()
 
 

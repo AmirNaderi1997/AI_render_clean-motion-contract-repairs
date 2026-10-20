@@ -424,14 +424,8 @@ def transcript_for(job_dir: Path, video: Path) -> dict:
     Estimated timings or a garbled fallback transcript make wrong cuts and
     wrong captions, so a failure stops here with a clear message.
     """
-    from brain.transcribe_elevenlabs import transcribe_elevenlabs
-
-    digest = hashlib.sha256(video.read_bytes()).hexdigest()[:16]
-    try:
-        transcript, _ = transcribe_elevenlabs(video, job_dir, language="fa", file_digest=digest)
-    except Exception as exc:
-        raise RuntimeError(f"Speech-to-text failed ({str(exc)[:200]}). ElevenLabs answers 403 when "
-                           "the VPN is off; turn it on and run again.") from exc
+    from brain.transcribe import transcribe
+    transcript = transcribe(video, job_dir, language="fa", engine="elevenlabs")
     if not transcript.get("words"):
         raise RuntimeError("no speech found in the video")
     return transcript

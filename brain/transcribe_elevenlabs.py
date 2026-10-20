@@ -21,7 +21,7 @@ SCRIBE_FALLBACK_MODEL = "scribe_v1"
 # $0.40 per hour  →  per-second cost
 COST_PER_SECOND = 0.40 / 3600
 _CONNECT_TIMEOUT = int(os.environ.get("ELEVENLABS_SCRIBE_CONNECT_TIMEOUT", "10"))
-_READ_TIMEOUT = int(os.environ.get("ELEVENLABS_SCRIBE_READ_TIMEOUT", "120"))
+_READ_TIMEOUT = max(200,int(os.environ.get("ELEVENLABS_SCRIBE_READ_TIMEOUT", "200")))
 
 # Markers of errors that will fail identically on an immediate retry: an
 # exhausted quota, or a rejected/forbidden key. These are surfaced right away
@@ -133,7 +133,8 @@ def transcribe_elevenlabs(
     Raises RuntimeError on API failure (caller should fall back to Whisper).
     """
     api_key = os.environ.get("ELEVENLABS_API_KEY", "")
-    if not api_key:
+    from brain import lm_gateway
+    if not api_key and not lm_gateway.configured():
         raise RuntimeError("ELEVENLABS_API_KEY not set")
 
     key = _cache_key(file_digest, language, SCRIBE_MODEL, keyterms)
@@ -141,12 +142,25 @@ def transcribe_elevenlabs(
     archive = out_dir / "transcripts" / f"{key}.json"
     if archive.exists():
         cached = json.loads(archive.read_text())
-        cost = cached.get("duration", 0) * COST_PER_SECOND
+        cost = None if cached.get('engine')=='lm_gateway_stt' else cached.get("duration", 0) * COST_PER_SECOND
         log.info("elevenlabs cache hit for %s (%s)", video.name, key)
-        return cached, round(cost, 6)
+        return cached, round(cost, 6) if cost is not None else None
 
     wav = _extract_audio(video, out_dir)
     try:
+        if lm_gateway.configured():
+            # Gateway is the sole remote STT owner. A missing/unverified model
+            # fails into local Whisper, never a second paid direct provider.
+            from types import SimpleNamespace
+            data=lm_gateway.transcription(wav,language)
+            entries=[SimpleNamespace(type='word',text=w.get('text',w.get('word','')),
+                start=w['start'],end=w['end'],logprob=None) for w in data.get('words',[]) if 'start' in w and 'end' in w]
+            if not entries:raise RuntimeError('STT returned no word timestamps; use local Whisper')
+            duration=float(data.get('duration') or entries[-1].end)
+            transcript=_map_response(SimpleNamespace(words=entries,language_code=data.get('language',language)),file_digest,key,language,duration)
+            transcript['engine']='lm_gateway_stt';transcript['model_id']=data.get('model','')
+            archive.parent.mkdir(exist_ok=True);archive.write_text(json.dumps(transcript,ensure_ascii=False))
+            return transcript,None
         import httpx as _httpx
         from elevenlabs import ElevenLabs
         from brain.elevenlabs_transport import base_url
@@ -181,14 +195,7 @@ def transcribe_elevenlabs(
                     raise RuntimeError(
                         f"ElevenLabs API unavailable: {first_err}"
                     ) from first_err
-                log.warning("scribe_v2 failed (%s), retrying once…", first_err)
-                f.seek(0)
-                try:
-                    resp = client.speech_to_text.convert(file=f, **kwargs)
-                except Exception as retry_err:
-                    raise RuntimeError(
-                        f"ElevenLabs API failed: {retry_err}"
-                    ) from retry_err
+                raise RuntimeError('ElevenLabs STT failed; no paid retry, use local Whisper') from first_err
         elapsed = time.monotonic() - t0
 
         duration = resp.audio_duration_secs if hasattr(resp, "audio_duration_secs") and resp.audio_duration_secs else 0.0

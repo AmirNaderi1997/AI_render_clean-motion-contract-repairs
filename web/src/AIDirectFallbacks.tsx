@@ -5,7 +5,7 @@ type Provider = {
   id: string; title: string; enabled: boolean; base_url: string; model: string; format: "openai" | "gemini";
   extra_header_name: string; configured: boolean; key_hint: string; key_source: "saved" | "environment" | null; extra_header_set: boolean;
 };
-type Status = { enabled: boolean; providers: Provider[] };
+type Status = { enabled: boolean; providers: Provider[]; stt?: {enabled: boolean; model: string; improve_low_quality: boolean} };
 type TestResult = { ok: boolean; model: string; latency_ms: number; reply?: string; error?: string };
 
 const json = (body: unknown, method = "PUT"): RequestInit => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -39,7 +39,7 @@ export default function DirectFallbacks() {
   });
   const saveConfig = () => run("config", async () => {
     if (!state) return;
-    const body = { enabled: state.enabled, providers: state.providers.map(({ id, enabled, base_url, model, format, extra_header_name }) => ({ id, enabled, base_url, model, format, extra_header_name })) };
+    const body = { enabled: state.enabled, stt: state.stt, providers: state.providers.map(({ id, enabled, base_url, model, format, extra_header_name }) => ({ id, enabled, base_url, model, format, extra_header_name })) };
     setState(await aiAdminRequest<Status>("/direct", json(body))); setDirty(false);
   }, "Settings saved. New requests use them immediately.");
   const saveSecret = (id: string, kind: "key" | "header", value: string | null) => run(`${kind}-${id}`, async () => {
@@ -58,6 +58,13 @@ export default function DirectFallbacks() {
     <p className="eg-muted">When LM API fails (timeout, rate limit, server error, no usable model), a text request is sent straight to the providers below, in this order, until one answers. Images, speech and video are not affected. Keys are write-only: they are stored privately on the server and never shown again.</p>
     {error && <p role="alert" className="ai-alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
+    {state.stt && <section className="ai-direct-card">
+      <h3>Speech-to-text fallback · Local Whisper</h3>
+      <p className="eg-muted">Runs locally after the primary STT fails. No second paid transcription request. Low-confidence text can be corrected through the configured AI route; raw words and timestamps remain recoverable.</p>
+      <label><input type="checkbox" checked={state.stt.enabled} onChange={e=>{setDirty(true);setState({...state,stt:{...state.stt!,enabled:e.target.checked}});}}/> Enable local STT fallback</label>
+      <label>Whisper model<select value={state.stt.model} onChange={e=>{setDirty(true);setState({...state,stt:{...state.stt!,model:e.target.value}});}}>{['base','small','medium','large-v3'].map(m=><option key={m}>{m}</option>)}</select></label>
+      <label><input type="checkbox" checked={state.stt.improve_low_quality} onChange={e=>{setDirty(true);setState({...state,stt:{...state.stt!,improve_low_quality:e.target.checked}});}}/> Improve low-confidence text with AI</label>
+    </section>}
 
     <label className="ai-direct-master">
       <input type="checkbox" checked={state.enabled} onChange={event => { setDirty(true); setState({ ...state, enabled: event.target.checked }); }}/>

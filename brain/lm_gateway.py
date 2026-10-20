@@ -412,6 +412,39 @@ def probe_model(mid, capability="chat"):
 
 
 @observe_request
+def transcription(audio, language=None):
+    """One verified multipart STT submission; never retries paid transcription."""
+    cfg=defaults().get('transcription',{})
+    if not cfg.get('enabled') or not gateway_settings()['enabled']:
+        raise GatewayError('Transcription routing is disabled',503)
+    candidates=cfg.get('models',[])[:1]
+    model=candidates[0] if candidates else ''
+    item=store.records('models').get(model,{})
+    if not model_allowed(model) or not item.get('enabled') or 'transcription' not in capabilities(item):
+        raise GatewayError('No verified gateway STT model; local Whisper fallback is available',422)
+    from .media_policy import response_timeout,request_headers,require_gateway_safety
+    body={'model':model,'response_format':'verbose_json','timestamp_granularities[]':'word'}
+    if language:body['language']=language
+    timeout=response_timeout('speech',max(200,cfg.get('timeout',200)),body)
+    started=time.monotonic();attempts=[]
+    try:
+        with _client(timeout) as client:
+            require_gateway_safety(client,_url('editor-media-policy'),headers())
+            auth=headers();auth.pop('Content-Type',None)
+            with Path(audio).open('rb') as file:
+                response=client.post(_url(adapters.PATHS['transcription']),headers={**auth,**request_headers('speech',timeout)},data=body,files={'file':(Path(audio).name,file,'audio/mpeg')})
+        attempts.append({'model':model,'http_status':response.status_code})
+        if not response.is_success:raise GatewayError(f'Gateway STT HTTP {response.status_code}',response.status_code)
+        result=response.json()
+        if not isinstance(result,dict) or not isinstance(result.get('words'),list):raise GatewayError('STT word timestamp contract not satisfied')
+        _audit(_record('transcription','transcription',model,started,attempts,result,dict(response.headers),request={'model':model,'language':language}))
+        return {**result,'model':model}
+    except Exception as exc:
+        _audit(_record('transcription','transcription',model,started,attempts,error=exc,request={'model':model,'language':language}))
+        raise
+
+
+@observe_request
 def speech(route, text, voice):
     """Verified binary media contract; exactly one submission, including on 429."""
     cfg = defaults().get(route)

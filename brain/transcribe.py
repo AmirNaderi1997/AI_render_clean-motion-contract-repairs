@@ -76,6 +76,8 @@ def choose_engine(language: Optional[str] = None, explicit: Optional[str] = None
     env = os.environ.get("ASR_ENGINE", "").lower()
     if env in ("elevenlabs", "whisper"):
         return env
+    from brain.lm_gateway import configured
+    if configured():return 'elevenlabs'
     if (language or "").lower() == "fa" and os.environ.get("ELEVENLABS_API_KEY"):
         return "elevenlabs"
     return "whisper"
@@ -369,7 +371,10 @@ def _transcribe_whisper(
     try:
         log.info("loading whisper model %r (device=%s, compute=%s, timeout=%ss)", model_size, device, compute_type, timeout_seconds)
         with _whisper_timeout(timeout_seconds):
-            model = WhisperModel(model_size, device=device, compute_type=compute_type)
+            from app.config import settings
+            default_root=Path('/root/.cache/editor-whisper') if settings.APP_ENV=='production' else Path(settings.JOBS_DIR).parent/'cache'/'whisper'
+            local=Path(os.environ.get('WHISPER_LOCAL_MODELS_DIR',str(default_root)))/model_size
+            model = WhisperModel(str(local) if (local/'model.bin').is_file() else model_size, device=device, compute_type=compute_type)
     except Exception as exc:
         wav_path.unlink(missing_ok=True)
         return empty_transcript(f"Whisper model unavailable ({type(exc).__name__}: {exc})")
@@ -484,7 +489,7 @@ def transcribe(
 
             cost_path = out_dir / "asr_cost.json"
             cost_path.write_text(json.dumps({
-                "engine": "elevenlabs",
+                "engine": transcript.get('engine','elevenlabs'),
                 "audio_seconds": transcript.get("duration", 0),
                 "cost_usd": asr_cost,
             }, indent=2))
@@ -493,6 +498,12 @@ def transcribe(
         except Exception as exc:
             log.warning("ElevenLabs failed (%s), trying local Whisper", exc)
             elevenlabs_error = exc
+    from brain.lm_direct import config as direct_config
+    local_stt = direct_config()['stt']
+    if elevenlabs_error is not None and not local_stt['enabled']:
+        raise RuntimeError('Primary transcription failed; local Whisper fallback is disabled') from elevenlabs_error
+    if elevenlabs_error is not None:
+        model_size = model_size or local_stt['model']
     selected_engine = "whisper"
 
     if os.environ.get("WHISPER_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
@@ -552,4 +563,31 @@ def transcribe(
         "cost_usd": 0.0,
     }, indent=2))
 
+    if elevenlabs_error is not None and local_stt['improve_low_quality']:
+        result = improve_local_transcript(result, out_dir)
     return result
+
+
+def improve_local_transcript(result: dict, out_dir: Path) -> dict:
+    """Conservative text-only correction. Never invent missing speech or retime words."""
+    words=result.get('words') or []
+    if not words or not any(float(w.get('prob',1)) < .7 for w in words):
+        return result
+    marker=out_dir/'whisper_ai_review.json'
+    key=result.get('cache_key') or result.get('file_hash')
+    if marker.exists() and json.loads(marker.read_text()).get('base_key')==key:
+        return effective_transcript(out_dir)
+    report={'base_key':key,'status':'review_required','corrections':[]}
+    try:
+        from brain.correct import auto_correct
+        fixes,_=auto_correct(result,{'correction':{'low_prob_threshold':.7,'max_flagged_ratio':.5}})
+        # Only one-word substitutions: preserve original word boundaries/timing.
+        approved=[c for c in fixes if c.get('confidence',0)>=.9 and c.get('type','replace')=='replace'
+                  and len(str(c.get('new','')).split())==1]
+        if approved:
+            save_corrections(out_dir,key,[{'index':c['index'],'text':c['new']} for c in approved])
+        report.update(status='reviewed',corrections=fixes,applied=len(approved))
+    except Exception as exc:
+        report['status']='review_unavailable';report['error_type']=type(exc).__name__
+    marker.write_text(json.dumps(report,ensure_ascii=False))
+    return {**effective_transcript(out_dir),'stt_quality_review':report['status']}
