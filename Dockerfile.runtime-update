@@ -1,8 +1,7 @@
+# Build with a minimal tracked-only context (never the whole checkout):
+# git archive HEAD Dockerfile.runtime-update app brain engine creative scripts |
+#   docker build -f Dockerfile.runtime-update -t ai-render-runtime:studio-recovery -
 # Code-only update of the known deployed runtime; no dependency or secret copy.
 ARG RUNTIME_BASE=ai-render-runtime:stt-render-fix
 FROM ${RUNTIME_BASE}
-COPY app/ /app/app/
-COPY brain/ /app/brain/
-COPY engine/ /app/engine/
-COPY creative/ /app/creative/
-COPY scripts/ /app/scripts/
+COPY . /app/
