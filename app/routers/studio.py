@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app import jobs as jobstore
-from app.studio_orchestrator import cancel_project, confirm_action, dispatch_message, sync_conversation
+from app.studio_orchestrator import cancel_project, confirm_action, dispatch_message, resume_project, sync_conversation
 from app.studio_store import ROOT, repo
 from app.studio_tools import list_tools
 from app.job_access import get_job_for_request, is_local_auth_bypass
@@ -330,6 +330,13 @@ async def cancel_action(request: Request, action_id: str):
 async def cancel_running_project(request: Request, project_id: str):
     try: return await asyncio.to_thread(cancel_project, project_id, _user(request))
     except KeyError: raise HTTPException(404, "project not found")
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
+
+@router.post('/projects/{project_id}/resume')
+async def resume_stopped_project(request: Request, project_id: str):
+    try: return await asyncio.to_thread(resume_project, project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
     except ValueError as exc: raise HTTPException(409, str(exc))
 
 

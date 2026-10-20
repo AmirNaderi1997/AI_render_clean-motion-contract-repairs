@@ -54,7 +54,7 @@ class Probe(Strict):
 
 class RouteUpdate(Strict):
     models: list[str] = Field(min_length=1, max_length=8)
-    endpoint: str = Field(pattern="^(chat|responses|messages|embeddings)$")
+    endpoint: str = Field(pattern="^(chat|responses|messages|embeddings|image|speech)$")
     enabled: bool = True
     timeout: int = Field(default=90, ge=5, le=180)
     max_retries: int = Field(default=0, ge=0, le=2)
@@ -126,8 +126,12 @@ def update_route(route_id: str, body: RouteUpdate):
         raise HTTPException(422, "Choose unique IDs from the actual model catalog")
     if any(not gateway.model_allowed(mid) for mid in body.models):
         raise HTTPException(422, "Vercel is disabled by installation policy")
-    if row["capability"] in {"image", "speech", "video", "transcription", "music"} and body.enabled:
+    if row["capability"] in {"video", "transcription", "music"} and body.enabled:
         raise HTTPException(422, "Specialized LM media execution is not verified; the existing editor provider remains active")
+    if body.enabled and row['capability'] in {'image','speech'} and body.endpoint != row['capability']:
+        raise HTTPException(422,'Choose the verified media endpoint, not the text endpoint')
+    if route_id == 'image_editing' and body.enabled:
+        raise HTTPException(422,'Image editing requires a separately verified editing contract; generation is not editing')
     if route_id == "embeddings" and (body.endpoint != "embeddings" or len(body.models) != 1):
         raise HTTPException(422, "Embeddings require one pinned model family to preserve vector compatibility")
     if route_id == "video_understanding" and body.endpoint != "chat":

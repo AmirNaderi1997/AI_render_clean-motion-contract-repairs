@@ -85,6 +85,9 @@ def _resolved_intent(text, attachments, current, on_title=None):
 
 
 def _provider() -> str:
+    from brain.lm_gateway import configured
+    if configured():
+        return 'lm_gateway'
     from brain.media_provider import list_providers
     items = list_providers()
     for name in ("arvan_image",):
@@ -440,6 +443,40 @@ def cancel_project(project_id: str, user_key: str) -> dict:
     run(repo.update_project(project_id, user_key, status="canceled", state={**project["state"], "last_observed": {}}))
     _emit(project["conversation_id"], "tool.completed", tool="cancel_operation", message="عملیات لغو شد.")
     return result
+
+
+def resume_project(project_id: str, user_key: str) -> dict:
+    """Resume one existing motion job, preserving valid scene/narration checkpoints."""
+    import fcntl
+    project = run(repo.get_project(project_id, user_key))
+    if project['engine'] != 'motion':
+        raise ValueError('ادامهٔ این موتور از این مرحله هنوز پشتیبانی نمی‌شود؛ از تدوینگر پیشرفته استفاده کنید.')
+    if not project['state'].get('confirmed'):
+        raise ValueError('ابتدا برنامهٔ ساخت را تأیید کنید.')
+    job = jobstore.get(project.get('external_ref'))
+    if not job:
+        raise ValueError('فایل‌های پروژه در دسترس نیستند.')
+    from brain.content_creator import approve_and_generate, get_storyboard_status
+    with (job.dir / '.studio-resume.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        generation = get_storyboard_status(job) or {}
+        if job.render.status == 'done':
+            return {'status':'done','project_id':project_id}
+        if job.render.status in {'running','queued'} or generation.get('state') == 'generating':
+            return {'status':'running','project_id':project_id}
+        if generation.get('state') == 'ready':
+            jobstore.start_render(job, preview=False, loudnorm=True)
+            stage = 'rendering'
+        elif generation.get('state') == 'failed':
+            approve_and_generate(job, provider_name=_provider())
+            stage = 'generating assets'
+        else:
+            raise ValueError('مرحلهٔ قابل ادامه‌ای در این پروژه پیدا نشد.')
+        run(repo.update_project(project_id, user_key, status='running',
+            state={**project['state'], 'last_observed':{}, 'provider':_provider()}))
+        _emit(project['conversation_id'], 'tool.progress', project_id=project_id, stage=stage,
+              message='ساخت همان پروژه از آخرین مرحلهٔ ناقص ادامه یافت؛ صحنه‌های آماده دوباره تولید نمی‌شوند.')
+        return {'status':'running','project_id':project_id,'stage':stage}
 
 
 def _status_message(engine: str, status: str, stage: str) -> str:

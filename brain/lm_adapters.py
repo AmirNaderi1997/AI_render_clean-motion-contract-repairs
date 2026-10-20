@@ -17,6 +17,8 @@ def payload(endpoint, model, messages, *, tokens=4096, temperature=None, stream=
         if system: data["system"] = "\n".join(system)
     elif endpoint == "embeddings":
         data["input"] = messages
+    elif endpoint == "image":
+        data['prompt'] = messages
     else:
         raise ValueError("Media endpoints require a separately verified media adapter")
     if endpoint != "embeddings":

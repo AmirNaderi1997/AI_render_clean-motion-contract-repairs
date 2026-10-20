@@ -117,6 +117,14 @@ export default function Studio() {
   const projects = conversation?.projects || [];
   const current = projects.find(item => item.id === (selectedProject || conversation?.state?.current_project_id)) || projects[projects.length - 1];
   const pendingAction = (conversation?.actions || []).find(item => item.project_id === current?.id && item.status === "pending");
+  const [resuming, setResuming] = React.useState(false);
+  const resume = async () => {
+    if (!current || resuming) return;
+    setResuming(true); setError("");
+    try { await api.resumeStudioProject(current.id); await refresh(); }
+    catch (e) { setError(friendlyError(e, "continue this project")); }
+    finally { setResuming(false); }
+  };
   const styles = current?.state?.styles || [];
   const sourceAttachment = current?.state?.attachment_ids?.[0];
   const messages = conversation?.messages || [];
@@ -254,6 +262,7 @@ export default function Studio() {
       </header> : null}
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-inner">
+          {current?.engine === "motion" && current.state?.confirmed && ["error", "canceled"].includes(current.status) ? <button className="btn btn-secondary" disabled={resuming} onClick={() => void resume()}><Icon name="play" size={14}/>{resuming ? "در حال ادامه…" : "ادامه از مرحلهٔ متوقف‌شده"}</button> : null}
           {!conversation && !pending ? <div className="thread-loading" role="status" aria-label="Loading conversation"><span className="skeleton"/><span className="skeleton"/><span className="skeleton"/></div> : null}
           <Thread items={items} conversation={conversation} projects={projects} localFiles={localFiles} thinking={thinking} sourceUrl={sourceUrl} compactRender={layout === "desktop" && desktopOpen}
             onOpenPreview={id => openWorkspace("preview", id)} onEditAgain={editAgain}

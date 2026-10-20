@@ -1025,6 +1025,9 @@ export const api = {
   async cancelStudioProject(id: string): Promise<any> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/cancel`, { method: "POST" }));
   },
+  async resumeStudioProject(id: string): Promise<any> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/resume`, { method: "POST" }));
+  },
   async updateStudioStoryboard(id: string, scenes: any[]): Promise<StudioProject> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/storyboard`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ scenes }) }));
   },

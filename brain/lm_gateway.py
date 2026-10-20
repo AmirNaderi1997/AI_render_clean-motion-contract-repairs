@@ -53,6 +53,7 @@ def safe(value, limit=6000):
     for key in (secret(), settings.ARVAN_AI_API_KEY, settings.ELEVENLABS_API_KEY):
         if key: text = text.replace(key, "[REDACTED]")
     text = re.sub(r'data:[^;\s]+;base64,[A-Za-z0-9+/=]+', '[media omitted]', text)
+    text = re.sub(r'("b64_json"\s*:\s*")[^"]*', r'\1[media omitted]', text)
     text = re.sub(r'(?i)(bearer\s+|(?:api[_-]?key|token|secret)[=:]\s*)[^\s"&]+', r'\1[REDACTED]', text)
     text = re.sub(r'\b(?:sk-|freellmapi-)[A-Za-z0-9_.-]+', '[REDACTED]', text)
     return text[:limit]
@@ -270,6 +271,10 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
                     _audit(record)
                     return response, record
                 except GatewayError as exc:
+                    if endpoint == 'image' and exc.status != 429:
+                        # An ambiguous media failure may already have been billed.
+                        # Do not submit another image automatically after timeout/5xx.
+                        exc.retryable = False
                     if mid.startswith("google:") and exc.status == 404 and "model_not_found" in str(exc):
                         # Disabled Google model: skip, without quota preflight or retry.
                         exc.retryable = True
@@ -393,6 +398,36 @@ def probe_model(mid, capability="chat"):
     return store.patch("models",mid,row,union=("verified",))
 
 
+@observe_request
+def speech(route, text, voice):
+    """Verified binary media contract; only definite 429 rejections can fall back."""
+    cfg = defaults().get(route)
+    if not cfg or not cfg.get('enabled') or not gateway_settings()['enabled']:
+        raise GatewayError('Speech routing is disabled',503)
+    catalog=store.records('models'); started=time.monotonic(); attempts=[]
+    candidates=cfg['models'] if cfg.get('automatic_fallback') else cfg['models'][:1]
+    for mid in candidates:
+        if not model_allowed(mid) or 'speech' not in capabilities(catalog.get(mid,{})):
+            continue
+        body={'model':mid,'input':text,'voice':voice,'response_format':'mp3'}
+        try:
+            with _client(cfg['timeout']) as client:
+                response=client.post(_url(adapters.PATHS['speech']),headers=headers(),json=body)
+            attempts.append({'model':mid,'http_status':response.status_code})
+            if not response.is_success:
+                raise GatewayError(f'LM speech HTTP {response.status_code}: {safe(response.text,200)}',response.status_code)
+            if not response.headers.get('content-type','').startswith('audio/') or not 100 < len(response.content) < 30*1024*1024:
+                raise GatewayError('Gateway returned invalid audio content')
+            _audit(_record(route,'speech',candidates[0],started,attempts,{},dict(response.headers),request=body))
+            return response.content
+        except Exception as exc:
+            _audit(_record(route,'speech',candidates[0],started,attempts,error=exc,request={'model':mid,'input':text}))
+            if getattr(exc,'status',None)==429:
+                continue
+            raise
+    raise GatewayError('No verified speech model is available',503)
+
+
 def job_scope(function):
     @functools.wraps(function)
     def wrapped(*args, **kwargs):
@@ -424,6 +459,8 @@ def observe_specialized(route, provider, endpoint=None):
         @functools.wraps(function)
         def wrapped(*args, **kwargs):
             if not configured(): return function(*args,**kwargs)
+            if route == 'audio':
+                return function(*args,**kwargs)  # The central speech transport owns its audit.
             started=time.monotonic(); error=None
             is_audio=route=="audio"
             from .localize import tts_model
