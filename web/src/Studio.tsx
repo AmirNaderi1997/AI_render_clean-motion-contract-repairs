@@ -51,6 +51,8 @@ export default function Studio() {
   const refreshTimerRef = React.useRef<number | null>(null);
   const listTimerRef = React.useRef<number | null>(null);
   const lastSendRef = React.useRef<{ text: string; ids: string[] } | null>(null);
+  // Conversation created only so attachments have somewhere to upload; we don't navigate until the user sends.
+  const draftIdRef = React.useRef<string | null>(null);
   const activeId = conversationId || null;
   const hasSpeech = typeof window !== "undefined" && Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
 
@@ -141,19 +143,20 @@ export default function Studio() {
 
   // ── actions ──────────────────────────────────────────────────
   const requireLogin = () => openAuth("login");
-  async function ensureConversation(titleText = "گفتگوی جدید") {
+  async function ensureConversation(titleText = "گفتگوی جدید", go = true) {
     if (activeId) return activeId;
-    const created = await api.createStudioConversation(titleText);
-    setConversations(value => [created, ...value]);
-    navigate(`/studio/${created.id}`, { replace: true });
-    return created.id;
+    let id = draftIdRef.current;
+    if (!id) { id = (await api.createStudioConversation(titleText)).id; draftIdRef.current = id; }
+    if (go) { draftIdRef.current = null; navigate(`/studio/${id}`, { replace: true }); void refreshList(); }
+    return id;
   }
-  async function addFiles(list: FileList | File[]) {
+  async function addFiles(input: FileList | File[]) {
+    const list = Array.from(input); // snapshot: a live FileList can be emptied while we await
     if (!authenticated) { requireLogin(); return; }
     setError("");
     let id: string;
-    try { id = await ensureConversation("New media edit"); } catch (e) { setError(friendlyError(e, "start the conversation")); return; }
-    for (const file of Array.from(list).slice(0, 12)) {
+    try { id = await ensureConversation("New media edit", false); } catch (e) { setError(friendlyError(e, "start the conversation")); return; }
+    for (const file of list.slice(0, 12)) {
       const entry: PendingFile = { file, progress: 0, url: URL.createObjectURL(file) };
       setFiles(value => [...value, entry]);
       try {

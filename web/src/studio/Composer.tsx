@@ -42,7 +42,7 @@ export function Composer(props: ComposerProps) {
   return <div className={`composer composer-${variant}`}>
     <div className="composer-box" data-dragging={dragging || undefined}
       onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
-      onDrop={event => { event.preventDefault(); setDragging(false); void onFiles(event.dataTransfer.files); }}>
+      onDrop={event => { event.preventDefault(); setDragging(false); void onFiles(Array.from(event.dataTransfer.files)); }}>
       {error ? <div className="notice composer-error" data-tone="error" role="alert"><span className="grow">{error}</span><button className="icon-btn" style={{ ["--size" as string]: "24px" }} onClick={onDismissError} aria-label="Dismiss error"><Icon name="close" size={14}/></button></div> : null}
       {files.length ? <ul className="attach-row" aria-label="Attachments">{files.map((item, index) => <li key={`${item.file.name}-${index}`} className="attach-chip">
         {item.file.type.startsWith("image/") ? <img src={item.url} alt=""/> : <span className="attach-icon"><Icon name={item.file.type.startsWith("video/") ? "video" : "music"} size={18}/></span>}
@@ -65,7 +65,7 @@ export function Composer(props: ComposerProps) {
             {templates.slice(0, 6).map(item => <button key={item.id} role="menuitem" className="menu-item" onClick={() => { setText(item.prompt); close(); ref.current?.focus(); }}><Icon name={item.icon} size={18}/><span>{item.title}</span></button>)}
           </>}
         </Menu>
-        <input ref={fileInput} type="file" multiple hidden accept="video/*,image/*,audio/*" onChange={event => { if (event.target.files) void onFiles(event.target.files); event.target.value = ""; }}/>
+        <input ref={fileInput} type="file" multiple hidden accept="video/*,image/*,audio/*" onChange={event => { const picked = Array.from(event.target.files || []); event.target.value = ""; if (picked.length) void onFiles(picked); }}/>
         <span className="grow"/>
         {hasSpeech ? <button type="button" className="icon-btn" aria-pressed={listening} onClick={onListen} aria-label={listening ? "Stop voice input" : "Use voice input"} data-tip="Voice input" data-tip-pos="top"><Icon name="mic" size={19}/></button> : null}
         {processing

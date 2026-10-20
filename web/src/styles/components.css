@@ -48,6 +48,7 @@
     padding: 4px 8px; border-radius: var(--radius-xs); white-space: nowrap;
     background: var(--ink); color: var(--on-ink); font-size: 12px; font-weight: 500;
   }
+  [data-tip][aria-expanded="true"]:hover::after, [data-tip][aria-expanded="true"]:focus-visible::after { content: none; }
   [data-tip][data-tip-pos="top"]:hover::after, [data-tip][data-tip-pos="top"]:focus-visible::after {
     inset-block-start: auto; inset-block-end: calc(100% + 6px);
   }
@@ -129,7 +130,7 @@ textarea.input { resize: vertical; line-height: 1.5; }
 
 /* ── Menu / popover ──────────────────────────────────────── */
 .popover {
-  position: absolute; z-index: 80; min-width: 220px; max-width: min(320px, calc(100vw - 24px));
+  position: absolute; z-index: 80; min-width: 250px; max-width: min(320px, calc(100vw - 24px));
   padding: 6px; background: var(--elevated); border: 1px solid var(--border);
   border-radius: var(--radius-md); box-shadow: var(--shadow-md);
   animation: pop-in var(--dur) var(--ease);
