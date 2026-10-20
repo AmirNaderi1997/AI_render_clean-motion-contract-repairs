@@ -4,8 +4,7 @@ import json
 import re
 import threading
 import time
-import httpx
-from brain.http_ssl import ssl_context
+from brain.motion_transport import client as relay_client
 
 
 def decode(response):
@@ -25,7 +24,7 @@ class MessageReader:
 
     def rpc(self,method,params=None):
         body={'jsonrpc':'2.0','id':1,'method':method,'params':params or {}}
-        with httpx.Client(timeout=20,verify=ssl_context(),follow_redirects=False) as http:
+        with relay_client(self.key,timeout=30) as http:
             response=http.post('https://mcp.motion.so/mcp',headers=self.headers,json=body)
         sid=response.headers.get('mcp-session-id')
         if sid:self.headers['Mcp-Session-Id']=sid
@@ -36,7 +35,7 @@ class MessageReader:
     def pull(self,remote,state):
         if not self.initialized:
             self.rpc('initialize',{'protocolVersion':'2025-03-26','capabilities':{},'clientInfo':{'name':'EditorGPT','version':'1.0'}})
-            with httpx.Client(timeout=10,verify=ssl_context(),follow_redirects=False) as http:
+            with relay_client(self.key,timeout=30) as http:
                 http.post('https://mcp.motion.so/mcp',headers=self.headers,
                     json={'jsonrpc':'2.0','method':'notifications/initialized'}).raise_for_status()
             tools=self.rpc('tools/list').get('tools',[])

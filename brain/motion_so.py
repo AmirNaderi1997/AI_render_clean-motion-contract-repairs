@@ -15,7 +15,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 import httpx
 from app.config import settings
-from brain.http_ssl import ssl_context
 from brain.media_provider import MediaResult, _parse_resolution
 
 BASE='https://api.motion.so/api/motion'
@@ -31,7 +30,8 @@ def configured():
 
 
 def client():
-    return httpx.Client(verify=ssl_context(),timeout=httpx.Timeout(300,connect=10),follow_redirects=False)
+    from brain.motion_transport import client as relay_client
+    return relay_client(secret())
 
 
 def call(method,path,body=None):
@@ -87,7 +87,8 @@ def _storage_url(url):
 def upload(path):
     import mimetypes
     mime=mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
-    limit=50*1024*1024 if mime.startswith('image/') else 500*1024*1024
+    # Leave room for the signed multipart fields under Vercel's 4.5 MB limit.
+    limit=3*1024*1024
     if path.stat().st_size>limit:raise ValueError('Motion reference exceeds upload limit')
     ticket=call('POST','/uploads',{'filename':path.name,'content_type':mime})
     if ticket.get('upload_method')!='POST':raise ValueError('Unsupported Motion upload contract')
@@ -106,14 +107,27 @@ def _download(url,target):
     url=_storage_url(url)
     partial=target.with_suffix('.part')
     try:
-        with client() as http, http.stream('GET',url) as response:
-            response.raise_for_status()
-            size=0
+        with client() as http:
+            size=0;total=None;etag=None
             with partial.open('wb') as out:
-                for chunk in response.iter_bytes():
-                    size+=len(chunk)
-                    if size>500*1024*1024:raise ValueError('Motion output exceeds 500 MB')
-                    out.write(chunk)
+                while total is None or size<total:
+                    headers={'Range':f'bytes={size}-{size+1048575}'}
+                    if etag:headers['If-Range']=etag
+                    response=http.get(url,headers=headers)
+                    if response.status_code!=206:raise ValueError('Motion relay requires ranged storage downloads')
+                    match=re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)',response.headers.get('content-range',''))
+                    if not match:raise ValueError('Invalid Motion storage range')
+                    start,end,received_total=map(int,match.groups())
+                    if (start!=size or end<start or end-start+1!=len(response.content) or
+                            len(response.content)>1048576 or received_total>500*1024*1024 or
+                            (total is not None and total!=received_total)):
+                        raise ValueError('Motion output range failed validation')
+                    total=received_total
+                    if not total or end>=total:raise ValueError('Invalid Motion output size')
+                    current_etag=response.headers.get('etag')
+                    if etag and current_etag!=etag:raise ValueError('Motion output changed while downloading')
+                    etag=current_etag
+                    out.write(response.content);size+=len(response.content)
         from engine.probe import video_stream
         video_stream(partial)
         partial.replace(target)

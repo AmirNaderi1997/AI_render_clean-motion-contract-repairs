@@ -62,3 +62,20 @@ Official references: https://docs.motion.so/llms-full.txt,
 https://docs.motion.so/openapi.json, https://docs.motion.so/reference/sessions,
 https://docs.motion.so/guides/mcp, https://docs.motion.so/guides/claude,
 https://docs.motion.so/guides/attachments.
+
+## Mandatory Vercel transport
+
+All Motion REST, MCP and signed GCS transfers now go through the dedicated
+`editorgpt-motion-relay` Vercel project (`deploy/motion-relay`). Existing
+ElevenLabs/Telegram proxies are not replaced. `MOTION_PROXY_URL` must be an HTTPS
+Vercel URL; there is no direct-network fallback. The relay authenticates against
+`MOTION_RELAY_KEY_SHA256` (SHA-256 of the server-only Motion key), restricts
+upstream hosts/paths, blocks redirects and restricts MCP to read-only discovery
+and `list_chat_messages`. The relay credential never reaches GCS.
+
+Video downloads use validated 1 MiB byte ranges (maximum total 500 MB) to stay
+under Vercel function payload limits. Reference uploads are limited to 3 MiB,
+checked before requesting an upload ticket; larger references require explicit
+resizing first. No silent direct-upload bypass. Neither HTTP transport retries
+nor paid submission retries are enabled. API discovery is read-only; generation
+still requires the existing explicit confirmation.
