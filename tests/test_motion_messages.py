@@ -37,7 +37,7 @@ def test_motion_activity_persists_once_after_refresh(monkeypatch,tmp_path):
         await orchestration._sync_motion_messages(conversation['id'],project,SimpleNamespace(dir=tmp_path),'owner')
         await orchestration._sync_motion_messages(conversation['id'],project,SimpleNamespace(dir=tmp_path),'owner')
         events=await store.repo.events(conversation['id'],'owner')
-        assert [e['type'] for e in events]==['tool.started','tool.progress','tool.completed']
+        assert [e['type'] for e in events]==['tool.started','tool.completed','tool.completed']
         # A lost local seen-cache still cannot duplicate persisted source IDs.
         project['state']['motion_event_ids']=[]
         await orchestration._sync_motion_messages(conversation['id'],project,SimpleNamespace(dir=tmp_path),'owner')

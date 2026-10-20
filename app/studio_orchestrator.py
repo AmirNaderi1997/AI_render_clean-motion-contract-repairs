@@ -543,7 +543,7 @@ async def _sync_motion_messages(conversation_id,project,job,user_key):
         await emit('tool.started',{**common,'message':'Motion Agent · در حال ساخت موشن صحنه'},source_event_id=activity+':started')
         for message in data.get('messages',[]):
             identity=f"{activity}:{message['id']}:{message['revision']}"
-            await emit('tool.progress',{**common,'message':message['text'],
+            await emit('tool.completed' if data.get('status')=='ready' else 'tool.progress',{**common,'message':message['text'],
                 'source_timestamp':message.get('timestamp'),'thinking':False},source_event_id=identity)
         if data.get('messages_unavailable'):
             await emit('tool.progress',{**common,'message':'گزارش متنی Motion موقتاً در دسترس نیست؛ پیگیری همان جاب ادامه دارد.'},source_event_id=activity+':messages-unavailable')

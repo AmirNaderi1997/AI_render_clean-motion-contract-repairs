@@ -69,6 +69,9 @@ def create_scene(job_id:str,body:SceneRequest,request:Request):
         if not _slots.acquire(blocking=False):raise HTTPException(429,'Motion worker is busy; no submission performed')
         _active.add(job_id)
     def run():
+        from brain.lm_gateway import job_context,user_context
+        job_token=job_context.set(job.id)
+        user_token=user_context.set(str(request.state.user.id))
         try:
             scene=Scene(index=0,description=body.prompt,duration_s=body.duration,motion_engine='motion_so',
                 motion_effort=body.effort,motion_background=body.background,source_asset=body.reference)
@@ -78,6 +81,7 @@ def create_scene(job_id:str,body:SceneRequest,request:Request):
             import logging
             logging.getLogger(__name__).warning('Motion scene stopped for job %s; inspect persisted status',job_id)
         finally:
+            job_context.reset(job_token);user_context.reset(user_token)
             with _guard:_active.discard(job_id)
             _slots.release()
     threading.Thread(target=run,daemon=True).start()
