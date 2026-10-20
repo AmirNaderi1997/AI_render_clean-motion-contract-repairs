@@ -407,7 +407,8 @@ def speech(route, text, voice):
     catalog=store.records('models'); started=time.monotonic(); attempts=[]
     candidates=cfg['models'] if cfg.get('automatic_fallback') else cfg['models'][:1]
     for mid in candidates:
-        if not model_allowed(mid) or 'speech' not in capabilities(catalog.get(mid,{})):
+        item=catalog.get(mid,{})
+        if not model_allowed(mid) or not item.get('enabled') or not item.get('available',True) or 'speech' not in capabilities(item):
             continue
         body={'model':mid,'input':text,'voice':voice,'response_format':'mp3'}
         try:
