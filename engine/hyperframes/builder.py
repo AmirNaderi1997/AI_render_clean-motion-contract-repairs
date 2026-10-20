@@ -158,6 +158,9 @@ def build_visual_beats(plan, decisions: dict, transcript: dict | None = None) ->
 
 
 def _beat_markup(beat: VisualBeat) -> str:
+    if beat.custom:
+        from .scenes import scene_markup
+        return scene_markup(beat.id, beat.start, beat.end - beat.start, beat.custom["html"])
     title = html.escape(beat.title)
     if beat.registry_refs and beat.registry_refs[0] == "caption-kinetic-slam":
         body = (f'<div class="registry-stage"><div data-composition-id="caption-kinetic-slam" '
@@ -233,6 +236,10 @@ def _timeline_script(beats: list[VisualBeat]) -> str:
     lines = ['const tl = gsap.timeline({ paused: true });']
     for beat in beats:
         duration = beat.end - beat.start
+        if beat.custom:
+            from .scenes import scene_script
+            lines.append(scene_script(beat.id, beat.start, beat.end, beat.custom["js"], beat.custom.get("speaker", "full")))
+            continue
         selector = f"#{beat.id} .beat-inner"
         entrances = {
             "slam": ('{opacity:0,scale:1.34,rotation:2}', '"back.out(1.45)"'),
@@ -299,6 +306,14 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
     except OSError:
         shutil.copy2(base_video, video)
     shutil.copy2(RAY, assets / "ray-extrabold.ttf")
+    custom_css = ""
+    if any(beat.custom for beat in beats):
+        from .scenes import FONT_FILES, fonts_css
+        (assets / "fonts").mkdir(exist_ok=True)
+        for target, source in FONT_FILES.items():
+            shutil.copy2(ROOT / "presets" / "fonts" / source, assets / "fonts" / target)
+        custom_css = fonts_css() + ".custom-beat{position:absolute;inset:0;overflow:hidden;pointer-events:none}" + "".join(
+            beat.custom["css"] for beat in beats if beat.custom)
     # Local, integrity-checked GSAP: fail here, before any frame is encoded, if it is unavailable.
     from .assets import ensure_gsap
     shutil.copy2(ensure_gsap(), assets / "gsap.min.js")
@@ -323,6 +338,7 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
 <html lang="fa"><head><meta charset="UTF-8"><meta name="viewport" content="width=1080,height=1920">
 <script src="./assets/gsap.min.js"></script>
 <style>
+{custom_css}
 @font-face{{font-family:Ray;src:url('./assets/ray-extrabold.ttf')}}
 *{{box-sizing:border-box}}html,body{{margin:0;width:1080px;height:1920px;overflow:hidden;background:#080b0c}}
 #root{{position:relative;width:100%;height:100%;overflow:hidden;font-family:Ray,sans-serif}}
@@ -352,7 +368,7 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
 .registry-collage-content{{width:100%;height:100%;padding:230px 90px;display:grid;grid-template-columns:1fr 1fr;gap:28px;background:#0b1010;direction:rtl}}
 .registry-collage-content span{{display:grid;place-items:center;padding:32px;border:2px solid #d9ff4f;border-radius:30px;color:#f7f5ed;background:#151b1b;font:76px/1.15 Ray;text-align:center}}
 </style></head><body><main id="root" data-composition-id="main" data-start="0" data-duration="{duration:.3f}" data-width="1080" data-height="1920">
-<video id="rough-cut" class="base clip" src="./assets/base.mp4" data-start="0" data-duration="{duration:.3f}" data-track-index="0" data-has-audio="true"></video>
+<div id="speaker-stage" style="position:absolute;inset:0;overflow:hidden;transform-origin:50% 50%"><video id="rough-cut" class="base clip" src="./assets/base.mp4" data-start="0" data-duration="{duration:.3f}" data-track-index="0" data-has-audio="true"></video></div>
 {cards}</main><script>{_timeline_script(beats)}</script></body></html>'''
     entry = project_dir / "index.html"
     entry.write_text(document)

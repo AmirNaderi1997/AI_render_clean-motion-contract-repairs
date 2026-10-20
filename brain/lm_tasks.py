@@ -54,6 +54,7 @@ TASKS = {
     "creative_director": _task("Creative Director", "chat", POWER, "editing_agent"),
     "creative_critic": _task("Creative Critic", "chat", POWER, "editing_agent"),
     "creative_revision": _task("Creative Revision", "chat", STORY, "editing_agent"),
+    "creative_motion": _task("Creative Motion Designer", "chat", POWER, "editing_agent"),
     "segment_analysis": _task("Segment Analysis", "chat", LIGHT, "editing_agent"),
     "transcript_correction": _task("Transcript Correction", "chat", LIGHT, "subtitles"),
     "translation": _task("Translation", "chat", STORY, "subtitles"),

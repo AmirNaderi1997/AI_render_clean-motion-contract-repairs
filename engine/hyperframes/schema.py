@@ -24,6 +24,8 @@ class VisualBeat(BaseModel):
     narrative_role: str = "evidence"
     motion_style: str = "slide"
     why: str = ""
+    # Authored scene from creative/motion.py: {"html","css","js","speaker"}; None = built-in template.
+    custom: dict | None = None
 
     @model_validator(mode="after")
     def valid_range(self):
