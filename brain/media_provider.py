@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
+IMAGE_ATTEMPTS = 3  # image models occasionally reply with text only; bounded retry
 from .lm_gateway import observe_specialized
 
 
@@ -261,20 +262,34 @@ class ArvanImageProvider(ProviderAdapter):
             "logos, or legible text on paper, clothing, signs, or screens."
         )
         from .llm import _arvan_request
-        response = _arvan_request({
-            "model": model,
-            "messages": [{"role": "user", "content": request_prompt}],
-            "modalities": ["image", "text"],
-            "max_tokens": 1000,
-        }, timeout_seconds=180)
-        choices = response.get("choices") or []
-        message = choices[0].get("message", {}) if choices else {}
-        images = message.get("images") or []
-        if not images and isinstance(message.get("content"), list):
-            images = [part for part in message["content"] if part.get("type") == "image_url"]
-        data_url = (images[0].get("image_url") or {}).get("url", "") if images else ""
+        # Image models sometimes answer with text only (a refusal or a clarification) or an
+        # empty body. A single such reply used to kill the whole job at scene 0, so retry a
+        # bounded number of times and surface what the model actually said.
+        data_url = ""
+        reply_text = ""
+        for attempt in range(IMAGE_ATTEMPTS):
+            nudge = "" if attempt == 0 else "\n\nGenerate the image now. Reply with the image only, no text."
+            response = _arvan_request({
+                "model": model,
+                "messages": [{"role": "user", "content": request_prompt + nudge}],
+                "modalities": ["image", "text"],
+                "max_tokens": 1000,
+            }, timeout_seconds=180)
+            choices = response.get("choices") or []
+            message = choices[0].get("message", {}) if choices else {}
+            images = message.get("images") or []
+            if not images and isinstance(message.get("content"), list):
+                images = [part for part in message["content"] if part.get("type") == "image_url"]
+            data_url = (images[0].get("image_url") or {}).get("url", "") if images else ""
+            if isinstance(data_url, str) and data_url.startswith(("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,")):
+                break
+            content = message.get("content")
+            reply_text = content if isinstance(content, str) else ""
+            log.warning("image model returned no inline image (attempt %d/%d): %s", attempt + 1, IMAGE_ATTEMPTS, reply_text[:160])
+            time.sleep(1.5 * (attempt + 1))
         if not isinstance(data_url, str) or not data_url.startswith(("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,")):
-            raise RuntimeError("Arvan returned no inline image; no placeholder was substituted")
+            detail = f" Model reply: {reply_text.strip()[:200]}" if reply_text.strip() else ""
+            raise RuntimeError(f"Arvan returned no inline image after {IMAGE_ATTEMPTS} attempts; no placeholder was substituted.{detail}")
         encoded = data_url.split(",", 1)[1]
         if len(encoded) > 40 * 1024 * 1024:
             raise RuntimeError("Arvan returned an oversized image")

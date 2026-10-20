@@ -1,6 +1,7 @@
 import React from "react";
 import { aiAdminRequest as request, aiAdminCsv } from "./api";
 import "./ai-models.css";
+import DirectFallbacks from "./AIDirectFallbacks";
 import { movePriority, logQuery } from "./ai-models-utils";
 
 type Model = {id:string; name:string; provider:string|null; enabled:boolean; available:boolean; status:string; declared:string[]; verified:string[]; test_latency_ms?:number; last_error?:string};
@@ -33,11 +34,12 @@ export default function AIModels() {
   if(allowed===null) return <main className="eg-page" role="status">{error||"Checking access…"}</main>;
   return <main className="eg-page ai-panel">
     <header className="eg-page-header"><span className="eg-eyebrow">Administration</span><h1>AI Models &amp; Logs</h1><p>One gateway. Exact model IDs. Verified capabilities.</p></header>
-    <nav className="ai-tabs" aria-label="AI administration tabs">{["Models","Routing","Request Logs","Analytics"].map(name=><button key={name} aria-pressed={tab===name} onClick={()=>setTab(name)}>{name}</button>)}</nav>
+    <nav className="ai-tabs" aria-label="AI administration tabs">{["Models","Routing","Direct fallbacks","Request Logs","Analytics"].map(name=><button key={name} aria-pressed={tab===name} onClick={()=>setTab(name)}>{name}</button>)}</nav>
     {error&&<div role="alert" className="ai-alert">{error}</div>}{notice&&<p role="status">{notice}</p>}
     {busy&&<p role="status">Working… Model probes may take up to the configured timeout.</p>}
     {tab==="Models"&&<Models refresh={refresh} busy={busy} action={action}/>}
     {tab==="Routing"&&<Routing refresh={refresh} busy={busy} action={action}/>}
+    {tab==="Direct fallbacks"&&<DirectFallbacks/>}
     {tab==="Request Logs"&&<Logs action={action}/>}
     {tab==="Analytics"&&<Analytics refresh={refresh}/>}
   </main>;

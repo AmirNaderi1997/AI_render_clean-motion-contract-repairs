@@ -90,7 +90,7 @@ def defaults():
             specialized = capability in {"image", "speech", "transcription", "video"}
             new[key] = {"id": key, "title": title, "capability": capability, "enabled": not specialized,
                 "models": ["auto"], "endpoint": "embeddings" if key == "embeddings" else "chat",
-                "timeout": 90, "max_retries": 0, "temperature": None, "max_tokens": 16000,
+                "timeout": 120, "max_retries": 1, "temperature": None, "max_tokens": 16000,
                 "streaming": False, "automatic_fallback": True, "specialized_fallback": specialized}
     from .lm_tasks import TASKS
     for key, spec in TASKS.items():
@@ -208,6 +208,26 @@ def _record(route, endpoint, requested, started, attempts, response=None, hdr=No
         "response_message": safe(response, cfg["log_char_limit"]) if cfg["capture_messages"] else None}
 
 
+def _direct_fallback(route, endpoint, messages, cfg, candidates, tokens, extra, started, attempts, probe):
+    """LM API failed: answer from a directly configured provider (see brain/lm_direct.py). Chat only."""
+    if probe or endpoint != "chat":
+        return None
+    from . import lm_direct
+    try:
+        found = lm_direct.try_fallback(messages, candidates=list(candidates), tokens=min(tokens or cfg["max_tokens"], cfg["max_tokens"]),
+                                       temperature=cfg["temperature"], timeout=cfg["timeout"], extra=extra, attempts=attempts)
+    except Exception:
+        log.exception("direct fallback crashed")
+        return None
+    if not found:
+        return None
+    response, provider_id, model = found
+    record = _record(route, endpoint, candidates[0] if candidates else "", started, attempts, response, {}, request=messages)
+    record.update(provider=provider_id, routed_via=f"direct:{provider_id}", actual_model=model)
+    _audit(record)
+    return response, record
+
+
 def complete(route, messages, *, required=None, tokens=None, extra=None, endpoint=None, model_override=None, probe=False):
     cfg = defaults().get(route)
     if not cfg or not gateway_settings()["enabled"] or (not cfg["enabled"] and not probe):
@@ -256,6 +276,9 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
                     # Long Retry-After/quota cooldowns are not slept inside editor workers.
                     if attempt < retries: time.sleep(min(2**attempt, 2))
             if error and not error.retryable: break
+        direct = _direct_fallback(route, endpoint, messages, cfg, candidates, tokens, extra, started, attempts, probe)
+        if direct:
+            return direct
         raise error or GatewayError("No enabled, capability-verified model for this route; configure AI Models & Logs", 422)
     except Exception as exc:
         _audit(_record(route, endpoint, candidates[0] if candidates else "", started, attempts, error=exc, request=messages))

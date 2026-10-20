@@ -64,8 +64,8 @@ def _sentences_prompt(sentences: list[dict]) -> str:
 def _chat(system: str, user: str) -> dict:
     from .lm_gateway import configured
     if configured():
-        from .llm import gateway_json
-        data, _ = gateway_json(system, user, "editing_agent")
+        from .llm import gateway_json_resilient
+        data, _ = gateway_json_resilient(system, user, "editing_agent")
         return data
     from .ai_provider import ArvanProvider
 
@@ -92,11 +92,16 @@ def recommend_style(sentences: list[dict]) -> tuple[str, str]:
     return style, reason
 
 
-def decide(sentences: list[dict]) -> dict:
+def guidance_block(guidance: str = "") -> str:
+    """Creative direction from ``creative/`` appended to the user prompt (empty when there is none)."""
+    return f"\n\n{guidance.strip()}" if guidance and guidance.strip() else ""
+
+
+def decide(sentences: list[dict], guidance: str = "") -> dict:
     """Ask the LLM for text edits and highlights; returns validated decisions."""
     if not sentences:
         raise ValueError("no speech in the transcript")
-    data = _chat(SYSTEM_PROMPT, _sentences_prompt(sentences))
+    data = _chat(SYSTEM_PROMPT, _sentences_prompt(sentences) + guidance_block(guidance))
     return normalize(data, len(sentences))
 
 

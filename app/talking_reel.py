@@ -258,7 +258,7 @@ def resolve_music(music: Optional[str]) -> Optional[Path]:
     return path
 
 
-def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None) -> dict:
+def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None, request: str = "") -> dict:
     """Transcribe and prepare editable AI decisions without starting a render."""
     key = str(job_dir)
     with _lock:
@@ -272,7 +272,7 @@ def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None) -> d
 
     def run() -> None:
         try:
-            _analyze(job_dir, raw_video, style=style)
+            _analyze(job_dir, raw_video, style=style, request=request)
         except TaskCanceled:
             current = load(job_dir); current.update(status="canceled", stage="", message="Canceled by user"); save(job_dir, current)
         except Exception as exc:
@@ -289,18 +289,41 @@ def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None) -> d
     return state
 
 
-def _analyze(job_dir: Path, video: Path, *, style: Optional[str]) -> None:
+def _analyze(job_dir: Path, video: Path, *, style: Optional[str], request: str = "") -> None:
     from dotenv import load_dotenv
     from importlib import import_module
     from brain import talking_reel as base_brain
+    import creative
 
     load_dotenv(PROJECT_ROOT / ".env")
     transcript = transcript_for(job_dir, video)
-    selected = style
+
+    # Creative direction first: understand the talk, explore concepts, critique, then let the
+    # existing engines execute the chosen one. This stage can only improve a result: if the
+    # gateway is slow or limited, the standard analysis below runs exactly as before.
+    plan = None
+    guidance = ""
+    creative_error = ""
+    if creative.enabled():
+        _stage(job_dir, "directing the edit", progress=12)
+        try:
+            plan = creative.direct_talk(transcript["sentences"], request, style=style)
+            guidance = plan.director_notes
+        except creative.CreativeUnavailable as exc:
+            creative_error = str(exc)[:240]
+            log.warning("creative direction unavailable for %s: %s", job_dir.name, creative_error)
+
+    selected = style or (plan.style if plan else None)
     reason = ""
+    if plan and not style and plan.style:
+        reason = plan.critique.verdict
     if not selected:
         _stage(job_dir, "choosing style", progress=15)
-        selected, reason = base_brain.recommend_style(transcript["sentences"])
+        try:
+            selected, reason = base_brain.recommend_style(transcript["sentences"])
+        except Exception as exc:  # a slow selector must not kill the job; the selector's own rule is "calm when unsure"
+            log.warning("style selector failed for %s: %s", job_dir.name, type(exc).__name__)
+            selected, reason = "talking_4", "انتخاب خودکار سبک در دسترس نبود؛ سبک امن و ساده انتخاب شد."
     from engine.talking_reel import STYLES
     if selected not in STYLES:
         raise ValueError(f"unknown style {selected!r}")
@@ -308,17 +331,19 @@ def _analyze(job_dir: Path, video: Path, *, style: Optional[str]) -> None:
     _stage(job_dir, "editing text", progress=30)
     state = load(job_dir)
     if selected == "talking_1":
-        decisions = base_brain.decide(transcript["sentences"])
+        decisions = base_brain.decide(transcript["sentences"], guidance)
         state["decisions"] = decisions
         state["hook"] = decisions["hook"]
         state["hook_highlight"] = decisions["hook_highlight"]
     else:
         brain_name, decisions_key, _music = SPLIT_STYLES[selected]
         decisions = import_module(brain_name).decide(
-            transcript["sentences"], [p.name for p in user_media(job_dir)]
+            transcript["sentences"], [p.name for p in user_media(job_dir)], guidance=guidance
         )
         state[decisions_key] = decisions
         state["hook2"] = decisions["hook"]
+    state["creative_plan"] = plan.public() if plan else None
+    state["creative_error"] = creative_error
     state.update(
         status="ready", stage="", message="", progress=100, style=selected,
         suggested_style=selected if style is None else state.get("suggested_style"),

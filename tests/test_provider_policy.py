@@ -91,6 +91,10 @@ def test_no_retired_providers_in_runtime_source():
     for directory in ("app", "brain", "web/src"):
         for path in (root / directory).rglob("*"):
             if path.suffix in {".py", ".tsx", ".ts"}:
+                if path == root / "brain" / "lm_direct.py":
+                    # The one sanctioned place for direct provider endpoints: admin-controlled fallbacks used only
+                    # after LM API fails (see docs/CREATIVE_ENGINE_DESIGN.md and the "Direct fallbacks" admin tab).
+                    continue
                 if path == root / "brain" / "lm_tasks.py":
                     # These providers are now allowed only as centrally scoped
                     # Gateway identities, never as direct network endpoints.

@@ -116,3 +116,29 @@ def test_fallback_store_persists_conversation_project_version_and_event(tmp_path
         with pytest.raises(KeyError): await studio_store.repo.get_conversation(conversation["id"], "user-b")
 
     asyncio.run(scenario())
+
+
+def test_talking_video_without_a_style_is_analyzed_directly_not_questioned(tmp_path, monkeypatch):
+    """The director chooses the style; the user is not asked, and the request text reaches the analysis."""
+    from app import studio_orchestrator as orchestrator
+    from app.studio_store import repo, run
+    monkeypatch.setattr(studio_store, "DB_AVAILABLE", False)
+    monkeypatch.setattr(studio_store, "ROOT", tmp_path)
+    monkeypatch.setattr(studio_store, "FALLBACK", tmp_path / "studio.json")
+    conversation = run(repo.create_conversation("u", "t"))
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"not-a-real-video")
+    attachment = run(repo.create_attachment(conversation["id"], "u", kind="video", filename="talk.mp4", path=str(video),
+                                            mime_type="video/mp4", size_bytes=16, metadata={}))
+    text = "این ویدیو رو برای اینستاگرام خفن تدوین کن"
+    message = run(repo.add_message(conversation["id"], "u", "user", text))
+    calls = []
+    monkeypatch.setattr(orchestrator, "_resolved_intent", lambda *args: "talking")
+    monkeypatch.setattr(orchestrator, "execute", lambda name, payload: calls.append((name, payload)) or {"external_ref": "job-1"})
+    orchestrator.process_message(conversation["id"], "u", message["id"], text, [attachment["id"]])
+    assert calls and calls[0][0] == "analyze_talking_reel"
+    assert calls[0][1]["style"] is None and calls[0][1]["request"] == text
+    events = run(repo.events(conversation["id"], "u", 0))
+    assert not any(event["type"] == "question.required" for event in events)
+    assert any(event["type"] == "tool.started" and event["data"].get("tool") == "analyze_talking_reel" for event in events)
+    assert run(repo.get_conversation(conversation["id"], "u"))["projects"][0]["status"] == "running"

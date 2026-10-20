@@ -299,6 +299,9 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
     except OSError:
         shutil.copy2(base_video, video)
     shutil.copy2(RAY, assets / "ray-extrabold.ttf")
+    # Local, integrity-checked GSAP: fail here, before any frame is encoded, if it is unavailable.
+    from .assets import ensure_gsap
+    shutil.copy2(ensure_gsap(), assets / "gsap.min.js")
     (project_dir / "hyperframes.json").write_text(json.dumps({
         "$schema": "https://hyperframes.heygen.com/schema/hyperframes.json",
         "media": {"autoProxy": True},
@@ -318,7 +321,7 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
     cards = "\n".join(_beat_markup(beat) for beat in beats)
     document = f'''<!doctype html>
 <html lang="fa"><head><meta charset="UTF-8"><meta name="viewport" content="width=1080,height=1920">
-<script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+<script src="./assets/gsap.min.js"></script>
 <style>
 @font-face{{font-family:Ray;src:url('./assets/ray-extrabold.ttf')}}
 *{{box-sizing:border-box}}html,body{{margin:0;width:1080px;height:1920px;overflow:hidden;background:#080b0c}}

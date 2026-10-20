@@ -137,17 +137,19 @@ Never invent a claim, price, metric or feature. Write concise Persian values."""
     }
 
 
-def _motion_prompt(user_text: str, page: dict | None, facts: dict | None, duration: int = 30) -> str:
+def _motion_prompt(user_text: str, page: dict | None, facts: dict | None, duration: int = 30, plan=None) -> str:
     source = ""
     if page and facts:
         source = "\n\nVerified landing-page evidence:\n" + json.dumps({
             "url": page.get("url"), "facts": facts,
             "visible_content": page.get("content", [])[:80],
         }, ensure_ascii=False)
+    direction = ("\n\n" + plan.director_notes + "\nBuild the scenes from this direction: the hook is scene 1, each beat becomes "
+                 "one distinct scene, and no scene repeats another's composition.") if plan else ""
     return (
         f"Create a {duration}-second Persian narrated Instagram advertising reel. "
         "Use only verified supplied facts, keep text overlays concise, include a strong hook and one CTA. "
-        f"User request: {user_text}{source}"
+        f"User request: {user_text}{source}{direction}"
     )
 
 
@@ -202,21 +204,16 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
         if intent == "talking":
             source = next((item for item in attachments if item["kind"] == "video"), None)
             if source is None: raise ValueError("برای تدوین Talking Reel یک فایل ویدیو بفرستید")
-            if not selected_style:
-                from engine.talking_reel import style_list
-                styles = style_list()
-                project = run(repo.create_project(conversation_id, user_key, "talking", source["filename"],
-                    {"attachment_ids": attachment_ids, "styles": styles}, None))
-                run(repo.update_project(project["id"], user_key, status="awaiting_input"))
-                _assistant(conversation_id, user_key, "ویدیو را گرفتم. قبل از تحلیل و رندر، یکی از سبک‌های واقعی پروژه را انتخاب کنید.")
-                _emit(conversation_id, "question.required", question="کدام سبک تدوین را می‌خواهید؟", choices=styles, kind="talking_style")
-                return
-            payload = {"source_path": source["path"], "filename": source["filename"], "user_key": user_key, "style": selected_style}
+            # No style question: the creative director chooses from the content (an explicit style in the
+            # message still wins). Asking is reserved for real ambiguity, not for decisions the system can make.
+            _emit(conversation_id, "tool.started", tool="analyze_talking_reel", message="تحلیل ویدیوی صحبتی و طراحی ایدهٔ ادیت شروع شد.")
+            payload = {"source_path": source["path"], "filename": source["filename"], "user_key": user_key,
+                       "style": selected_style, "request": text[:2000]}
             result = execute("analyze_talking_reel", payload)
             project = run(repo.create_project(conversation_id, user_key, "talking", source["filename"],
                 {"attachment_ids": attachment_ids, "selected_style": selected_style, "auto_render": True, "last_observed": {}}, result["external_ref"]))
             run(repo.update_project(project["id"], user_key, status="running"))
-            _assistant(conversation_id, user_key, "تحلیل ویدیوی صحبتی با سبک انتخاب‌شده شروع شد.")
+            _assistant(conversation_id, user_key, "ویدیو را گرفتم. اول محتوا را تحلیل می‌کنم و چند ایدهٔ ادیت را می‌سنجم، بعد بهترین را اجرا می‌کنم.")
             return
         _create_motion(conversation_id, user_key, message_id, text, attachments)
     except Exception as exc:
@@ -224,6 +221,27 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
         message = str(exc)[:500] or "عملیات انجام نشد"
         _emit(conversation_id, "tool.failed", message=message)
         _assistant(conversation_id, user_key, f"عملیات متوقف شد: {message}")
+
+
+def _creative_direction(conversation_id: str, text: str, facts: dict | None, assets: list, duration: int):
+    """Flows B/C/D: understand the brief, explore concepts, and let the best one drive the storyboard.
+    Returns None (and says so) if the creative layer is unavailable; the standard storyboard still runs."""
+    import creative
+    if not creative.enabled():
+        return None
+    _emit(conversation_id, "tool.started", tool="creative_direction",
+          message="در حال تحلیل مخاطب و پیام و سنجیدن چند ایدهٔ خلاقانه هستم.")
+    try:
+        plan = (creative.direct_product(facts, text, image_count=len(assets), duration_s=duration) if facts
+                else creative.direct_idea(text, image_count=len(assets), duration_s=duration))
+    except creative.CreativeUnavailable as exc:
+        log.warning("creative direction unavailable: %s", exc)
+        _emit(conversation_id, "tool.completed", tool="creative_direction",
+              message="طراحی خلاقانهٔ ایده در دسترس نبود؛ با روش استاندارد ادامه می‌دهم.")
+        return None
+    _emit(conversation_id, "tool.completed", tool="creative_direction",
+          message=f"ایدهٔ انتخاب‌شده: «{plan.chosen.name}» — {plan.chosen.angle}", result={"concept": plan.public()})
+    return plan
 
 
 def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
@@ -244,16 +262,20 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
         raise ValueError("تصویر قابل‌استفاده‌ای در صفحه پیدا نشد؛ چند تصویر محصول آپلود کنید")
     duration_match = re.search(r"(\d{1,3})\s*(?:ثانیه|second|sec)", text.lower())
     duration = min(90, max(5, int(duration_match.group(1)))) if duration_match else 30
-    prompt = _motion_prompt(text, page, facts, duration)
+    plan = _creative_direction(conversation_id, text, facts, assets, duration)
+    prompt = _motion_prompt(text, page, facts, duration, plan)
     provider = _provider() if not assets else "local_fixture"
     _emit(conversation_id, "tool.started", tool="create_storyboard", message="در حال ساخت سناریو و استوری‌بورد قابل‌ویرایش هستم.")
     result = execute("create_storyboard", {"prompt": prompt, "user_key": user_key, "provider": provider,
         "language": "fa", "source_assets": assets,
-        "creative_brief": {"goal": "تبلیغ و معرفی محصول", "brand": "از هویت بصری منابع واقعی پیروی کن", "avoid": "ادعاهای تأییدنشده"}})
+        "creative_brief": {"goal": (plan.brief.goal if plan else "") or "تبلیغ و معرفی محصول",
+                           "brand": "از هویت بصری منابع واقعی پیروی کن",
+                           "avoid": "؛ ".join(plan.brief.must_not) if plan and plan.brief.must_not else "ادعاهای تأییدنشده"}})
     project = run(repo.create_project(conversation_id, user_key, "motion",
         str((facts or {}).get("product_name") or "تیزر موشن"),
         {"request": text, "url_inspection": page, "facts": facts, "source_assets": assets,
-         "provider": provider, "storyboard": result["storyboard"], "auto_render": True, "last_observed": {}},
+         "provider": provider, "storyboard": result["storyboard"], "auto_render": True, "last_observed": {},
+         "creative_plan": plan.public() if plan else None},
         result["external_ref"]))
     # Uploaded/downloaded source assets use the local still-to-motion path; do not
     # present the storyboard model's hypothetical image-generation total as a bill.
@@ -272,6 +294,52 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
           choices=["confirm", "edit"], action_id=action["id"])
 
 
+def _revise_talking(conversation_id: str, user_key: str, project: dict, job, text: str) -> bool:
+    """Flow F for talking projects: interpret the request into typed operations, apply only those, re-render once.
+    Returns False when the creative layer is unavailable so the keyword path below still works."""
+    import creative
+    from creative import llm as creative_llm, revise
+    if not creative.enabled() or not creative_llm.configured():
+        return False
+    from app import talking_reel
+    video = job.dir / "raw" / job.raw_name
+    state = talking_reel.load(job.dir)
+    public = talking_reel.public(state)
+    sentences = talking_reel.transcript_for(job.dir, video)["sentences"]
+    split = str(state.get("style") or "talking_1") != "talking_1"
+    settings = state.get("render_settings") or {}
+    context = {
+        "style": state.get("style"), "hook": state.get("hook2") if split else state.get("hook"),
+        "hook_highlight": state.get("hook_highlight"), "captions": public["captions"],
+        "storyboard": [{"i": b.get("i"), "title": b.get("title"), "visual_type": b.get("visual_type")} for b in public["storyboard"]],
+        "render_settings": {"grade": settings.get("grade"), "zoom": settings.get("zoom"), "title_color": settings.get("title_color"),
+                            "outro_logo": settings.get("outro_logo"), "key_moments_enabled": settings.get("key_moments_enabled")},
+        "direction": ((state.get("creative_plan") or {}).get("chosen") or {}).get("angle"),
+        "sentences": [{"i": k, "start": round(x["start"], 1), "end": round(x["end"], 1), "text": x["text"]} for k, x in enumerate(sentences)],
+    }
+    try:
+        revision = revise.interpret(text, context)
+    except creative.CreativeUnavailable as exc:
+        log.warning("revision interpreter unavailable: %s", exc)
+        return False
+    change = revise.apply_to_talking(public, revision.ops, len(sentences))
+    notes = ""
+    if change.applied:
+        notes += "\n\nتغییرات:\n" + "\n".join(f"• {item}" for item in change.applied)
+    if change.unsupported:
+        notes += "\n\nانجام نشد:\n" + "\n".join(f"• {item}" for item in dict.fromkeys(change.unsupported))
+    if not change.rerender:
+        _assistant(conversation_id, user_key, (revision.summary or "تغییری برای اعمال پیدا نکردم.") + notes)
+        return True
+    talking_reel.update(job.dir, change.changes)
+    talking_reel.start(job.dir, video)
+    run(repo.update_project(project["id"], user_key, status="running",
+                            state={**project["state"], "last_observed": {}}, source="chat"))
+    _assistant(conversation_id, user_key, (revision.summary or "تغییرات اعمال شد.") + notes +
+               "\n\nیک نسخهٔ جدید از همین پروژه در حال رندر است؛ نسخهٔ قبلی دست‌نخورده می‌ماند.")
+    return True
+
+
 def _modify(conversation_id: str, user_key: str, project: dict, text: str) -> None:
     engine, ref = project["engine"], project.get("external_ref")
     if not ref: raise ValueError("این پروژه هنوز آماده ویرایش نیست")
@@ -279,6 +347,8 @@ def _modify(conversation_id: str, user_key: str, project: dict, text: str) -> No
         from app import talking_reel
         job = jobstore.get(ref)
         if not job: raise KeyError(ref)
+        if _revise_talking(conversation_id, user_key, project, job, text):
+            return
         state = talking_reel.load(job.dir); changes: dict[str, Any] = {}
         render_settings = dict(state.get("render_settings") or {})
         if "زرد" in text or "yellow" in text.lower(): render_settings["title_color"] = "#F5B800"
@@ -352,8 +422,30 @@ def _status_message(engine: str, status: str, stage: str) -> str:
         "choosing style": "در حال انتخاب ساختار تدوین",
         "editing text": "در حال آماده‌سازی هوک و متن‌ها",
         "rendering": "در حال رندر ویدیو",
+        "directing the edit": "در حال تحلیل محتوا و طراحی ایدهٔ ادیت",
     }
     return labels.get(stage, stage or ({"ready": "برنامه آماده شد", "done": "ویدیو آماده شد", "error": "پردازش ناموفق بود"}.get(status, "در حال پردازش")))
+
+
+async def _announce_creative(conversation_id: str, user_key: str, project: dict, status: dict) -> None:
+    """Tell the user, once, which creative direction was chosen (or that none was available). Only real plan data."""
+    if project["state"].get("creative_announced") or not status.get("analysis_ready"):
+        return
+    plan, error = status.get("creative_plan"), status.get("creative_error")
+    if plan:
+        chosen = plan.get("chosen") or {}
+        others = len(plan.get("alternatives") or [])
+        text = (f"ایدهٔ انتخاب‌شده: «{chosen.get('name', '')}» — {chosen.get('angle', '')}\n\n"
+                f"هوک: {chosen.get('hook', '')}\n\n"
+                f"از بین {others + 1} ایده این را انتخاب کردم چون: {plan.get('verdict', '')}\n"
+                "می‌توانید همین‌جا بگویید چه چیزی عوض شود، مثلاً «هوک قوی‌تر باشد».")
+    elif error:
+        text = "طراحی خلاقانهٔ ایده در دسترس نبود (محدودیت یا کندی سرویس هوش مصنوعی)؛ ادیت استاندارد انجام می‌شود."
+    else:
+        return
+    project["state"]["creative_announced"] = True
+    await repo.update_project(project["id"], user_key, state=project["state"])
+    await repo.add_message(conversation_id, user_key, "assistant", text)
 
 
 async def sync_conversation(conversation_id: str, user_key: str) -> None:
@@ -379,6 +471,7 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                 if not job: raise KeyError(ref)
                 status = talking_reel.public(talking_reel.load(job.dir)); raw_status = status.get("status", "")
                 stage, progress = status.get("stage", ""), status.get("progress")
+                await _announce_creative(conversation_id, user_key, project, status)
                 if raw_status == "ready" and project["state"].get("auto_render") and not project["state"].get("render_started"):
                     talking_reel.start(job.dir, job.dir / "raw" / job.raw_name)
                     project["state"]["render_started"] = True; raw_status, stage = "running", "rendering"
