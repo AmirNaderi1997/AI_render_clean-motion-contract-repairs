@@ -150,6 +150,35 @@ def gateway_json(system, user, route="editing_agent", max_tokens=16000):
         model=record.get("actual_model") or record["requested_model"], elapsed_sec=record["latency_ms"]/1000)
 
 
+def _cooldown_hint(exc: Exception) -> int | None:
+    """The gateway states how long a rate-limited route needs ("Soonest reset ~38s"); use it when present."""
+    import re
+    match = re.search(r"reset(?:s)? (?:in )?~?(\d+)\s*s", str(exc), re.I)
+    return int(match.group(1)) + 2 if match else None
+
+
+def gateway_json_resilient(system, user, route="editing_agent", max_tokens=16000, attempts=4, _sleep=None):
+    """gateway_json with bounded waits for transient provider failures (429/5xx/timeouts).
+
+    Real jobs died at "editing text" on a single 502/ReadTimeout. The gateway already falls through its model
+    list inside one call; this adds time-based retries on top, because provider capacity is bursty.
+    """
+    import time
+    from .lm_gateway import GatewayError
+    sleep = _sleep or time.sleep
+    delay = 4
+    for attempt in range(attempts):
+        try:
+            return gateway_json(system, user, route, max_tokens)
+        except GatewayError as exc:
+            if not exc.retryable or attempt == attempts - 1:
+                raise
+            wait = min(_cooldown_hint(exc) or delay, 60)
+            log.warning("LM route %s transient failure (%s); retry %d/%d in %ss", route, exc.status, attempt + 1, attempts - 1, wait)
+            sleep(wait)
+            delay = min(delay * 2, 30)
+
+
 # ── vision / content-analysis model ──────────────────────────────────────────
 
 def chat_vision(

@@ -66,6 +66,7 @@ export const TOOL_LABELS: Record<string, string> = {
   create_storyboard: "Writing the storyboard",
   generate_visual_assets: "Creating visual assets",
   cancel_operation: "Canceling",
+  creative_direction: "Exploring creative directions",
 };
 export const STAGE_LABELS: Record<string, string> = {
   transcribing: "Transcribing speech", "finding captions": "Finding on-screen captions",
@@ -77,6 +78,7 @@ export const STAGE_LABELS: Record<string, string> = {
   "planning visual beats": "Planning visual beats", "finding pictures": "Finding supporting images",
   "building motion graphics": "Building motion graphics", "reviewing motion graphics": "Reviewing motion graphics",
   "improving motion graphics": "Improving motion graphics", queued: "Waiting to start", pending: "Planning the edit",
+  "directing the edit": "Exploring creative directions"
 };
 const RENDER_STAGE_LABELS: Record<string, string> = {
   rendering: "Rendering your video", "rendering rough cut": "Rendering the rough cut",

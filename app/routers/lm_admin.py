@@ -217,3 +217,72 @@ def stream_check(body: StreamProbe):
         except Exception as exc:
             yield "event: error\ndata: "+json.dumps({"error":gateway.safe(str(exc),300)})+"\n\n"
     return StreamingResponse(events(),media_type="text/event-stream",headers={"Cache-Control":"no-store","X-Accel-Buffering":"no"})
+
+
+# ── Direct provider fallbacks (brain/lm_direct.py) ──────────────────────────────
+from brain import lm_direct  # noqa: E402
+
+
+class DirectProvider(Strict):
+    id: str = Field(pattern="^[a-z]{3,12}$")
+    enabled: bool = True
+    base_url: str = Field(max_length=300)
+    model: str = Field(min_length=1, max_length=200)
+    format: str = Field(default="openai", pattern="^(openai|gemini)$")
+    extra_header_name: str = Field(default="", max_length=60)
+
+
+class DirectUpdate(Strict):
+    enabled: bool
+    providers: list[DirectProvider] = Field(max_length=8)
+
+
+class SecretUpdate(Strict):
+    value: str | None = Field(default=None, max_length=4000)
+
+
+@router.get("/direct")
+def direct_status():
+    """Master switch, ordered providers, and whether each has a key. Keys are never returned."""
+    return lm_direct.status()
+
+
+@router.put("/direct")
+def direct_update(body: DirectUpdate):
+    try:
+        return lm_direct.save_config(body.enabled, [item.model_dump() for item in body.providers])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.put("/direct/{provider}/key")
+def direct_key(provider: str, body: SecretUpdate):
+    """Write-only. An empty value deletes the saved key."""
+    try:
+        lm_direct.set_secret(provider, body.value)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return lm_direct.status()
+
+
+@router.put("/direct/{provider}/header")
+def direct_header(provider: str, body: SecretUpdate):
+    """Write-only value for the optional extra header (for example a proxy relay secret)."""
+    try:
+        lm_direct.set_secret(f"{provider}:header", body.value)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return lm_direct.status()
+
+
+@router.post("/direct/{provider}/test")
+def direct_test(provider: str, request: Request):
+    with _lock:
+        uid = str(request.state.user.id); now = time.monotonic()
+        _probes[uid] = [v for v in _probes[uid] if now - v < 60]
+        if len(_probes[uid]) >= 8: raise HTTPException(429, "At most eight bounded probes per minute")
+        _probes[uid].append(now)
+    try:
+        return lm_direct.probe(provider)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc

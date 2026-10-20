@@ -14,7 +14,7 @@ def test_rejects_injected_scope(mid):
 
 
 def test_policy_is_not_activation_evidence():
-    assert len(TASKS) == 27
+    assert len(TASKS) == 31
     for task in TASKS.values():
         assert "verified" not in task and "enabled" not in task
         assert len({p["id"] for p in task["preferences"]}) == len(task["preferences"])

@@ -28,7 +28,7 @@ SYSTEM_PROMPT = split.SYSTEM_PROMPT.replace(
 )
 
 
-def decide(sentences: list[dict], media_names: list[str] | None = None) -> dict:
-    out = split.decide(sentences, media_names, system=SYSTEM_PROMPT)
+def decide(sentences: list[dict], media_names: list[str] | None = None, guidance: str = "") -> dict:
+    out = split.decide(sentences, media_names, system=SYSTEM_PROMPT, guidance=guidance)
     out["chips"] = out["chips"][:1]
     return out

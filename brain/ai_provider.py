@@ -356,7 +356,7 @@ class ArvanProvider(_ExternalProvider):
         from .lm_gateway import configured
         if configured():
             from .llm import gateway_json
-            return gateway_json(system, user, "script")
+            return gateway_json(system, user, "storyboard_generation")
         return self._with_fallback(
             "storyboard generation",
             lambda: self._chat_json(system, user),

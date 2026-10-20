@@ -67,13 +67,14 @@ def _sanitize(text: str) -> str:
     return re.sub(r"\bIran(?:ian)?s?\b", "Persian", text, flags=re.IGNORECASE)
 
 
-def decide(sentences: list[dict], media_names: list[str] | None = None, *, system: str = SYSTEM_PROMPT) -> dict:
+def decide(sentences: list[dict], media_names: list[str] | None = None, *, system: str = SYSTEM_PROMPT, guidance: str = "") -> dict:
     """Decisions for "صحبتی ۲"; other split styles pass their own ``system`` prompt."""
     if not sentences:
         raise ValueError("no speech in the transcript")
     user = base._sentences_prompt(sentences)
     if media_names:
         user += "\n\nUploaded media files:\n" + "\n".join(f"- {name}" for name in media_names)
+    user += base.guidance_block(guidance)
     data = base._chat(system, user)
     out = normalize(data, len(sentences), media_names or [])
     out["titles"] = [{"i": int(t["i"]), "text": str(t.get("text") or "").strip()}

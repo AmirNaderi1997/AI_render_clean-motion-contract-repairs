@@ -36,7 +36,8 @@ class TalkingInput(ToolInput):
     source_path: str
     filename: str
     user_key: str
-    style: str
+    style: str | None = None      # None: the creative director chooses from the content
+    request: str = Field("", max_length=2000)
 
 
 class ContentInput(ToolInput):
@@ -100,7 +101,7 @@ def _talking(args: TalkingInput) -> dict:
     job = jobs.create_job(user_id=args.user_key)
     with open(Path(args.source_path), "rb") as source:
         jobs.save_raw(job, args.filename, source, expected_size=Path(args.source_path).stat().st_size)
-    talking_reel.analyze(job.dir, job.dir / "raw" / job.raw_name, style=args.style)
+    talking_reel.analyze(job.dir, job.dir / "raw" / job.raw_name, style=args.style, request=args.request)
     return {"external_ref": job.id, "status": "analyzing", "style": args.style}
 
 
