@@ -38,6 +38,19 @@ def test_fallback_and_audit(monkeypatch,catalog):
     assert store.logs()["total"]==1
 
 
+def test_invalid_json_skips_model_without_same_model_retry(monkeypatch,catalog):
+    catalog.update(max_retries=2);store.save('routes',{'editing_agent':catalog})
+    calls=[]
+    def wire(endpoint,body,timeout):
+        calls.append(body['model'])
+        content='not JSON' if len(calls)==1 else '{"ok":true}'
+        return {'choices':[{'message':{'content':content}}]}, {}, 200
+    monkeypatch.setattr(g,'_wire',wire)
+    _,record=g.complete('editing_agent',[],validate_response=json.loads)
+    assert calls==['Exact/Case:1','Other/2']
+    assert record['fallback_count']==1
+
+
 def test_google_pin_rejects_different_provider_and_falls_back(monkeypatch,catalog):
     mid="google:gemini-3.5-flash"
     store.save("models",{mid:{"id":mid,"enabled":True,"available":True,"verified":["chat"],"scope_registered":True}})

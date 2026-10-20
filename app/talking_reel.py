@@ -354,7 +354,7 @@ def _analyze(job_dir: Path, video: Path, *, style: Optional[str], request: str =
     save(job_dir, state)
 
 
-def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False) -> dict:
+def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False, cached_only: bool = False) -> dict:
     key = str(job_dir)
     with _lock:
         if key in _running:
@@ -362,6 +362,12 @@ def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False) -> dict:
         state = load(job_dir)
         if not state.get("analysis_ready"):
             raise ValueError("analyze and review the talking reel before rendering")
+        if cached_only:
+            if not (job_dir / 'transcript.json').is_file():
+                raise ValueError('متن ذخیره‌شده موجود نیست؛ ادامهٔ رندر بدون تولید مجدد ممکن نیست.')
+            decision_key = SPLIT_STYLES[state['style']][1] if state['style'] in SPLIT_STYLES else 'decisions'
+            if not state.get(decision_key): raise ValueError('برنامهٔ تدوین ذخیره‌شده موجود نیست.')
+        state['cached_render_only'] = cached_only
         state.update(status="running", stage="queued", message="", progress=0)
         save(job_dir, state)
         _running.add(key)
@@ -425,6 +431,10 @@ def transcript_for(job_dir: Path, video: Path) -> dict:
     wrong captions, so a failure stops here with a clear message.
     """
     from brain.transcribe import transcribe
+    if load(job_dir).get('cached_render_only'):
+        transcript = json.loads((job_dir / 'transcript.json').read_text())
+        if not transcript.get('words'): raise ValueError('متن ذخیره‌شده معتبر نیست.')
+        return transcript
     transcript = transcribe(video, job_dir, language="fa", engine="elevenlabs")
     if not transcript.get("words"):
         raise RuntimeError("no speech found in the video")
@@ -579,6 +589,8 @@ def resolve_pictures(job_dir: Path, decisions: dict, style: str) -> tuple[dict[i
         prompt, dst, provider_name = item
         if dst.is_file():
             return
+        if load(job_dir).get('cached_render_only'):
+            raise ValueError('تصویر ذخیره‌شده موجود نیست؛ تولید مجدد نیازمند تأیید جداگانه است.')
         from brain.media_provider import get_provider
 
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -787,8 +799,11 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
             _stage(job_dir, "designing motion scenes", progress=76)
             try:
                 creative_motion.compose(beats, creative_motion.plan_from_public(load(job_dir).get("creative_plan")), transcript["sentences"],
-                                        cache=job_dir / "talking_reel_work" / "authored_scenes.json")
+                                        cache=job_dir / "talking_reel_work" / "authored_scenes.json",
+                                        cached_only=bool(load(job_dir).get('cached_render_only')))
             except Exception as exc:
+                if load(job_dir).get('cached_render_only'):
+                    raise
                 log.warning("motion designer failed for %s: %s", job_dir.name, str(exc)[:200])
                 for beat in beats:
                     beat.custom = None

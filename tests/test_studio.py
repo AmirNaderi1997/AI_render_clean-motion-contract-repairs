@@ -67,6 +67,10 @@ def test_intent_routing_and_real_talking_style_selection():
     assert _intent("یک ادیت حرفه‌ای اینستاگرامی بزن", video, None) == "talking"
     assert _intent("از این عکس‌ها یک تیزر بساز", [{"kind": "image"}], None) == "motion"
     assert _style("سبک صحبتی ۳") == "talking_3"
+    assert _style("این رو برام تدوین صحبتی یک اینستاگزامی بزن") == "talking_1"
+    assert _style("با مدل صحبتی شماره یک") == "talking_1"
+    assert _style("صحبتی دوم") == "talking_2"
+    assert _style("talking ٤") == "talking_4"
 
 
 def test_every_tts_surface_uses_localize_elevenlabs(monkeypatch):
@@ -81,6 +85,30 @@ def test_every_tts_surface_uses_localize_elevenlabs(monkeypatch):
     assert _default_elevenlabs_voice("fa") == tts_voice() == "localize-voice"
     assert _default_elevenlabs_voice("en") == "localize-voice"
     assert tts_model() == "eleven-v3-test"
+
+
+def test_social_reference_does_not_enter_product_scraper(tmp_path, monkeypatch):
+    from app import studio_orchestrator as o
+    calls = []
+    monkeypatch.setattr(o, '_emit', lambda *a, **kw: None)
+    monkeypatch.setattr(o, '_creative_direction', lambda *a: None)
+    monkeypatch.setattr(o, '_provider', lambda: 'gateway')
+    def execute(name, payload):
+        calls.append((name, payload))
+        raise RuntimeError('stop before creating a paid job')
+    monkeypatch.setattr(o, 'execute', execute)
+    with pytest.raises(RuntimeError, match='stop before'):
+        o._create_motion('c', 'u', 1, 'ریلز ۱۵ ثانیه درباره هوش مصنوعی با این سبک https://www.instagram.com/reel/test/', [])
+    assert calls[0][0] == 'create_storyboard'
+    assert '15' in calls[0][1]['prompt']
+
+
+def test_cached_motion_resume_never_generates_missing_scenes(tmp_path, monkeypatch):
+    from creative import motion
+    from types import SimpleNamespace
+    monkeypatch.setattr(motion, 'design_system', lambda *a: pytest.fail('must not call AI'))
+    with pytest.raises(ValueError, match='صحنه'):
+        motion.compose([SimpleNamespace(id='beat-1')], None, [], cache=tmp_path/'missing.json', cached_only=True)
 
 
 def test_narration_cache_records_source_text():

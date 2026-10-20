@@ -408,6 +408,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
+    video = base.prepare_render_source(video, work_dir)
     sw, sh, _ = probe_video(video)
     settings = render_settings or {}
     gs = settings.get("grade") or {}
@@ -420,7 +421,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         f"hue=s={float(gs.get('saturation', 100)) / 100:.3f},"
         f"colorbalance=rs={float(gs.get('temperature', 0)) / 500:.3f}:"
         f"bs={-float(gs.get('temperature', 0)) / 500:.3f}")
-    fps = probe_fps(video)
+    fps = base.RENDER_FPS
     fps_value = eval_fps(fps)
     work_dir.mkdir(parents=True, exist_ok=True)
     fonts = fonts_bundle(work_dir)
@@ -450,17 +451,18 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
 
     n = len(plan.shots)
     source_colour = base.source_colour_filter(video)
-    inputs = ["-threads", "1", "-i", str(video)]
-    vf = [f"[0:v]split={n}" + "".join(f"[s{k}]" for k in range(n)),
-          f"[0:a]asplit={n}" + "".join(f"[r{k}]" for k in range(n))]
-    next_input = 1
+    inputs = []
+    for shot in plan.shots:
+        inputs += ['-threads','1','-ss',f'{shot.src_in:.3f}','-t',f'{shot.length:.3f}','-i',str(video)]
+    vf = []
+    next_input = n
     zoom = settings.get("zoom") or {}
     zoom_amount = float(zoom.get("amount", 100)) / 100 if zoom.get("enabled", True) else 0.0
     base_zoom = float(zoom.get("base_scale", 100)) / 100 if zoom.get("enabled", True) else 1.0
     close_zoom = float(zoom.get("close_scale", 140)) / 100 if zoom.get("enabled", True) else 1.0
     for k, shot in enumerate(plan.shots):
         cw, ch, x, y = speaker_crop(shot, sw, sh, base_zoom, close_zoom)
-        cut = f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,crop={cw}:{ch}:{x}:{y}"
+        cut = f"[{k}:v]setpts=PTS-STARTPTS,crop={cw}:{ch}:{x}:{y}"
         if shot.split:
             frames = max(1, round(shot.length * fps_value))
             if shot.picture and Path(shot.picture).suffix.lower()=='.mp4':
@@ -480,7 +482,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         else:
             vf.append(f"{cut},{source_colour},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{grade},format=yuv420p[v{k}]")
         fade = min(0.012, shot.length / 4)
-        vf.append(f"[r{k}]atrim={shot.src_in:.3f}:{shot.src_out:.3f},asetpts=PTS-STARTPTS,"
+        vf.append(f"[{k}:a]asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
     vf.append("".join(f"[v{k}][a{k}]" for k in range(n)) + f"concat=n={n}:v=1:a=1[cv][ca]")
     inputs += ["-loop", "1", "-framerate", fps, "-i", str(vignette_png(work_dir / "vignette.png"))]
@@ -515,7 +517,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     # Container CPU quotas do not limit FFmpeg's auto-detected host thread count.
     # Many split/picture branches otherwise spawn hundreds of scaler workers.
     cmd = [ffmpeg, "-hide_banner", "-y", "-filter_complex_threads", "1", "-filter_threads", "1", *inputs, "-filter_complex", ";".join(vf),
-           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-threads", "2", "-crf", "17", "-preset", "medium",
+           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-threads", "2", "-crf", "17", "-preset", "veryfast",
            "-profile:v", "high", "-pix_fmt", "yuv420p",
            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
@@ -532,7 +534,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     except BaseException:
         proc.terminate(); proc.wait(timeout=5); out.unlink(missing_ok=True); raise
     if proc.wait() != 0:
-        raise RuntimeError(f"ffmpeg failed: {base.ffmpeg_error(''.join(log_tail))}")
+        detail = 'process killed (SIGKILL); check container memory/OOM limits' if proc.returncode == -9 else base.ffmpeg_error(''.join(log_tail))
+        raise RuntimeError(f"ffmpeg failed (exit {proc.returncode}): {detail}")
     return out
 
 

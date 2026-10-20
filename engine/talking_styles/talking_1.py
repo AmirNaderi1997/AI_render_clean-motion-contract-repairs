@@ -597,6 +597,36 @@ def ffmpeg_error(stderr: str, limit: int = 1200) -> str:
     return "\n".join(chosen)[-limit:]
 
 
+def prepare_render_source(video: Path, work_dir: Path) -> Path:
+    """Cache one SDR delivery-resolution decode before opening per-shot inputs.
+
+    High resolution HDR decoded once per shot exhausts container memory and
+    repeats floating point tone mapping. Normalized face coordinates remain valid.
+    """
+    sw, sh, _ = probe_video(video)
+    colour = source_colour_filter(video)
+    if max(sw, sh) <= 1920 and colour == "null":
+        return video
+    import hashlib
+    stamp = f"{video.resolve()}:{video.stat().st_size}:{video.stat().st_mtime_ns}:sdr-v1"
+    key = hashlib.sha256(stamp.encode()).hexdigest()[:16]
+    target = work_dir / f"render_source_{key}.mp4"
+    if target.is_file(): return target
+    work_dir.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix('.partial.mp4')
+    ratio = min(1.0, 1920 / max(sw, sh))
+    width, height = max(2, int(sw * ratio) // 2 * 2), max(2, int(sh * ratio) // 2 * 2)
+    subprocess.run([ass_burner_ffmpeg(), '-hide_banner', '-v', 'error', '-y',
+        '-threads', '1', '-i', str(video), '-filter_threads', '1',
+        '-vf', f'{colour},scale={width}:{height}:flags=lanczos,fps={RENDER_FPS},format=yuv420p10le',
+        '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-threads', '2',
+        '-preset', 'veryfast', '-crf', '16', '-c:a', 'copy',
+        '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
+        str(temporary)], check=True, capture_output=True)
+    temporary.replace(target)
+    return target
+
+
 def eval_fps(fps: str) -> float:
     num, _, den = fps.partition("/")
     return float(num) / float(den or 1)
@@ -820,6 +850,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
+    video = prepare_render_source(video, work_dir)
     sw, sh, _ = probe_video(video)
     # Always render social delivery at a fixed 30fps.  In particular, feeding
     # a 60fps phone source straight into zoompan(d=1,fps=30) changes the video
@@ -851,7 +882,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     # minutes. Seeked inputs let concat emit the first shot immediately.
     inputs: list[str] = []
     for shot in plan.shots:
-        inputs += ["-ss", f"{shot.src_in:.3f}", "-t", f"{shot.length:.3f}", "-i", str(video)]
+        inputs += ["-threads", "1", "-ss", f"{shot.src_in:.3f}", "-t", f"{shot.length:.3f}", "-i", str(video)]
     vf: list[str] = []
     grade_settings = settings.get("grade") or {}
     brightness = 1 + float(grade_settings.get("brightness", 0)) / 100
@@ -939,8 +970,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         # clock first so picture and sound keep identical duration.
         vf.append("[cpad]aresample=48000,loudnorm=I=-16:TP=-1:LRA=9,"
                   "aresample=48000[aout]")
-    cmd = [ffmpeg, "-hide_banner", "-y", *inputs, "-filter_complex", ";".join(vf),
-           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-crf", "17", "-preset", "veryfast",
+    cmd = [ffmpeg, "-hide_banner", "-y", "-filter_complex_threads", "1", "-filter_threads", "1", *inputs, "-filter_complex", ";".join(vf),
+           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-threads", "2", "-crf", "17", "-preset", "veryfast",
            "-profile:v", "high", "-pix_fmt", "yuv420p",
            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
@@ -957,7 +988,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     except BaseException:
         proc.terminate(); proc.wait(timeout=5); out.unlink(missing_ok=True); raise
     if proc.wait() != 0:
-        raise RuntimeError(f"ffmpeg failed: {ffmpeg_error(''.join(log_tail))}")
+        detail = 'process killed (SIGKILL); check container memory/OOM limits' if proc.returncode == -9 else ffmpeg_error(''.join(log_tail))
+        raise RuntimeError(f"ffmpeg failed (exit {proc.returncode}): {detail}")
     return out
 
 

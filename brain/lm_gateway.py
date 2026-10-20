@@ -245,7 +245,7 @@ from app.studio_activity import observe_request
 
 
 @observe_request
-def complete(route, messages, *, required=None, tokens=None, extra=None, endpoint=None, model_override=None, probe=False):
+def complete(route, messages, *, required=None, tokens=None, extra=None, endpoint=None, model_override=None, probe=False, validate_response=None):
     cfg = defaults().get(route)
     if not cfg or not gateway_settings()["enabled"] or (not cfg["enabled"] and not probe):
         raise GatewayError("This AI route is disabled", 503)
@@ -275,6 +275,13 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
                 try:
                     remaining = min(300, cfg["timeout"]*2) - (time.monotonic()-started)
                     response, hdr, status = _wire(endpoint, body, max(1, min(cfg["timeout"], remaining)))
+                    if validate_response is not None:
+                        try:
+                            validate_response(adapters.text(endpoint, response))
+                        except (ValueError, TypeError):
+                            # HTTP 200 is not a usable editing plan. Skip this
+                            # model once; never repeat the same invalid answer.
+                            raise GatewayError('Model returned invalid structured output', 502, True) from None
                     if mid.startswith("google:"):
                         routed=unquote(hdr.get("x-routed-via", ""))
                         if routed != "google/" + mid.partition(":")[2]:
@@ -294,13 +301,16 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
                     error = exc
                     attempts.append({"model": mid, "http_status": exc.status, "error": safe(str(exc), 300), "latency_ms": round((time.monotonic()-tick)*1000)})
                     if not exc.retryable: raise
+                    if str(exc) == 'Model returned invalid structured output': break
                     if exc.status in {404,429}: break
                     # Long Retry-After/quota cooldowns are not slept inside editor workers.
                     if attempt < retries: time.sleep(min(2**attempt, 2))
             if error and not error.retryable: break
-        direct = _direct_fallback(route, endpoint, messages, cfg, candidates, tokens, extra, started, attempts, probe)
+        direct = None if validate_response else _direct_fallback(route, endpoint, messages, cfg, candidates, tokens, extra, started, attempts, probe)
         if direct:
             return direct
+        if error and str(error) == 'Model returned invalid structured output':
+            error.retryable = False
         raise error or GatewayError("No enabled, capability-verified model for this route; configure AI Models & Logs", 422)
     except Exception as exc:
         _audit(_record(route, endpoint, candidates[0] if candidates else "", started, attempts, error=exc, request=messages))

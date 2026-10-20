@@ -143,7 +143,8 @@ def chat_json(
 def gateway_json(system, user, route="editing_agent", max_tokens=16000):
     from .lm_gateway import complete
     from .lm_adapters import text, PATHS
-    result, record = complete(route, [{"role":"system","content":system}, {"role":"user","content":user}], tokens=max_tokens)
+    result, record = complete(route, [{"role":"system","content":system}, {"role":"user","content":user}], tokens=max_tokens,
+                              validate_response=_extract_json)
     endpoint = next(key for key,value in PATHS.items() if value == record["endpoint"])
     return _extract_json(text(endpoint, result)), LLMUsage(
         input_tokens=record.get("input_tokens") or 0, output_tokens=record.get("output_tokens") or 0,

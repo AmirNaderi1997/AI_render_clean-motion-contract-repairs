@@ -231,7 +231,7 @@ def _fingerprint(beat) -> str:
 
 
 def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 4, used: list[str] | None = None,
-            cache: Path | None = None) -> list:
+            cache: Path | None = None, cached_only: bool = False) -> list:
     """Attach authored scenes to `beats` (VisualBeat objects). Beats that fail keep their template. Returns the same list.
 
     `cache` is a JSON file next to the job: scenes already authored for the same beat id and timing are reused, so a
@@ -244,6 +244,16 @@ def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 4, u
             stored = {**stored, **json.loads(cache.read_text())}
         except (OSError, ValueError):
             pass
+    if cached_only:
+        # A render continuation may reuse authored work, never ask an LLM to
+        # redesign missing scenes or silently replace them with other visuals.
+        for beat in beats:
+            hit = stored['scenes'].get(beat.id)
+            if not hit or hit.get('fp') != _fingerprint(beat):
+                raise ValueError('صحنهٔ موشن آماده نیست؛ ادامه نیازمند تأیید تولید صحنه است.')
+            beat.custom = {k:v for k,v in hit.items() if k != 'fp'}
+            beat.custom['bg'] = (stored.get('design') or {}).get('bg', '#0B0D0C')
+        return beats
     brief = plan.brief
     brief_text = f"topic: {brief.topic}; message: {brief.core_message}; audience: {brief.audience}; tone: {brief.tone}"
     concept = plan.chosen

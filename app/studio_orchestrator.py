@@ -21,7 +21,10 @@ def _urls(text: str) -> list[str]:
 
 
 def _style(text: str) -> str | None:
-    normalized = text.lower().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")).replace("صحبتی", "talking_").replace("سبک", "")
+    normalized = text.lower().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    words = {"یک": "1", "اول": "1", "دو": "2", "دوم": "2", "سه": "3", "سوم": "3", "چهار": "4", "چهارم": "4"}
+    normalized = re.sub(r"(?<!\w)(یک|اول|دو|دوم|سه|سوم|چهار|چهارم)(?!\w)", lambda m: words[m[0]], normalized)
+    normalized = normalized.replace("صحبتی", "talking_").replace("شماره", " ").replace("سبک", " ")
     for number in range(1, 5):
         if re.search(rf"(?:talking[_\s-]*|^|\s){number}(?:\s|$)", normalized):
             return f"talking_{number}"
@@ -281,6 +284,12 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
     page = facts = None
     assets = [item["path"] for item in attachments if item["kind"] == "image"]
     links = _urls(text)
+    from urllib.parse import urlsplit
+    reference_links = [link for link in links if (urlsplit(link).hostname or '').lower().removeprefix('www.') in {'instagram.com', 'youtu.be', 'youtube.com', 'tiktok.com'}]
+    if reference_links:
+        _emit(conversation_id, 'tool.progress', tool='inspect_url', message='لینک شبکهٔ اجتماعی رفرنس سبک است، نه صفحهٔ محصول. برای بررسی دقیق سبک، فایل رفرنس را آپلود کنید؛ فعلاً توضیحات شما مبنای برنامه است.')
+        text += '\nرفرنس شبکهٔ اجتماعی مشاهده نشده؛ درباره محتوای آن ادعا نکن. بر اساس موضوع و توضیحات کاربر برنامه پیشنهاد بده.'
+        links = [link for link in links if link not in reference_links]
     if links:
         _emit(conversation_id, "tool.started", tool="inspect_url", message="در حال خواندن محتوای واقعی صفحه و دریافت تصاویر محصول هستم.")
         directory = Path(attachments[0]["path"]).parent if attachments else Path(jobstore.JOBS_ROOT) / "studio" / user_key / conversation_id
@@ -292,7 +301,7 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
               result={"facts": facts, "images": [{k: image.get(k) for k in ("url", "width", "height", "alt")} for image in page.get("images", [])]})
     if links and not assets:
         raise ValueError("تصویر قابل‌استفاده‌ای در صفحه پیدا نشد؛ چند تصویر محصول آپلود کنید")
-    duration_match = re.search(r"(\d{1,3})\s*(?:ثانیه|second|sec)", text.lower())
+    duration_match = re.search(r"(\d{1,3})\s*(?:ثانیه|second|sec)", text.lower().translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹','0123456789')))
     duration = min(90, max(5, int(duration_match.group(1)))) if duration_match else 30
     plan = _creative_direction(conversation_id, text, facts, assets, duration)
     prompt = _motion_prompt(text, page, facts, duration, plan)
@@ -454,8 +463,19 @@ def resume_project(project_id: str, user_key: str, *, retry_confirmed: bool = Fa
     """Resume one existing motion job, preserving valid scene/narration checkpoints."""
     import fcntl
     project = run(repo.get_project(project_id, user_key))
+    if project['engine'] == 'talking':
+        from app import talking_reel
+        job = jobstore.get(project.get('external_ref'))
+        if not job: raise ValueError('فایل‌های پروژه در دسترس نیستند.')
+        state = talking_reel.load(job.dir)
+        if state.get('status') in {'running', 'analyzing'}: return {'status':'running','project_id':project_id}
+        if not state.get('analysis_ready'):
+            raise ValueError('تحلیل کامل نشده است؛ ابتدا تحلیل را در تدوینگر تکمیل کنید.')
+        talking_reel.start(job.dir, job.dir / 'raw' / job.raw_name, regenerate=False, cached_only=True)
+        run(repo.update_project(project_id, user_key, status='running', state={**project['state'], 'last_observed':{}, 'render_started':True}))
+        return {'status':'running','project_id':project_id,'stage':'rendering'}
     if project['engine'] != 'motion':
-        raise ValueError('ادامهٔ این موتور از این مرحله هنوز پشتیبانی نمی‌شود؛ از تدوینگر پیشرفته استفاده کنید.')
+        raise ValueError('ادامهٔ این مرحله نیاز به بررسی متن و صدا در تدوینگر دارد.')
     if not project['state'].get('confirmed'):
         raise ValueError('ابتدا برنامهٔ ساخت را تأیید کنید.')
     job = jobstore.get(project.get('external_ref'))
@@ -592,7 +612,7 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                 if not job: raise KeyError(ref)
                 generation = get_storyboard_status(job) or {}
                 confirmed = bool(project["state"].get("confirmed"))
-                if generation.get("state") == "ready" and job.render.status not in {"queued", "running", "done"} and confirmed:
+                if generation.get("state") == "ready" and job.render.status not in {"queued", "running", "done", "error"} and confirmed:
                     jobstore.start_render(job, preview=False, loudnorm=True)
                 raw_status = ("awaiting_confirmation" if not confirmed else
                               "done" if job.render.status == "done" else

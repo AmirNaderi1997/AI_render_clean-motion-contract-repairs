@@ -120,7 +120,8 @@ export default function Studio() {
   const [resuming, setResuming] = React.useState(false);
   const resume = async () => {
     if (!current || resuming) return;
-    if (!window.confirm('تلاش مجدد ممکن است دوباره هزینه داشته باشد، حتی اگر تلاش قبلی timeout شده باشد. هر تصویر و صدا جداگانه محاسبه می‌شود و هزینهٔ دقیق در دسترس نیست. برای هر مدیای ناقص فقط یک تلاش انجام شود؟')) return;
+    const warning = current.engine === 'talking' ? 'رندر با تحلیل و دارایی‌های ذخیره‌شده ادامه پیدا کند؟ تولید مجدد مدیا انجام نمی‌شود؛ اگر دارایی‌ای ناقص باشد، عملیات متوقف می‌شود.' : 'تلاش مجدد ممکن است دوباره هزینه داشته باشد، حتی اگر تلاش قبلی timeout شده باشد. هر تصویر و صدا جداگانه محاسبه می‌شود و هزینهٔ دقیق در دسترس نیست. برای هر مدیای ناقص فقط یک تلاش انجام شود؟';
+    if (!window.confirm(warning)) return;
     setResuming(true); setError("");
     try { await api.resumeStudioProject(current.id,true); await refresh(); }
     catch (e) { setError(friendlyError(e, "continue this project")); }
@@ -268,7 +269,7 @@ export default function Studio() {
             onOpenPreview={id => openWorkspace("preview", id)} onEditAgain={editAgain}
             retryHref={current?.status === "error" ? advancedEditorUrl(current) || undefined : undefined}
             onChoice={choice => void send(choice)} onRetryMessage={retryMessage}/>
-          {current?.engine === "motion" && current.state?.confirmed && ["error", "canceled"].includes(current.status) ? <button className="btn btn-secondary" disabled={resuming} onClick={() => void resume()}><Icon name="play" size={14}/>{resuming ? "در حال ادامه…" : "ادامه از مرحلهٔ متوقف‌شده"}</button> : null}
+          {current && (current.engine === "talking" || (current.engine === "motion" && current.state?.confirmed)) && ["error", "canceled"].includes(current.status) ? <button className="btn btn-secondary" disabled={resuming} onClick={() => void resume()}><Icon name="play" size={14}/>{resuming ? "در حال ادامه…" : "ادامه از مرحلهٔ متوقف‌شده"}</button> : null}
           {styles.length > 0 && current?.status === "awaiting_input" ? <div className="action-card"><h3>Choose a style</h3><p>How should this video feel?</p><div className="style-options">{styles.map((style: any) => <button key={style.id || style.key} onClick={() => void send(`سبک ${style.id || style.key}`)}><b className="bidi" dir="auto">{style.label || style.title || style.name}</b><small className="bidi" dir="auto">{style.description || "Talking Reel style"}</small></button>)}</div></div> : null}
           {pendingAction ? <div className="action-card"><h3>Approve this plan?</h3><p>EditorGPT will create the media, voice-over and final render using the plan above.</p>{pendingAction.estimated_cost_usd != null ? <small className="muted-text">Recorded estimate: ${pendingAction.estimated_cost_usd.toFixed(4)}</small> : null}
             <div className="action-buttons"><button className="btn" onClick={() => void api.confirmStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "approve the plan")))}>Approve and continue</button><button className="btn btn-secondary" onClick={() => void api.cancelStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "cancel the plan")))}>Cancel</button></div></div> : null}
