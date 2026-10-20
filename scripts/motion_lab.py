@@ -13,12 +13,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from creative import motion  # noqa: E402
-from creative.schemas import Beat  # noqa: E402
 from engine.hyperframes import VisualBeat, build_project  # noqa: E402
 
 
@@ -26,12 +24,7 @@ def load(job: Path):
     state = json.loads((job / "talking_reel.json").read_text())
     beats = [VisualBeat(**{**b, "custom": None}) for b in state["visual_beats"]]
     transcript = json.loads(next((job / "transcripts").glob("*.json")).read_text())
-    chosen = (state.get("creative_plan") or {}).get("chosen") or {}
-    brief = (state.get("creative_plan") or {}).get("brief") or {}
-    plan = SimpleNamespace(
-        brief=SimpleNamespace(**{k: brief.get(k, "") for k in ("topic", "core_message", "audience", "tone")}),
-        chosen=SimpleNamespace(name=chosen.get("name", ""), angle=chosen.get("angle", ""), visual_language=chosen.get("visual_language", ""),
-                               pacing=chosen.get("pacing", ""), beats=[Beat(**b) for b in chosen.get("beats", [])]))
+    plan = motion.plan_from_public(state.get("creative_plan"))
     return state, beats, transcript["sentences"], plan
 
 

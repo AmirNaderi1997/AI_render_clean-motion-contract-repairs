@@ -767,15 +767,38 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         beats = build_visual_beats(visual_plan, decisions, transcript)
         if not beats:
             raise RuntimeError("The visual planner produced no usable motion beats")
+        # Authored motion: the Motion Designer writes a real scene for each beat (creative/motion.py). Beats it
+        # cannot author, or a project HyperFrames rejects, fall back to the built-in templates; never a failure.
+        from creative import motion as creative_motion
+        if creative_motion.enabled():
+            _stage(job_dir, "designing motion scenes", progress=76)
+            try:
+                creative_motion.compose(beats, creative_motion.plan_from_public(load(job_dir).get("creative_plan")), transcript["sentences"])
+            except Exception as exc:
+                log.warning("motion designer failed for %s: %s", job_dir.name, str(exc)[:200])
+                for beat in beats:
+                    beat.custom = None
         _stage(job_dir, "building motion graphics", progress=78,
-               visual_beats=[beat.model_dump() for beat in beats])
+               visual_beats=[{**beat.model_dump(exclude={"custom"}), "authored": bool(beat.custom)} for beat in beats])
         project = job_dir / "talking_reel_work" / "hyperframes"
         build_project(project, rough, beats, duration=plan.duration)
         _stage(job_dir, "rendering motion graphics", progress=82)
-        render_project(
-            project, out,
-            on_progress=lambda pct: _stage(job_dir, "rendering motion graphics", progress=pct),
-        )
+        try:
+            render_project(
+                project, out,
+                on_progress=lambda pct: _stage(job_dir, "rendering motion graphics", progress=pct),
+            )
+        except Exception as exc:
+            if not any(beat.custom for beat in beats):
+                raise
+            log.warning("authored motion failed to render for %s (%s); using templates", job_dir.name, str(exc)[:200])
+            for beat in beats:
+                beat.custom = None
+            build_project(project, rough, beats, duration=plan.duration)
+            render_project(
+                project, out,
+                on_progress=lambda pct: _stage(job_dir, "rendering motion graphics", progress=pct),
+            )
         from engine.hyperframes.quality import improve_beats, review_render
         review = review_render(out, beats, job_dir / "talking_reel_work")
         _stage(job_dir, "reviewing motion graphics", progress=99, visual_qc=review)

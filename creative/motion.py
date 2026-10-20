@@ -205,7 +205,26 @@ def author_scene(spec: SceneSpec, design: DesignSystem, *, used: list[str] | Non
     raise CreativeUnavailable(f"scene {spec.id} did not pass validation: {last[:3]}")
 
 
-def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 3, used: list[str] | None = None) -> list:
+def plan_from_public(data: dict | None):
+    """Rebuild what `compose` needs from `CreativePlan.public()` (what is stored on a job); tolerant of an empty/absent plan."""
+    from types import SimpleNamespace
+    from .schemas import Beat
+    data = data or {}
+    brief, chosen = data.get("brief") or {}, data.get("chosen") or {}
+    return SimpleNamespace(
+        brief=SimpleNamespace(**{k: brief.get(k, "") for k in ("topic", "core_message", "audience", "tone")}),
+        chosen=SimpleNamespace(name=chosen.get("name", ""), angle=chosen.get("angle", ""), visual_language=chosen.get("visual_language", ""),
+                               pacing=chosen.get("pacing", ""), beats=[Beat(**b) for b in chosen.get("beats", []) if isinstance(b, dict)]))
+
+
+def enabled() -> bool:
+    """Authored motion is part of the creative layer; CREATIVE_MOTION=0 keeps only the built-in templates."""
+    import os
+    from . import director
+    return director.enabled() and os.environ.get("CREATIVE_MOTION", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 4, used: list[str] | None = None) -> list:
     """Attach authored scenes to `beats` (VisualBeat objects). Beats that fail keep their template. Returns the same list."""
     if not beats:
         return beats
