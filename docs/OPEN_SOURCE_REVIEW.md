@@ -83,3 +83,18 @@ nothing was copied. If the team later buys a Remotion licence, AutoBroll/AIEV co
 Apache-2.0. Its value is craft rules, not code: constrain typography to a scale, one accent colour, consistent
 spacing, avoid default AI gradients. They are in the Motion Designer's prompt and its static validator (for example,
 no negative `letter-spacing` on Persian text). Attribution belongs in the README if more is copied.
+
+## Tscaps spike result (2026-10-20)
+
+Question: can the MIT engine render Persian captions headlessly in our environment? **Yes.**
+
+* `@tscaps/engine@0.7.0` from npm + Vite + Playwright driving the installed Chrome, our own word timestamps fed through
+  `PassthroughTranscriber` (no Whisper download).
+* 12 s of the Persian sample, 1080×1920, five templates (hugo, milo, cleo, noor, enzo): **2–17 s each** (360 frames),
+  H.264 + AAC out.
+* Persian is correct: joined letters, right-to-left word order, per-word timing. Our Ray and Vazirmatn fonts apply
+  through a CSS override.
+* Templates are authored as SCSS with a build step whose helper functions live in the AGPL `apps/studio`. For the spike
+  we ran that build in a scratch checkout; **we did not copy it into this repository.** Productising means either
+  vendoring the already-built `style.build.css` files (MIT, derived from MIT sources) or writing our own SCSS helpers.
+* Not yet tested: text behind the speaker, emoji, per-word emphasis tags, burning onto the full HyperFrames output.
