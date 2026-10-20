@@ -2,11 +2,19 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { isAuthenticated, restoreSession } from "./auth";
+import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { JobCacheProvider } from "./JobCache";
 import Login from "./Login";
 import EditorShell from "./EditorShell";
 import { LoadingState, ToastHost } from "./ui";
-import "./styles.css";
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./styles/components.css";
+import "./styles/shell.css";
+import "./styles/studio.css";
+import "./styles/auth.css";
+import "./styles/pages.css";
+import "./styles/legacy.css";
 
 const Studio = React.lazy(() => import("./Studio"));
 const Projects = React.lazy(() => import("./Jobs"));
@@ -35,13 +43,18 @@ const HermesAdvisor = React.lazy(() => import("./pages/hermes/HermesAdvisor.jsx"
 const HermesContentPlan = React.lazy(() => import("./pages/hermes/HermesContentPlan.jsx"));
 const HermesSettings = React.lazy(() => import("./pages/hermes/HermesSettings"));
 
-function LoadingSpinner() { return <LoadingState label="Loading EditorGPT…" rows={2}/>; }
+function LoadingSpinner() { return <div className="boot" role="status" aria-label="Loading EditorGPT"><span className="spinner"/></div>; }
+
+function GuestRoute({ children }: { children: React.ReactNode }) {
+  const { authenticated } = useAuth();
+  return authenticated ? <Navigate to="/studio" replace/> : <>{children}</>;
+}
 
 class AppErrorBoundary extends React.Component<React.PropsWithChildren, { hasError: boolean }> {
   state = { hasError: false };
   static getDerivedStateFromError() { return { hasError: true }; }
   componentDidCatch(error: Error, info: React.ErrorInfo) { console.error("Unhandled React error", error, info); }
-  render() { return this.state.hasError ? <main className="ui-state" role="alert"><h1>Something went wrong</h1><p>Your work is saved. Reload to reconnect.</p><button onClick={() => location.reload()}>Reload</button></main> : this.props.children; }
+  render() { return this.state.hasError ? <main className="empty boot" role="alert"><strong>Something went wrong</strong><p>Your work is saved. Reload to reconnect.</p><button className="btn" onClick={() => location.reload()}>Reload</button></main> : this.props.children; }
 }
 
 function SessionBootstrap({ children }: { children: React.ReactNode }) {
@@ -52,7 +65,8 @@ function SessionBootstrap({ children }: { children: React.ReactNode }) {
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  return isAuthenticated() ? <>{children}</> : <Navigate to="/login" replace state={{ from: location.pathname + location.search }}/>;
+  const { authenticated } = useAuth();
+  return authenticated ? <>{children}</> : <Navigate to="/login" replace state={{ from: location.pathname + location.search }}/>;
 }
 
 function LegacyJobRedirect() {
@@ -61,13 +75,13 @@ function LegacyJobRedirect() {
 }
 
 function App() {
-  return <BrowserRouter><AppErrorBoundary><SessionBootstrap><JobCacheProvider><React.Suspense fallback={<LoadingSpinner/>}><Routes>
-    <Route path="/login" element={isAuthenticated() ? <Navigate to="/studio" replace/> : <Login/>}/>
-    <Route path="/signup" element={isAuthenticated() ? <Navigate to="/studio" replace/> : <Signup/>}/>
+  return <BrowserRouter><AppErrorBoundary><SessionBootstrap><AuthProvider><JobCacheProvider><React.Suspense fallback={<LoadingSpinner/>}><Routes>
+    <Route path="/login" element={<GuestRoute><Login/></GuestRoute>}/>
+    <Route path="/signup" element={<GuestRoute><Signup/></GuestRoute>}/>
     <Route path="/forgot-password" element={<ForgotPassword/>}/><Route path="/reset-password" element={<ResetPassword/>}/>
     <Route path="/welcome" element={<Landing/>}/>
     <Route element={<EditorShell/>}>
-      <Route index element={<Studio/>}/><Route path="studio" element={<Studio/>}/><Route path="studio/:conversationId" element={<Studio/>}/>
+      <Route index element={<Navigate to="/studio" replace/>}/><Route path="studio/:conversationId?" element={<Studio/>}/>
       <Route path="projects" element={<RequireAuth><Projects/></RequireAuth>}/><Route path="templates" element={<Templates/>}/><Route path="settings" element={<RequireAuth><Settings/></RequireAuth>}/>
       <Route path="settings/ai" element={<RequireAuth><AIModels/></RequireAuth>}/>
       <Route path="new" element={<Navigate to="/studio" replace/>}/><Route path="content" element={<RequireAuth><ContentCreator/></RequireAuth>}/><Route path="localize" element={<RequireAuth><Localize/></RequireAuth>}/><Route path="talking" element={<RequireAuth><TalkingReels/></RequireAuth>}/>
@@ -76,7 +90,7 @@ function App() {
       <Route path="hermes" element={<RequireAuth><HermesLayout/></RequireAuth>}><Route index element={<HermesDashboard/>}/><Route path="connect" element={<HermesConnect/>}/><Route path="scheduler" element={<HermesScheduler/>}/><Route path="post/new" element={<HermesPostEditor/>}/><Route path="post/:id" element={<HermesPostEditor/>}/><Route path="analytics" element={<HermesAnalytics/>}/><Route path="advisor" element={<HermesAdvisor/>}/><Route path="content-plan" element={<HermesContentPlan/>}/><Route path="settings" element={<HermesSettings/>}/></Route>
       <Route path="*" element={<Navigate to="/studio" replace/>}/>
     </Route>
-  </Routes></React.Suspense><ToastHost/></JobCacheProvider></SessionBootstrap></AppErrorBoundary></BrowserRouter>;
+  </Routes></React.Suspense><ToastHost/></JobCacheProvider></AuthProvider></SessionBootstrap></AppErrorBoundary></BrowserRouter>;
 }
 
 createRoot(document.getElementById("root")!).render(<App/>);

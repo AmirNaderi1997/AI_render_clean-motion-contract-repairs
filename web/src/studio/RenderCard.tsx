@@ -1,0 +1,67 @@
+import React from "react";
+import { api, StudioProject } from "../api";
+import { AuthenticatedMedia } from "../AuthenticatedMedia";
+import { Icon } from "../components/Icon";
+import { formatDuration } from "../format";
+import { Link } from "react-router-dom";
+import { friendlyFailure, renderView } from "./model";
+
+function useElapsed(startedAt: number, running: boolean) {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (!running) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [running]);
+  return startedAt ? Math.max(0, now - startedAt) : 0;
+}
+
+/**
+ * One inline card per project. It updates in place while rendering
+ * (stage, percentage, elapsed time) and becomes the finished player: no new row per percent.
+ */
+export function RenderCard({ project, sourceUrl, startedAt, compact, onOpenPreview, onEditAgain, retryHref }: {
+  project: StudioProject; sourceUrl?: string; startedAt: number;
+  /** Desktop: the video lives in the Preview tab, so the chat shows only the status card. */
+  compact?: boolean;
+  onOpenPreview: () => void; onEditAgain: () => void; retryHref?: string;
+}) {
+  const view = renderView(project);
+  const output = view.output ? `${api.studioOutputUrl(project.id)}?version=${encodeURIComponent(view.output)}` : undefined;
+  const busy = view.phase === "queued" || view.phase === "rendering" || view.phase === "finalizing";
+  const elapsed = useElapsed(startedAt, busy);
+  const version = String(view.output || "").match(/\/v(\d+)(?:_preview)?\.mp4(?:$|\?)/)?.[1] || project.current_version;
+  const percent = view.progress;
+  const title = view.phase === "done" ? "Your video is ready" : view.phase === "failed" ? "Rendering didn’t finish" : view.phase === "finalizing" ? "Finalizing your video" : "Rendering your video";
+
+  return <article className="render-card" data-phase={view.phase} data-compact={compact || undefined} aria-label={title}>
+    <header className="rc-head">
+      <h3>{title}</h3>
+      {view.phase === "done" ? <span className="badge" data-tone="success"><i/>Version {version}</span> : busy && elapsed >= 1000 ? <span className="rc-elapsed">{formatDuration(elapsed)}</span> : null}
+    </header>
+
+    {compact && view.phase !== "failed" ? null : <div className="rc-frame">
+      {output ? <AuthenticatedMedia as="video" controls playsInline preload="metadata" src={output} className="rc-video"/> : <>
+        {sourceUrl ? <AuthenticatedMedia as="video" muted playsInline preload="metadata" src={sourceUrl} className="rc-backdrop" aria-hidden="true" tabIndex={-1}/> : <div className="rc-backdrop skeleton" aria-hidden="true"/>}
+        <div className="rc-overlay">
+          {view.phase === "failed" ? <Icon name="alert" size={28}/> : <span className="spinner rc-spinner" aria-hidden="true"/>}
+          {view.phase !== "rendering" ? <strong>{view.stageLabel}</strong> : null}
+          {view.phase === "failed" ? <p dir="auto" className="bidi wrap-safe">{friendlyFailure(view.message)}</p> : null}
+          {busy && typeof percent === "number" ? <span className="rc-pct" aria-hidden="true">{percent}%</span> : null}
+        </div>
+      </>}
+    </div>}
+
+    {busy ? <div className="rc-progress">
+      <div className="meter" data-indeterminate={typeof percent === "number" ? undefined : ""} style={{ ["--value" as string]: `${percent ?? 0}%` }} role="progressbar" aria-label="Render progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><span/></div>
+      <div className="rc-meta"><span>{view.stageLabel === title ? "" : view.stageLabel}</span>{typeof percent === "number" ? <span>{percent}%</span> : null}</div>
+    </div> : null}
+
+    {view.phase === "done" && output ? <div className="rc-actions">
+      <button className="btn btn-sm" onClick={() => void api.downloadAuthenticated(api.studioOutputUrl(project.id), `${project.title || "video"}.mp4`)}><Icon name="download" size={15}/>Download</button>
+      <button className="btn btn-sm btn-secondary" onClick={onOpenPreview}><Icon name="eye" size={15}/>Open in Preview</button>
+      <button className="btn btn-sm btn-ghost" onClick={onEditAgain}><Icon name="edit" size={15}/>Edit again</button>
+    </div> : null}
+    {view.phase === "failed" && retryHref ? <div className="rc-actions"><Link className="btn btn-sm btn-secondary" to={retryHref}><Icon name="refresh" size={15}/>Open editor to retry</Link></div> : null}
+  </article>;
+}

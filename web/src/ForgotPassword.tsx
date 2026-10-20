@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "./api";
 import { friendlyError } from "./ui";
+import { AuthFrame } from "./auth/AuthPage";
+import { TextField } from "./auth/AuthForms";
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
@@ -10,8 +12,8 @@ export default function ForgotPassword() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setLoading(true);
     setError("");
     try {
@@ -25,35 +27,15 @@ export default function ForgotPassword() {
     }
   };
 
-  return (
-    <div className="auth-page">
-      <div className="auth-card">
-        <div className="auth-logo" aria-hidden="true">✦</div>
-        <h1>Reset your password</h1>
-        <p className="auth-subtitle">We'll send you a link to get back into EditorGPT</p>
-        {sent ? (
-          <>
-            <div className="ok">If this email is registered, you'll receive a reset link.</div>
-            {devToken && (
-              <div className="auth-dev-banner">
-                DEV: Reset token: <code>{devToken}</code>
-                <br />
-                <Link to={`/reset-password?token=${devToken}`}>Use reset link</Link>
-              </div>
-            )}
-          </>
-        ) : (
-          <form onSubmit={submit}>
-            {error && <div className="auth-error" role="alert">{error}</div>}
-            <label htmlFor="forgot-email">Email</label>
-            <input id="forgot-email" type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required autoFocus />
-            <button type="submit" disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}>{loading ? "Sending..." : "Send reset link"}</button>
-          </form>
-        )}
-        <div className="auth-links">
-          <Link to="/login">Back to login</Link>
-        </div>
-      </div>
-    </div>
-  );
+  return <AuthFrame title="Reset your password" subtitle="We'll email you a link to get back into EditorGPT.">
+    {sent ? <div className="auth-form">
+      <div className="notice" data-tone="success" role="status">If this email is registered, you'll receive a reset link.</div>
+      {devToken ? <div className="notice" data-tone="warning">DEV reset token: <code className="ident">{devToken}</code> <Link to={`/reset-password?token=${devToken}`}>Use reset link</Link></div> : null}
+    </div> : <form className="auth-form" onSubmit={submit}>
+      {error ? <div className="notice" data-tone="error" role="alert">{error}</div> : null}
+      <TextField id="forgot-email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} autoFocus ltr/>
+      <button type="submit" className="btn btn-lg btn-block" disabled={loading}>{loading ? <><span className="spinner"/>Sending…</> : "Send reset link"}</button>
+    </form>}
+    <p className="auth-switch"><Link to="/login">Back to login</Link></p>
+  </AuthFrame>;
 }

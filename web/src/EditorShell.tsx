@@ -1,66 +1,141 @@
 import React from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api, StudioConversation } from "./api";
-import { clearToken, getUser, isAuthenticated, isLocalDevelopment } from "./auth";
+import { Icon } from "./components/Icon";
+import { ShellContext } from "./components/ShellContext";
+import { useFocusTrap, useMediaQuery, useVisualViewportHeight } from "./components/hooks";
+import { useAuth } from "./auth/AuthContext";
+import { isLocalDevelopment } from "./auth";
+import { displayTitle, parseTime } from "./format";
 
-export type IconName = "spark" | "plus" | "search" | "panel" | "projects" | "templates" | "settings" | "menu" | "close" | "user" | "chevron" | "advanced" | "login";
+// Kept so older screens that import { Icon } from "./EditorShell" keep working.
+export { Icon } from "./components/Icon";
+export type { IconName } from "./components/Icon";
 
-export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
-  const paths: Record<IconName, React.ReactNode> = {
-    spark: <><path d="m12 3-1.1 4.1a5.2 5.2 0 0 1-3.8 3.8L3 12l4.1 1.1a5.2 5.2 0 0 1 3.8 3.8L12 21l1.1-4.1a5.2 5.2 0 0 1 3.8-3.8L21 12l-4.1-1.1a5.2 5.2 0 0 1-3.8-3.8L12 3Z"/></>,
-    plus: <><path d="M12 5v14M5 12h14"/></>,
-    search: <><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></>,
-    panel: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></>,
-    projects: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M8 5V3h8v2"/></>,
-    templates: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
-    settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></>,
-    menu: <><path d="M4 7h16M4 12h16M4 17h16"/></>,
-    close: <><path d="m6 6 12 12M18 6 6 18"/></>,
-    user: <><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></>,
-    chevron: <><path d="m9 18 6-6-6-6"/></>,
-    advanced: <><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></>,
-    login: <><path d="M10 17l5-5-5-5M15 12H3"/><path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5"/></>,
-  };
-  return <svg className="eg-icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
+type RouteKind = "studio" | "page" | "legacy";
+function routeKind(pathname: string): RouteKind {
+  if (pathname === "/" || pathname.startsWith("/studio")) return "studio";
+  if (/^\/(projects|templates|settings)(\/|$)/.test(pathname) && !pathname.startsWith("/settings/ai")) return "page";
+  return "legacy";
 }
+const ROUTE_TITLES: Record<string, string> = { "/projects": "Projects", "/templates": "Templates", "/settings": "Settings" };
 
 export default function EditorShell() {
-  const authenticated = isAuthenticated();
-  const [collapsed, setCollapsed] = React.useState(() => localStorage.getItem("editorgpt.sidebar") === "collapsed");
-  const [drawer, setDrawer] = React.useState(false);
-  const [searchOpen, setSearchOpen] = React.useState(false);
-  const [conversations, setConversations] = React.useState<StudioConversation[]>([]);
-  const [search, setSearch] = React.useState("");
+  const { authenticated, user, openAuth, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const user = getUser();
-  const refreshChats = React.useCallback(() => { if (authenticated) void api.listStudioConversations().then(setConversations).catch(() => undefined); }, [authenticated]);
-  React.useEffect(() => { document.documentElement.dataset.theme = localStorage.getItem("editorgpt.theme") || "dark"; }, []);
-  React.useEffect(() => { setDrawer(false); refreshChats(); }, [location.pathname, refreshChats]);
+  const isMobile = useMediaQuery("(max-width: 820px)");
+  const [collapsed, setCollapsed] = React.useState(() => { try { return localStorage.getItem("editorgpt.sidebar") === "collapsed"; } catch { return false; } });
+  const [drawer, setDrawer] = React.useState(false);
+  const [searching, setSearching] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const [conversations, setConversations] = React.useState<StudioConversation[]>([]);
+  const [pageTitle, setPageTitle] = React.useState("");
+  const sidebarRef = React.useRef<HTMLElement>(null);
+  const searchRef = React.useRef<HTMLInputElement>(null);
+  const kind = routeKind(location.pathname);
+
+  useVisualViewportHeight();
+  useFocusTrap(drawer && isMobile, sidebarRef);
+
+  React.useEffect(() => { try { document.documentElement.dataset.theme = localStorage.getItem("editorgpt.theme") || "dark"; } catch { document.documentElement.dataset.theme = "dark"; } }, []);
+  React.useEffect(() => { try { localStorage.setItem("editorgpt.sidebar", collapsed ? "collapsed" : "open"); } catch { /* storage unavailable */ } }, [collapsed]);
+
+  const refreshChats = React.useCallback(() => {
+    if (authenticated) void api.listStudioConversations().then(setConversations).catch(() => undefined);
+    else setConversations([]);
+  }, [authenticated]);
+  React.useEffect(() => { setDrawer(false); }, [location.pathname]);
+  React.useEffect(() => { refreshChats(); }, [refreshChats, location.pathname]);
   React.useEffect(() => {
-    const open = () => setDrawer(true); const refresh = () => refreshChats();
-    window.addEventListener("editorgpt:open-nav", open); window.addEventListener("editorgpt:conversations-updated", refresh);
-    return () => { window.removeEventListener("editorgpt:open-nav", open); window.removeEventListener("editorgpt:conversations-updated", refresh); };
+    const open = () => setDrawer(true);
+    window.addEventListener("editorgpt:open-nav", open);
+    window.addEventListener("editorgpt:conversations-updated", refreshChats);
+    return () => { window.removeEventListener("editorgpt:open-nav", open); window.removeEventListener("editorgpt:conversations-updated", refreshChats); };
   }, [refreshChats]);
-  React.useEffect(() => localStorage.setItem("editorgpt.sidebar", collapsed ? "collapsed" : "open"), [collapsed]);
+  React.useEffect(() => {
+    if (!drawer) return;
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") setDrawer(false); };
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, [drawer]);
+  React.useEffect(() => { if (!isMobile) setDrawer(false); }, [isMobile]);
+  React.useEffect(() => { if (searching) searchRef.current?.focus(); }, [searching]);
 
-  async function logout() {
-    if (!isLocalDevelopment) await fetch("/api/auth/logout", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => undefined);
-    clearToken(); navigate("/studio");
-  }
-  const visibleChats = conversations.filter(item => item.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
+  const shellValue = React.useMemo(() => ({ openNav: () => setDrawer(true), setTitle: setPageTitle }), []);
+  const visible = React.useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    return [...conversations].sort((a, b) => parseTime(b.updated_at) - parseTime(a.updated_at)).filter(item => !needle || (item.title || "").toLocaleLowerCase().includes(needle));
+  }, [conversations, query]);
 
-  return <div className={`eg-app ${collapsed ? "sidebar-collapsed" : ""} ${authenticated ? "" : "guest"}`}>
-    <a className="skip-link" href="#main-content">Skip to content</a>
-    <aside className={`eg-sidebar ${drawer ? "drawer-open" : ""}`} aria-label="Main navigation">
-      <div className="eg-brand"><span className="eg-brand-copy"><b>EditorGPT</b></span><span className="eg-brand-actions"><button className="eg-icon-button" onClick={() => setSearchOpen(value => !value)} aria-label="Search chats"><Icon name="search"/></button><button className="eg-icon-button eg-sidebar-toggle" onClick={() => window.innerWidth <= 800 ? setDrawer(false) : setCollapsed(value => !value)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}><Icon name="panel"/></button><button className="eg-icon-button eg-close-drawer" onClick={() => setDrawer(false)} aria-label="Close navigation"><Icon name="close"/></button></span></div>
-      <nav className="eg-nav-links"><button className="eg-nav-link eg-new-edit" onClick={() => navigate("/studio")}><Icon name="plus"/><span>New edit</span></button><NavLink to="/projects"><Icon name="projects"/><span>Projects</span></NavLink><NavLink to="/templates"><Icon name="templates"/><span>Templates</span></NavLink></nav>
-      {authenticated ? <section className="eg-sidebar-chats"><div className="eg-sidebar-chats-head"><span>Chats</span><small>{conversations.length}</small></div>{searchOpen && <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search chats" aria-label="Search chats" autoFocus/>}<div className="eg-sidebar-chat-list">{visibleChats.map(chat => <NavLink key={chat.id} to={`/studio/${chat.id}`}><span>{chat.title}</span><small>{new Intl.DateTimeFormat(undefined, { month:"short", day:"numeric" }).format(Date.parse(chat.updated_at))}</small></NavLink>)}</div></section> : <div className="eg-guest-note"><p>Sign in to create videos and keep your projects synced.</p><NavLink to="/login" state={{ from: location.pathname + location.search }}><Icon name="login" size={18}/>Log in</NavLink></div>}
-      <div className="eg-sidebar-bottom"><NavLink className="eg-nav-link" to="/settings"><Icon name="settings"/><span>Settings</span></NavLink>{authenticated ? <div className="eg-user-card"><span className="eg-avatar">{user?.name?.trim()?.[0]?.toUpperCase() || <Icon name="user" size={17}/>}</span><span className="eg-user-copy"><b>{user?.name || "Editor"}</b><small>{isLocalDevelopment ? "Local workspace" : user?.email}</small></span>{!isLocalDevelopment && <button onClick={() => void logout()} className="eg-quiet-button">Log out</button>}</div> : null}</div>
-    </aside>
-    {drawer && <button className="eg-drawer-backdrop" onClick={() => setDrawer(false)} aria-label="Close navigation"/>}
-    <button className="eg-floating-menu" onClick={() => setDrawer(true)} aria-label="Open navigation"><Icon name="menu"/></button>
-    <main id="main-content" className="eg-main" tabIndex={-1}><Outlet/></main>
-    <nav className="eg-mobile-nav" aria-label="Mobile navigation"><NavLink to="/studio"><Icon name="plus"/><span>New</span></NavLink><NavLink to="/projects"><Icon name="projects"/><span>Projects</span></NavLink><NavLink to="/templates"><Icon name="templates"/><span>Templates</span></NavLink></nav>
-  </div>;
+  const startSearch = () => { if (collapsed && !isMobile) setCollapsed(false); setSearching(true); };
+  const rail = collapsed && !isMobile;
+  const tip = (label: string) => rail ? { "data-tip": label, className: "nav-item rail-tip" } : { className: "nav-item" };
+  const topTitle = ROUTE_TITLES[location.pathname] || pageTitle || "EditorGPT";
+  const initial = user?.name?.trim()?.[0]?.toUpperCase();
+  const settingsActive = /^\/(settings|new|my-effects|library|style-library|style-learner|fonts|hermes|content|localize|talking)/.test(location.pathname);
+
+  return <ShellContext.Provider value={shellValue}>
+    <div className="app" data-collapsed={collapsed || undefined} data-hide-bottom-nav={kind === "studio" || undefined} data-bare={kind === "studio" || undefined}>
+      <a className="skip-link" href="#main-content">Skip to content</a>
+
+      <aside ref={sidebarRef} className="sidebar" data-open={drawer || undefined} aria-label="Main navigation" tabIndex={-1}>
+        <div className="sb-head">
+          <NavLink to="/studio" className="brand" aria-label="EditorGPT home"><span className="brand-mark"><Icon name="spark" size={18}/></span><span className="brand-name">EditorGPT</span></NavLink>
+          <button className="icon-btn sb-collapse rail-tip" data-tip={collapsed ? "Open sidebar" : "Close sidebar"} onClick={() => setCollapsed(value => !value)} aria-label={collapsed ? "Open sidebar" : "Close sidebar"} aria-expanded={!collapsed}><Icon name="panel" size={19}/></button>
+          {isMobile ? <button className="icon-btn" onClick={() => setDrawer(false)} aria-label="Close navigation"><Icon name="close" size={19}/></button> : null}
+        </div>
+
+        <nav className="sb-nav" aria-label="Primary">
+          <NavLink to="/studio" end {...tip("New edit")} aria-label="New edit"><Icon name="edit"/><span>New edit</span></NavLink>
+          <button type="button" {...tip("Search chats")} aria-label="Search chats" onClick={startSearch}><Icon name="search"/><span>Search chats</span></button>
+          <NavLink to="/projects" {...tip("Projects")}><Icon name="projects"/><span>Projects</span></NavLink>
+          <NavLink to="/templates" {...tip("Templates")}><Icon name="templates"/><span>Templates</span></NavLink>
+        </nav>
+
+        <section className="sb-history" aria-label="Chat history">
+          {authenticated ? <>
+            <div className="sb-section-title">Recent</div>
+            {searching ? <div className="sb-search"><input ref={searchRef} className="input" type="search" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Escape") { setSearching(false); setQuery(""); } }} placeholder="Search chats" aria-label="Search chats"/></div> : null}
+            <div className="sb-list">
+              {visible.map(chat => <NavLink key={chat.id} to={`/studio/${chat.id}`} className="sb-chat" title={chat.title}>{displayTitle(chat.title, 48)}</NavLink>)}
+              {!visible.length ? <p className="sb-empty">{query ? "No chats match your search." : "Your chats will appear here."}</p> : null}
+            </div>
+          </> : <div className="sb-guest">
+            <p>Log in to save your chats and keep projects in sync.</p>
+            <button className="btn btn-sm" onClick={() => { setDrawer(false); openAuth("login"); }}>Log in</button>
+            <button className="btn btn-sm btn-secondary" onClick={() => { setDrawer(false); openAuth("signup"); }}>Sign up</button>
+          </div>}
+        </section>
+        <div className="sb-spacer"/>
+
+        <div className="sb-foot">
+          <NavLink to="/settings" {...tip("Settings")} aria-current={settingsActive ? "page" : undefined}><Icon name="settings"/><span>Settings</span></NavLink>
+          {authenticated ? <div className="account">
+            <span className="avatar" aria-hidden="true">{initial || <Icon name="user" size={16}/>}</span>
+            <span className="account-copy"><b>{user?.name || "Editor"}</b><small>{isLocalDevelopment ? "Local workspace" : user?.email}</small></span>
+            {!isLocalDevelopment ? <button className="icon-btn account-out" onClick={() => void logout()} aria-label="Log out" data-tip="Log out" data-tip-pos="top"><Icon name="logout" size={18}/></button> : null}
+          </div> : null}
+        </div>
+      </aside>
+
+      {drawer && isMobile ? <button className="drawer-backdrop" onClick={() => setDrawer(false)} aria-label="Close navigation" tabIndex={-1}/> : null}
+
+      <div className="content-col" {...(drawer && isMobile ? { inert: "" as unknown as boolean } : {})}>
+        <header className="topbar">
+          <button className="icon-btn icon-btn-lg" onClick={() => setDrawer(true)} aria-label="Open navigation" aria-expanded={drawer}><Icon name="menu"/></button>
+          <div className="topbar-title">{topTitle}</div>
+          <button className="icon-btn icon-btn-lg" onClick={() => navigate("/studio")} aria-label="New edit"><Icon name="edit"/></button>
+        </header>
+        <main id="main-content" className={`main${kind === "legacy" ? " eg-legacy" : ""}`} data-route={kind} tabIndex={-1}>
+          {kind === "legacy" ? <div className="legacy-frame"><Outlet/></div> : <Outlet/>}
+        </main>
+        <nav className="bottom-nav" aria-label="Mobile navigation">
+          <NavLink to="/studio" end><Icon name="edit"/><span>New edit</span></NavLink>
+          <NavLink to="/projects"><Icon name="projects"/><span>Projects</span></NavLink>
+          <NavLink to="/templates"><Icon name="templates"/><span>Templates</span></NavLink>
+        </nav>
+      </div>
+    </div>
+  </ShellContext.Provider>;
 }

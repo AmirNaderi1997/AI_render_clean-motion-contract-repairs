@@ -1,0 +1,19 @@
+/* Authentication: one visual system for login, signup, reset and the mobile sheet. */
+.auth-screen { min-height: var(--app-h); display: grid; grid-template-rows: auto 1fr; background: var(--bg); color: var(--text); }
+.auth-topbar { display: flex; align-items: center; padding: calc(var(--space-4) + var(--safe-top)) clamp(16px, 4vw, 32px) var(--space-4); }
+.auth-main { display: grid; place-items: start center; padding: clamp(16px, 8vh, 80px) var(--space-4) calc(var(--space-8) + var(--safe-bottom)); }
+.auth-panel { width: min(100%, 400px); display: grid; gap: var(--space-6); animation: rise-in var(--dur-slow) var(--ease); }
+.auth-head { display: grid; gap: 6px; text-align: center; }
+.auth-head h1, .auth-head h2 { font-size: clamp(24px, 5vw, 30px); font-weight: 600; letter-spacing: -.02em; }
+.auth-head p { color: var(--text-2); font-size: 15px; }
+.auth-form { display: grid; gap: var(--space-4); }
+.password-wrap { position: relative; }
+.password-wrap > .input { padding-inline-end: 48px; }
+.password-wrap > .icon-btn { position: absolute; inset-block: 0; margin-block: auto; inset-inline-end: 4px; --size: 36px; }
+.auth-aside-link { justify-self: end; margin-block: -6px 0; font-size: 13px; color: var(--text-2); text-decoration: underline; text-underline-offset: 3px; }
+.auth-aside-link:hover { color: var(--text); }
+.auth-switch { text-align: center; font-size: 14px; color: var(--text-2); }
+.auth-switch a, .auth-switch button { color: var(--text); text-decoration: underline; text-underline-offset: 3px; font-weight: 500; }
+.auth-sheet { display: grid; gap: var(--space-5); padding-top: var(--space-2); }
+.auth-sheet .auth-head { text-align: start; }
+.auth-sheet .auth-head h2 { font-size: 22px; }

@@ -381,7 +381,7 @@ export default function PlanReview() {
         <div style={{
           display: "inline-flex", alignItems: "center", gap: 8,
           padding: "6px 14px", borderRadius: "100px",
-          background: "var(--accent-soft)", border: "1px solid rgba(99,102,241,0.15)",
+          background: "var(--accent-soft)", border: "1px solid var(--border)",
           fontSize: 13, marginBottom: 16
         }}>
           <span style={{ fontWeight: 600 }}>{parsedPlan.style_profile.name} v{parsedPlan.style_profile.version}</span>
@@ -933,7 +933,7 @@ function VisualEditor({ jobId, plan, effects, onEffectChange, onUpdate, onDelete
           </>}
           <button className="danger-sm" aria-label={`Remove segment ${seg.id}`} onClick={e => { e.stopPropagation(); onDelete(["segments"], i); }}>&#10005;</button>
         </div>
-        {next && <div className="ve-item" style={{ borderLeft: "3px solid #8b5cf6", marginLeft: 12 }}>
+        {next && <div className="ve-item" style={{ borderLeft: "3px solid var(--text-3)", marginLeft: 12 }}>
           <span className="ve-style ve-normal">{seg.id} &rarr; {next.id}</span>
           <label>Transition <select aria-label={`Transition ${seg.id} to ${next.id}`}
             value={transition?.type || "hard_cut"}

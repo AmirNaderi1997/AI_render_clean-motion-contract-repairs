@@ -1,0 +1,64 @@
+/* Reset, typography, focus, scrollbars, bidi. No component styling here. */
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; }
+html { height: 100%; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 15px/1.55 var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow-wrap: break-word;
+}
+#root { min-height: 100%; }
+:lang(fa), [lang="fa"], [dir="rtl"] { font-family: var(--font-fa); }
+img, svg, video, canvas, audio { display: block; max-width: 100%; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: 0; padding: 0; }
+button:disabled { cursor: not-allowed; }
+a { color: inherit; text-decoration: none; }
+h1, h2, h3, h4 { line-height: 1.25; letter-spacing: -.01em; }
+p { line-height: 1.6; }
+::selection { background: var(--ink); color: var(--on-ink); }
+[hidden] { display: none !important; }
+
+/* Mixed-direction text: let the browser pick direction per block, and keep
+   long URLs, filenames and identifiers from overflowing their container. */
+.bidi { unicode-bidi: plaintext; text-align: start; }
+.wrap-safe { overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
+.ltr { direction: ltr; unicode-bidi: isolate; }
+bdi, .ident { unicode-bidi: isolate; overflow-wrap: anywhere; }
+
+/* Focus: visible on keyboard, quiet for pointer */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus { outline: none; }
+:where(a, button, input, select, textarea, summary, [tabindex], [role="button"], [role="tab"], [role="menuitem"]):focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* Scrollbars */
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-pill); border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.skip-link {
+  position: fixed; z-index: 1000; inset: 8px auto auto 8px; padding: 8px 14px;
+  background: var(--ink); color: var(--on-ink); border-radius: var(--radius-sm);
+  transform: translateY(-200%); transition: transform var(--dur-fast) var(--ease);
+}
+.skip-link:focus { transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important; scroll-behavior: auto !important;
+  }
+}
