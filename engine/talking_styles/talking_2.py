@@ -396,8 +396,9 @@ def speaker_crop(
 
 def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Optional[Path] = None,
            cta: str = "", render_settings: Optional[dict] = None,
-           logo_path: Optional[Path] = None,
+           logo_path: Optional[Path] = None, overlay: Optional[Path] = None,
            on_progress: Optional[Callable[[int], None]] = None, **_ignored) -> Path:
+    """`overlay` is an optional transparent WebM (engine/tscaps_overlay.py) composited above the ASS layer."""
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
@@ -474,7 +475,14 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     vf.append(f"[{next_input}:v]format=rgba,colorchannelmixer=aa={vignette_alpha:.3f}[vig]")
     next_input += 1
     content = "vmain" if outro else "vout"
-    vf.append(f"[cv][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},format=yuv420p[{content}]")
+    if overlay:
+        inputs += ["-c:v", "libvpx-vp9", "-i", str(overlay)]
+        vf.append(f"[cv][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},format=yuv420p[vbase]")
+        vf.append(f"[{next_input}:v]format=yuva420p,setpts=PTS-STARTPTS[tso]")
+        vf.append(f"[vbase][tso]overlay=0:0:format=auto:eof_action=pass,format=yuv420p[{content}]")
+        next_input += 1
+    else:
+        vf.append(f"[cv][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},format=yuv420p[{content}]")
     if outro:
         inputs += ["-i", str(outro)]
         vf.append(f"[{next_input}:v]setsar=1,format=yuv420p[vend]")
