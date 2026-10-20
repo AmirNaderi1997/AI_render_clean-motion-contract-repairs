@@ -7,8 +7,10 @@ template, so authoring can raise the ceiling but never lower the floor.
 """
 from __future__ import annotations
 
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -224,15 +226,29 @@ def enabled() -> bool:
     return director.enabled() and os.environ.get("CREATIVE_MOTION", "1").strip().lower() not in {"0", "false", "off", "no"}
 
 
-def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 4, used: list[str] | None = None) -> list:
-    """Attach authored scenes to `beats` (VisualBeat objects). Beats that fail keep their template. Returns the same list."""
+def _fingerprint(beat) -> str:
+    return f"{beat.start:.1f}"
+
+
+def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 4, used: list[str] | None = None,
+            cache: Path | None = None) -> list:
+    """Attach authored scenes to `beats` (VisualBeat objects). Beats that fail keep their template. Returns the same list.
+
+    `cache` is a JSON file next to the job: scenes already authored for the same beat id and timing are reused, so a
+    re-render or a retry never pays for the same scene twice."""
     if not beats:
         return beats
+    stored = {"design": None, "scenes": {}}
+    if cache and cache.is_file():
+        try:
+            stored = {**stored, **json.loads(cache.read_text())}
+        except (OSError, ValueError):
+            pass
     brief = plan.brief
     brief_text = f"topic: {brief.topic}; message: {brief.core_message}; audience: {brief.audience}; tone: {brief.tone}"
     concept = plan.chosen
     concept_text = f"{concept.name}: {concept.angle}. Visual language: {concept.visual_language}. Pacing: {concept.pacing}"
-    design = design_system(brief_text, concept_text, used)
+    design = DesignSystem(**stored["design"]) if stored.get("design") else design_system(brief_text, concept_text, used)
     by_sentence = {b.sentence: b for b in concept.beats if b.sentence is not None}
     specs: list[SceneSpec] = []
     for index, beat in enumerate(beats):
@@ -255,13 +271,29 @@ def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 4, u
             log.warning("motion author failed for %s: %s", spec.id, str(exc)[:200])
             return spec.id, None
 
+    fresh = []
+    for spec, beat in zip(specs, beats):
+        hit = stored["scenes"].get(spec.id)
+        if hit and hit.get("fp") == _fingerprint(beat):
+            results[spec.id] = AuthoredScene(**{k: v for k, v in hit.items() if k != "fp"})
+        else:
+            fresh.append(spec)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        for beat_id, scene in pool.map(work, specs):
+        for beat_id, scene in pool.map(work, fresh):
             if scene:
                 results[beat_id] = scene
+    if cache:
+        by_id = {beat.id: beat for beat in beats}
+        stored["design"] = design.model_dump()
+        stored["scenes"] = {**stored["scenes"], **{bid: {**sc.model_dump(), "fp": _fingerprint(by_id[bid])} for bid, sc in results.items()}}
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(stored, ensure_ascii=False))
+        except OSError:
+            pass
     for beat in beats:
         scene = results.get(beat.id)
         if scene:
-            beat.custom = {"html": scene.html, "css": scene.css, "js": scene.js, "speaker": scene.speaker, "notes": scene.notes}
+            beat.custom = {"html": scene.html, "css": scene.css, "js": scene.js, "speaker": scene.speaker, "notes": scene.notes, "bg": design.bg}
     log.info("motion designer: %d of %d scenes authored", len(results), len(beats))
     return beats

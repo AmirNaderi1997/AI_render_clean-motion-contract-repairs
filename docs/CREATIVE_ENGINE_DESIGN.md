@@ -37,6 +37,10 @@ receives `CreativeUnavailable` and continues with the standard pipeline, saying 
 | Image generation: bounded retry and the model's own reply surfaced | `brain/media_provider.py` | Done |
 | HyperFrames: GSAP no longer loaded from a CDN at render time; integrity-checked cache; failure cause shown first | `engine/hyperframes/{assets,builder,renderer}.py` | Done |
 | Direct provider fallbacks (Sarovi, Jarvis, Arvan, OpenAI, Gemini via Vercel proxy) when LM API fails; admin tab with write-only keys, order, per-provider and master switch, test button | `brain/lm_direct.py`, `app/routers/lm_admin.py`, `web/src/AIDirectFallbacks.tsx` | Done; tested incl. the real Jarvis endpoint reached with a fake key |
+| **Motion Designer**: per-beat HTML/CSS/GSAP scenes in a job-wide design system, validated statically and by `hyperframes check`, templates as fallback | `creative/motion.py`, `engine/hyperframes/{scenes,builder}.py` | **Done; real talking_2 render verified end-to-end** (5 authored scenes, 45 s, 1080×1920) |
+| Scene cache per job (re-render never re-authors) | `creative/motion.py:compose(cache=…)` | Done |
+| Synthesised sound design (whoosh / hit on scenes), no third-party audio | `engine/sfx.py` | Done |
+| Full-frame design backdrop under a shrunken speaker | `scenes.scene_backdrop` | Done |
 | Evaluation harness | `scripts/creative_eval.py` | Done |
 
 Switch off with `CREATIVE_ENGINE=0`.
@@ -47,7 +51,10 @@ Contact sheets of the two real renders show the limit clearly: the director's *t
 faithful beats, differentiated concepts), but the *pictures* did not, because every renderer draws from a fixed set of
 templates. Talking_1 is one look (zoom, pinned hook, B&W takeaway). Talking_2's cards are full-screen text/diagram
 inserts; its "media collage" card renders as empty beige rectangles. A director that can only choose among these will
-always produce "the same video". Fixing this needs a generative motion layer (§6, item 1), not better prompts.
+always produce "the same video". Fixing this needs a generative motion layer, not better prompts. That layer is now the
+Motion Designer (`creative/motion.py`): scenes are written per beat, so the visual vocabulary is no longer a fixed list.
+Remaining weaknesses: authoring is slow on Opus-class models (minutes for five scenes; run Sonnet-class first), the
+speaker is shown picture-in-picture rather than integrated, and B-roll is still generated stills.
 
 ## 3. What is **not** implemented (said plainly)
 
@@ -62,7 +69,7 @@ always produce "the same video". Fixing this needs a generative motion layer (§
   styles; it cannot create motion those renderers do not have. Better motion needs new renderers (§6).
 * **Partial re-render.** Revision applies only the changed fields, but the Talking engine still re-renders the
   whole video; storyboard-scene-level re-render for Content Creator is not built.
-* **Open-source projects** (§6): none of AIEV, AutoBroll, Tscaps, Remotion Agent Skills is integrated.
+* **Open-source projects**: reviewed in [`OPEN_SOURCE_REVIEW.md`](OPEN_SOURCE_REVIEW.md). Used so far: AIEV's sound-design idea (own synthesis), open-design's craft rules. Next: Tscaps engine/templates (MIT parts) for hook typography, AutoBroll's B-roll policy.
 * **Studio UI** for concept alternatives and the new stages is not part of this branch.
 
 ## 4. Evidence

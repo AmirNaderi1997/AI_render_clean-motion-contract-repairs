@@ -334,6 +334,15 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
     }
     (project_dir / "meta.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
     cards = "\n".join(_beat_markup(beat) for beat in beats)
+    backdrops = ""
+    sfx_markup = ""
+    if any(beat.custom for beat in beats):
+        from engine import sfx
+        cues = sfx.cues_for(beats)
+        files = sfx.ensure(assets / "sfx", {name for _, name in cues})
+        sfx_markup = sfx.markup(cues, duration, files)
+        from .scenes import scene_backdrop
+        backdrops = "\n".join(scene_backdrop(b.id, b.start, b.end - b.start, b.custom.get("bg", "")) for b in beats if b.custom)
     document = f'''<!doctype html>
 <html lang="fa"><head><meta charset="UTF-8"><meta name="viewport" content="width=1080,height=1920">
 <script src="./assets/gsap.min.js"></script>
@@ -368,8 +377,10 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
 .registry-collage-content{{width:100%;height:100%;padding:230px 90px;display:grid;grid-template-columns:1fr 1fr;gap:28px;background:#0b1010;direction:rtl}}
 .registry-collage-content span{{display:grid;place-items:center;padding:32px;border:2px solid #d9ff4f;border-radius:30px;color:#f7f5ed;background:#151b1b;font:76px/1.15 Ray;text-align:center}}
 </style></head><body><main id="root" data-composition-id="main" data-start="0" data-duration="{duration:.3f}" data-width="1080" data-height="1920">
+{backdrops}
 <div id="speaker-stage" style="position:absolute;inset:0;overflow:hidden;transform-origin:50% 50%"><video id="rough-cut" class="base clip" src="./assets/base.mp4" data-start="0" data-duration="{duration:.3f}" data-track-index="0" data-has-audio="true"></video></div>
-{cards}</main><script>{_timeline_script(beats)}</script></body></html>'''
+{cards}
+{sfx_markup}</main><script>{_timeline_script(beats)}</script></body></html>'''
     entry = project_dir / "index.html"
     entry.write_text(document)
     return entry

@@ -773,7 +773,8 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         if creative_motion.enabled():
             _stage(job_dir, "designing motion scenes", progress=76)
             try:
-                creative_motion.compose(beats, creative_motion.plan_from_public(load(job_dir).get("creative_plan")), transcript["sentences"])
+                creative_motion.compose(beats, creative_motion.plan_from_public(load(job_dir).get("creative_plan")), transcript["sentences"],
+                                        cache=job_dir / "talking_reel_work" / "authored_scenes.json")
             except Exception as exc:
                 log.warning("motion designer failed for %s: %s", job_dir.name, str(exc)[:200])
                 for beat in beats:
