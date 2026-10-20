@@ -1,6 +1,9 @@
 import React from "react";
 
 const paths = {
+  storyboard: <><rect x="3" y="5" width="7" height="14" rx="2"/><rect x="14" y="5" width="7" height="14" rx="2"/><path d="M5.5 14h2M16.5 14h2M5.5 10h2M16.5 10h2"/></>,
+  motion: <><path d="M3 7h7M3 12h5M3 17h7"/><path d="m13 6 8 6-8 6Z"/></>,
+  thinking: <><circle cx="6" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18" cy="12" r="1"/></>,
   spark: <path d="m12 3-1.1 4.1a5.2 5.2 0 0 1-3.8 3.8L3 12l4.1 1.1a5.2 5.2 0 0 1 3.8 3.8L12 21l1.1-4.1a5.2 5.2 0 0 1 3.8-3.8L21 12l-4.1-1.1a5.2 5.2 0 0 1-3.8-3.8L12 3Z"/>,
   plus: <path d="M12 5v14M5 12h14"/>,
   search: <><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></>,

@@ -83,8 +83,23 @@ test("processing flags", () => {
   assert.equal(isProcessing({ sending: false, messages: m, events: [], now: T0 + 10 * 60000 }), false);
   assert.equal(isProcessing({ sending: false, messages: m, events: [ev(1, "tool.failed", 2)], now: T0 + 5000 }), false);
   assert.equal(isProcessing({ sending: false, messages: [msg(1, "user", 0), msg(2, "assistant", 1)], events: [], now: T0 + 2000 }), false);
-  assert.equal(thinkingLabel([ev(1, "message.started", 1)], m), "Understanding your request");
+  assert.equal(thinkingLabel([ev(1, "message.started", 1)], m), "Thinking");
   assert.equal(thinkingLabel([], m), "Thinking");
+});
+
+test("AI waiting updates share one operation and preserve a later attempt", () => {
+  const events = [
+    ev(1, "tool.started", 1, {tool:"creative_concepts", activity_id:"one", thinking:true}),
+    ev(2, "tool.progress", 16, {tool:"creative_concepts", activity_id:"one", thinking:true, message:"Waiting 15 seconds"}),
+    ev(3, "tool.completed", 20, {tool:"creative_concepts", activity_id:"one", thinking:false}),
+    ev(4, "tool.started", 21, {tool:"creative_concepts", activity_id:"two", thinking:true}),
+  ];
+  const block = buildTimeline({messages:[msg(1,"user",0)],events,projects:[],processing:true}).find(i=>i.kind==="activity");
+  assert.equal(block.steps.length,2);
+  assert.equal(block.steps[0].events.length,3);
+  assert.equal(block.steps[0].status,"done");
+  assert.equal(block.steps[1].status,"active");
+  assert.equal(block.steps[1].label,"Exploring creative concepts");
 });
 
 test("object choices from the backend become labelled answers, never [object Object]", () => {

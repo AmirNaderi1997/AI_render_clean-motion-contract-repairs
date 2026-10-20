@@ -1,18 +1,36 @@
 import React from "react";
-import { Icon } from "../components/Icon";
+import { Icon, IconName } from "../components/Icon";
 import { clock, formatDuration } from "../format";
 import { Link } from "react-router-dom";
 import { ActivityStep, friendlyFailure, stepDetails } from "./model";
+
+function toolIcon(step: ActivityStep): IconName {
+  const name = `${step.tool || ""} ${step.stage || ""}`.toLowerCase();
+  if (/storyboard|concept/.test(name)) return "storyboard";
+  if (/render/.test(name)) return "film";
+  if (/motion/.test(name)) return "motion";
+  if (/review|critic|qc|visual_analysis/.test(name)) return "eye";
+  if (/creative|direction|planning/.test(name)) return "wand";
+  if (/url|page/.test(name)) return "globe";
+  if (/voice|narration|audio/.test(name)) return "mic2";
+  if (/caption|transcript|translat|localize/.test(name)) return "captions";
+  if (/image|asset|picture/.test(name)) return "image";
+  if (/script|text/.test(name)) return "edit";
+  if (/video|talking/.test(name)) return "video";
+  return "thinking";
+}
 
 function StepRow({ step, retryHref }: { step: ActivityStep; retryHref?: string }) {
   const details = stepDetails(step);
   const [open, setOpen] = React.useState(false);
   const failed = step.status === "failed";
   const active = step.status === "active";
-  const icon = failed ? <Icon name="alert" size={14}/> : active ? <span className="act-dot" aria-hidden="true"/> : <Icon name="check" size={14}/>;
+  const icon = <Icon name={failed ? "alert" : toolIcon(step)} size={14}/>;
+  const thinking = active && step.events[step.events.length - 1]?.data.thinking === true;
   const label = <>
     <span className="act-icon" data-status={step.status}>{icon}</span>
     <span className={`act-label${active ? " is-active" : ""}`}>{step.label}{active ? <span className="ellipsis" aria-hidden="true"/> : null}</span>
+    {thinking ? <small className="act-pct">Thinking…</small> : null}
     {typeof step.progress === "number" && active ? <span className="act-pct">{step.progress}%</span> : null}
     {details ? <Icon name="chevronDown" size={14} className={`act-chevron${open ? " is-open" : ""}`}/> : null}
   </>;
@@ -22,6 +40,7 @@ function StepRow({ step, retryHref }: { step: ActivityStep; retryHref?: string }
       : <div className="act-row">{label}</div>}
     {failed ? <div className="act-failure" role="alert"><p dir="auto" className="bidi wrap-safe">{friendlyFailure(step.notes[step.notes.length - 1])}</p>{retryHref ? <Link className="btn btn-sm btn-secondary" to={retryHref}><Icon name="refresh" size={14}/>Open editor to retry</Link> : null}</div> : null}
     {active && typeof step.progress === "number" ? <div className="meter act-meter" style={{ ["--value" as string]: `${step.progress}%` }} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={step.progress} aria-label={step.label}><span/></div> : null}
+    {active && !open && details?.notes.length ? <div className="act-details"><p dir="auto" className="bidi wrap-safe">{details.notes[details.notes.length - 1]}</p></div> : null}
     {details && open ? <div className="act-details">
       {details.notes.map((note, index) => <p key={index} dir="auto" className="bidi wrap-safe">{note}</p>)}
       <dl>

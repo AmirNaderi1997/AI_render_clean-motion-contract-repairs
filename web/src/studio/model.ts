@@ -67,6 +67,16 @@ export const TOOL_LABELS: Record<string, string> = {
   generate_visual_assets: "Creating visual assets",
   cancel_operation: "Canceling",
   creative_direction: "Exploring creative directions",
+  understanding_request: "Understanding your request",
+  creative_brief: "Understanding the brief",
+  creative_concepts: "Exploring creative concepts",
+  creative_review: "Reviewing creative directions",
+  creative_storyboard: "Developing the selected storyboard",
+  motion_generation: "Generating motion",
+  visual_analysis: "Analyzing visual content",
+  visual_review: "Reviewing visual quality",
+  translation: "Preparing the translation",
+  script: "Writing the script",
 };
 export const STAGE_LABELS: Record<string, string> = {
   transcribing: "Transcribing speech", "finding captions": "Finding on-screen captions",
@@ -109,8 +119,8 @@ function stepKey(event: StudioEvent): string | null {
   const { tool, stage, project_id } = event.data;
   switch (event.type) {
     case "agent.thinking_summary": return "thinking";
-    case "tool.started": case "tool.completed": return `tool:${tool || "work"}`;
-    case "tool.progress": return `stage:${project_id || ""}:${stageKey(stage) || "work"}`;
+    case "tool.started": case "tool.completed": return `tool:${tool || "work"}${event.data.activity_id ? `:${event.data.activity_id}` : ""}`;
+    case "tool.progress": return tool ? `tool:${tool}${event.data.activity_id ? `:${event.data.activity_id}` : ""}` : `stage:${project_id || ""}:${stageKey(stage) || "work"}`;
     case "storyboard.ready": return "storyboard";
     case "tool.failed": return `failed:${event.seq}`;
     default: return null;
@@ -267,10 +277,8 @@ export function isProcessing(args: { sending: boolean; messages: StudioMessage[]
 
 /** Label for the bottom-of-conversation indicator when no step is active. */
 export function thinkingLabel(events: StudioEvent[], messages: StudioMessage[]): string {
-  const last = [...messages].reverse().find(message => message.role === "user");
-  const sentAt = last ? parseTime(last.created_at) : 0;
-  const started = events.some(event => event.type === "message.started" && parseTime(event.created_at) >= sentAt - 1000);
-  return started ? "Understanding your request" : "Thinking";
+  void events; void messages;
+  return "Thinking";
 }
 
 export function activeStep(items: TimelineItem[]): ActivityStep | undefined {

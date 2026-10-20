@@ -133,7 +133,7 @@ def test_talking_video_without_a_style_is_analyzed_directly_not_questioned(tmp_p
     text = "این ویدیو رو برای اینستاگرام خفن تدوین کن"
     message = run(repo.add_message(conversation["id"], "u", "user", text))
     calls = []
-    monkeypatch.setattr(orchestrator, "_resolved_intent", lambda *args: "talking")
+    monkeypatch.setattr(orchestrator, "_resolved_intent", lambda *args, **kwargs: "talking")
     monkeypatch.setattr(orchestrator, "execute", lambda name, payload: calls.append((name, payload)) or {"external_ref": "job-1"})
     orchestrator.process_message(conversation["id"], "u", message["id"], text, [attachment["id"]])
     assert calls and calls[0][0] == "analyze_talking_reel"

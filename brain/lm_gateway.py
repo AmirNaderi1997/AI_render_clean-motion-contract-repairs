@@ -228,6 +228,10 @@ def _direct_fallback(route, endpoint, messages, cfg, candidates, tokens, extra, 
     return response, record
 
 
+from app.studio_activity import observe_request
+
+
+@observe_request
 def complete(route, messages, *, required=None, tokens=None, extra=None, endpoint=None, model_override=None, probe=False):
     cfg = defaults().get(route)
     if not cfg or not gateway_settings()["enabled"] or (not cfg["enabled"] and not probe):

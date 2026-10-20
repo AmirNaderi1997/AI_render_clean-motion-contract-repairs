@@ -50,6 +50,20 @@ def configured() -> bool:
 
 def ask(schema: type[T], system: str, user: str, *, route: str, tokens: int = 6000, attempts: int = 3,
         used: list[str] | None = None) -> T:
+    from app.studio_activity import describe
+    stages = {
+        'ContentBrief': ('creative_brief', 'دارم هدف، مخاطب، لحن و پیام اصلی ویدیو را استخراج می‌کنم.'),
+        '_Concepts': ('creative_concepts', 'دارم چند ایدهٔ متفاوت برای هوک، روایت و زبان بصری می‌سازم.'),
+        'Critique': ('creative_review', 'دارم ایده‌ها را مقایسه و نقاط ضعف روایت و جذابیت بصری را بررسی می‌کنم.'),
+        '_Expansion': ('creative_storyboard', 'دارم ایدهٔ منتخب را به صحنه‌ها، ریتم و پیشنهادهای موشن تبدیل می‌کنم.'),
+    }
+    stage, message = stages.get(schema.__name__, (route, 'در حال آماده‌سازی برنامهٔ اجرایی این بخش هستم.'))
+    with describe(stage, message):
+        return _ask(schema, system, user, route=route, tokens=tokens, attempts=attempts, used=used)
+
+
+def _ask(schema: type[T], system: str, user: str, *, route: str, tokens: int = 6000, attempts: int = 3,
+        used: list[str] | None = None) -> T:
     """Call a route and validate against ``schema``; re-ask once with the validation error if needed."""
     if not configured():
         raise CreativeUnavailable("LM gateway is not configured")
