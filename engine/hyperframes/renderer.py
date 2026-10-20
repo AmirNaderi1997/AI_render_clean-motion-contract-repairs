@@ -8,6 +8,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Callable, Optional
+from .cli import cli_command
 
 
 HYPERFRAMES_VERSION = "0.8.161"
@@ -51,7 +52,7 @@ def render_project(
     detail = ""
     for attempt in range(3):
         check = subprocess.run(
-            ["npx", "--yes", f"hyperframes@{HYPERFRAMES_VERSION}", "check", "."],
+            [*cli_command(), "check", "."],
             cwd=project_dir, env=env, text=True, capture_output=True, timeout=180,
         )
         detail = "\n".join(part for part in (check.stdout, check.stderr) if part)
@@ -68,7 +69,7 @@ def render_project(
     if on_progress:
         on_progress(86)
     command = (
-        ["npx", "--yes", f"hyperframes@{HYPERFRAMES_VERSION}", "render", ".",
+        [*cli_command(), "render", ".",
          "--output", str(output.resolve()), "--quality", "standard", "--workers", "1", "--sdr"]
     )
     process = subprocess.Popen(

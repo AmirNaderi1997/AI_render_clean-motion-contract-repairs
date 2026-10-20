@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from .cli import cli_command
 
 
 VERSION = "0.8.161"
@@ -12,7 +13,7 @@ VERSION = "0.8.161"
 
 def _install(project_dir: Path, name: str) -> bool:
     result = subprocess.run(
-        ["npx", "--yes", f"hyperframes@{VERSION}", "add", name, "--dir", ".", "--no-clipboard"],
+        [*cli_command(), "add", name, "--dir", ".", "--no-clipboard"],
         cwd=project_dir, text=True, capture_output=True, timeout=180,
     )
     return result.returncode == 0
