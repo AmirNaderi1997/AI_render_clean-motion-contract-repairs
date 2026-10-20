@@ -117,10 +117,12 @@ export default function ContentCreator() {
 
   async function onApprove() {
     if (!jobId) return;
+    const retryConfirmed = genStatus?.state === "failed";
+    if (retryConfirmed && !window.confirm('تلاش مجدد تولید مدیا ممکن است دوباره هزینه داشته باشد، حتی اگر تلاش قبلی timeout شده باشد. برای هر مدیای ناقص فقط یک تلاش انجام شود؟')) return;
     setBusy(true); setErr(null);
     try {
       await api.updateStoryboard(jobId, scenes);
-      await api.approveStoryboard(jobId, provider);
+      await api.approveStoryboard(jobId, provider, retryConfirmed);
       setGenerating(true);
     } catch (e: any) {
       setErr(friendlyError(e, "approve the storyboard"));

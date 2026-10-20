@@ -975,10 +975,10 @@ export const api = {
       body: JSON.stringify({ scenes }),
     }));
   },
-  async approveStoryboard(id: string, provider?: string): Promise<{ status: string }> {
+  async approveStoryboard(id: string, provider?: string, retryConfirmed = false): Promise<{ status: string }> {
     return j(await authFetch(`${BASE}/jobs/${id}/storyboard/approve`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify(provider ? { provider } : {}),
+      body: JSON.stringify({ ...(provider ? { provider } : {}), retry_confirmed: retryConfirmed }),
     }));
   },
   async getStoryboardStatus(id: string): Promise<{ state: string; scenes_done: number; scenes_total: number; cost_so_far: number | null; error?: string; warnings?: string[] } | null> {
