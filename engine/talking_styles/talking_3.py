@@ -397,4 +397,4 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, **kwargs) 
             + tso.title_cues(plan.titles, y_for=lambda t: 0.26 if over_split(t) else 0.34))
     fps = int(round(eval_fps(probe_fps(video)) or 30))
     return tso.render_with_overlay(render_plain, video, plan, out, work_dir=work_dir, cues=cues,
-                                   strip=lambda p: tso.without(p, hook=None, titles=[]), fps=fps, duration=plan.duration, **kwargs)
+                                   strip=lambda p: tso.without_hook(p, titles=[]), fps=fps, duration=plan.duration, **kwargs)

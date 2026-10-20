@@ -111,9 +111,9 @@ def test_engine_renders_a_transparent_overlay_of_the_requested_size(tmp_path):
 def test_vertical_overrides_become_their_own_kind_in_the_spec():
     cues = [tso.Cue("hook", 0, 2, tso.words_for("الف ب", 0, 2), y=0.27), tso.Cue("hook", 3, 5, tso.words_for("ج د", 3, 5))]
     spec = tso.build_spec(cues, 1080, 1920)
-    assert set(spec["kinds"]) == {"hook@0.27", "hook"}
-    assert spec["kinds"]["hook@0.27"]["alignment"]["verticalOffset"] == 0.27 and spec["kinds"]["hook"]["alignment"]["verticalOffset"] == 0.62
-    assert [c["kind"] for c in spec["cues"]] == ["hook@0.27", "hook"]
+    assert set(spec["kinds"]) == {"hook_y27", "hook"}
+    assert spec["kinds"]["hook_y27"]["alignment"]["verticalOffset"] == 0.27 and spec["kinds"]["hook"]["alignment"]["verticalOffset"] == 0.62
+    assert [c["kind"] for c in spec["cues"]] == ["hook_y27", "hook"]
 
 
 def test_title_hook_and_note_cues():
@@ -146,7 +146,7 @@ def test_split_styles_draw_only_hook_and_titles_with_the_overlay(module_name, tm
     plan = _styled_plan()
     plan.full_pictures = set() if not hasattr(plan, "full_pictures") else plan.full_pictures
     module.render(tmp_path / "v.mp4", plan, tmp_path / "o.mp4", work_dir=tmp_path)
-    assert calls[0][1] == fake and calls[0][0].hook is None and calls[0][0].captions                     # captions stay with ASS
+    assert calls[0][1] == fake and calls[0][0].hook is None and calls[0][0].captions and calls[0][0].captions[0]["start"] >= 3.0                    # captions stay with ASS
     assert seen[0][0] == "hook" and ("moment" in seen[0]) == (module_name == "talking_3")
 
 
