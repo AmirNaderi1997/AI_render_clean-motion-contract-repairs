@@ -157,15 +157,16 @@ export default function Studio() {
     let id: string;
     try { id = await ensureConversation("New media edit", false); } catch (e) { setError(friendlyError(e, "start the conversation")); return; }
     for (const file of list.slice(0, 12)) {
-      const entry: PendingFile = { file, progress: 0, url: URL.createObjectURL(file) };
+      const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const entry: PendingFile = { key, file, progress: 0, url: URL.createObjectURL(file) };
       setFiles(value => [...value, entry]);
       try {
-        const attachment = await api.uploadStudioAttachment(id, file, progress => setFiles(value => value.map(item => item === entry ? { ...item, progress } : item)));
-        setFiles(value => value.map(item => item === entry ? { ...item, progress: 100, attachmentId: attachment.id } : item));
-      } catch (e) { setError(friendlyError(e, "upload attachment")); setFiles(value => value.filter(item => item !== entry)); URL.revokeObjectURL(entry.url); }
+        const attachment = await api.uploadStudioAttachment(id, file, progress => setFiles(value => value.map(item => item.key === key ? { ...item, progress } : item)));
+        setFiles(value => value.map(item => item.key === key ? { ...item, progress: 100, attachmentId: attachment.id } : item));
+      } catch (e) { setError(friendlyError(e, "upload attachment")); setFiles(value => value.filter(item => item.key !== key)); URL.revokeObjectURL(entry.url); }
     }
   }
-  function removeFile(file: PendingFile) { setFiles(value => value.filter(item => item !== file)); URL.revokeObjectURL(file.url); }
+  function removeFile(file: PendingFile) { setFiles(value => value.filter(item => item.key !== file.key)); URL.revokeObjectURL(file.url); }
 
   async function send(override?: string, resend?: { text: string; ids: string[] }) {
     if (!authenticated) { requireLogin(); return; }
