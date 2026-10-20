@@ -25,11 +25,9 @@ def _style(text: str) -> str | None:
     words = {"یک": "1", "اول": "1", "دو": "2", "دوم": "2", "سه": "3", "سوم": "3", "چهار": "4", "چهارم": "4"}
     normalized = re.sub(r"(?<!\w)(یک|اول|دو|دوم|سه|سوم|چهار|چهارم)(?!\w)", lambda m: words[m[0]], normalized)
     normalized = normalized.replace("صحبتی", "talking_").replace("شماره", " ").replace("سبک", " ")
-    for number in range(1, 5):
-        if re.search(rf"(?:talking[_\s-]*|^|\s){number}(?:\s|$)", normalized):
-            return f"talking_{number}"
-    match = re.search(r"talking_[1-4]", normalized)
-    return match.group(0) if match else None
+    match = re.search(r'talking[_\s-]*([1-4])(?=\W|$)', normalized)
+    if match: return f'talking_{match[1]}'
+    return f'talking_{normalized.strip()}' if re.fullmatch(r'\s*[1-4]\s*', normalized) else None
 
 
 def _intent(text: str, attachments: list[dict], current: dict | None) -> str:
@@ -50,6 +48,10 @@ def _intent(text: str, attachments: list[dict], current: dict | None) -> str:
 
 
 def _resolved_intent(text, attachments, current, on_title=None):
+    explicit_style = _style(text)
+    if explicit_style and any(a.get('kind') == 'video' for a in attachments):
+        if on_title: on_title(f'تدوین صحبتی {explicit_style[-1]} برای اینستاگرام')
+        return 'talking'
     from brain.lm_gateway import configured
     if not configured(): return _intent(text, attachments, current)
     from typing import Literal
@@ -474,8 +476,16 @@ def resume_project(project_id: str, user_key: str, *, retry_confirmed: bool = Fa
             return {'status':'running','project_id':project_id}
         if state.get('status') in {'running', 'analyzing'}: return {'status':'running','project_id':project_id}
         if not state.get('analysis_ready'):
-            raise ValueError('تحلیل کامل نشده است؛ ابتدا تحلیل را در تدوینگر تکمیل کنید.')
-        talking_reel.start(job.dir, job.dir / 'raw' / job.raw_name, regenerate=False, cached_only=True)
+            if not retry_confirmed: raise ValueError('ادامهٔ تحلیل ممکن است هزینه داشته باشد؛ ابتدا تأیید کنید.')
+            conversation = run(repo.get_conversation(project['conversation_id'], user_key))
+            attachment_ids = set(project['state'].get('attachment_ids') or [])
+            source_message = next((m for m in reversed(conversation.get('messages', [])) if m['role']=='user' and attachment_ids.intersection(m.get('attachments') or [])), {})
+            request = source_message.get('content', '')
+            style = _style(request) or project['state'].get('selected_style') or state.get('style')
+            talking_reel.analyze(job.dir, job.dir/'raw'/job.raw_name, style=style, request=request)
+            run(repo.update_project(project_id, user_key, status='running', state={**project['state'],'last_observed':{},'render_started':False,'selected_style':style}))
+            return {'status':'running','project_id':project_id,'stage':'analyzing'}
+        talking_reel.start(job.dir, job.dir / 'raw' / job.raw_name, regenerate=False, cached_only=not retry_confirmed)
         run(repo.update_project(project_id, user_key, status='running', state={**project['state'], 'last_observed':{}, 'render_started':True}))
         return {'status':'running','project_id':project_id,'stage':'rendering'}
     if project['engine'] == 'localize':

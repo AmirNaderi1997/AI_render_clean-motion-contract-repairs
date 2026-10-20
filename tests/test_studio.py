@@ -71,6 +71,15 @@ def test_intent_routing_and_real_talking_style_selection():
     assert _style("با مدل صحبتی شماره یک") == "talking_1"
     assert _style("صحبتی دوم") == "talking_2"
     assert _style("talking ٤") == "talking_4"
+    assert _style("این ویدیو رو در یک دقیقه فارسی کن") is None
+
+
+def test_explicit_style_does_not_wait_for_intent_model(monkeypatch):
+    from app import studio_orchestrator as o
+    monkeypatch.setattr('brain.lm_gateway.configured', lambda: pytest.fail('explicit style needs no model'))
+    titles=[]
+    assert o._resolved_intent('تدوین صحبتی یک', [{'kind':'video'}], None, on_title=titles.append) == 'talking'
+    assert titles and '1' in titles[0]
 
 
 def test_every_tts_surface_uses_localize_elevenlabs(monkeypatch):

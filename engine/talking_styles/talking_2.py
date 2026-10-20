@@ -476,9 +476,9 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
                           f'pad={W}:{SPLIT_Y}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps},'
                           f'tpad=stop_mode=clone:stop_duration={shot.length:.3f},trim=duration={shot.length:.3f},setsar=1,format=yuv420p[t{k}]')
             else:
-                inputs += ["-threads", "1", "-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(panel_for(shot))]
+                inputs += ["-threads", "1", "-i", str(panel_for(shot))]
                 vf.append(f"[{next_input}:v]zoompan=z='1.0+{PICTURE_ZOOM * zoom_amount:.4f}*on/{frames}':"
-                          f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={W}x{SPLIT_Y}:fps={fps},setsar=1,format=yuv420p[t{k}]")
+                          f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d={frames}:s={W}x{SPLIT_Y}:fps={fps},setsar=1,format=yuv420p[t{k}]")
             vf.append(f"{cut},{source_colour},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{grade},format=yuv420p[b{k}]")
             vf.append(f"[t{k}][b{k}]vstack=inputs=2[v{k}]")
             next_input += 1
@@ -493,19 +493,19 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     inputs = base.shot_concat(clips,work_dir)
     vf = ['[0:v]setpts=PTS-STARTPTS[cv]','[0:a]asetpts=PTS-STARTPTS[ca]']
     next_input = 1
-    inputs += ["-loop", "1", "-framerate", fps, "-i", str(vignette_png(work_dir / "vignette.png"))]
+    inputs += ["-threads", "1", "-loop", "1", "-framerate", "1", "-i", str(vignette_png(work_dir / "vignette.png"))]
     vignette_alpha = max(0.0, min(1.0, float(gs.get("vignette", 50)) / 100))
     vf.append(f"[{next_input}:v]format=rgba,colorchannelmixer=aa={vignette_alpha:.3f}[vig]")
     next_input += 1
     content = "vmain" if outro else "vout"
     if overlay:
         inputs += ["-c:v", "libvpx-vp9", "-i", str(overlay)]
-        vf.append(f"[cv][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},format=yuv420p[vbase]")
+        vf.append(f"[cv][vig]overlay=0:0:format=yuv420:shortest=1,{subtitles_filter(ass, fonts)},format=yuv420p[vbase]")
         vf.append(f"[{next_input}:v]format=yuva420p,setpts=PTS-STARTPTS[tso]")
-        vf.append(f"[vbase][tso]overlay=0:0:format=auto:eof_action=pass,format=yuv420p[{content}]")
+        vf.append(f"[vbase][tso]overlay=0:0:format=yuv420:eof_action=pass,format=yuv420p[{content}]")
         next_input += 1
     else:
-        vf.append(f"[cv][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},format=yuv420p[{content}]")
+        vf.append(f"[cv][vig]overlay=0:0:format=yuv420:shortest=1,{subtitles_filter(ass, fonts)},format=yuv420p[{content}]")
     if outro:
         inputs += ["-i", str(outro)]
         vf.append(f"[{next_input}:v]setsar=1,format=yuv420p[vend]")
@@ -524,8 +524,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         vf.append(f"[cpad]{loud}")
     # Container CPU quotas do not limit FFmpeg's auto-detected host thread count.
     # Many split/picture branches otherwise spawn hundreds of scaler workers.
-    cmd = [ffmpeg, "-hide_banner", "-y", "-filter_complex_threads", "1", "-filter_threads", "1", *inputs, "-filter_complex", ";".join(vf),
-           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-threads", "2", "-crf", "17", "-preset", "veryfast",
+    cmd = [ffmpeg, "-hide_banner", "-y", "-filter_complex_threads", "2", "-filter_threads", "2", *inputs, "-filter_complex", ";".join(vf),
+           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-threads", "2", "-crf", "17", "-preset", "ultrafast",
            "-profile:v", "high", "-pix_fmt", "yuv420p",
            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",

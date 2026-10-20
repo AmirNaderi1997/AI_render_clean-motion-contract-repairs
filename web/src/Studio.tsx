@@ -120,7 +120,7 @@ export default function Studio() {
   const [resuming, setResuming] = React.useState(false);
   const resume = async () => {
     if (!current || resuming) return;
-    const warning = current.engine === 'talking' ? 'رندر با تحلیل و دارایی‌های ذخیره‌شده ادامه پیدا کند؟ تولید مجدد مدیا انجام نمی‌شود؛ اگر دارایی‌ای ناقص باشد، عملیات متوقف می‌شود.' : 'تلاش مجدد ممکن است دوباره هزینه داشته باشد، حتی اگر تلاش قبلی timeout شده باشد. هر تصویر و صدا جداگانه محاسبه می‌شود و هزینهٔ دقیق در دسترس نیست. برای هر مدیای ناقص فقط یک تلاش انجام شود؟';
+    const warning = 'تحلیل و دارایی‌های آماده دوباره تولید نمی‌شوند. تکمیل مراحل ناقص ممکن است هزینهٔ API داشته باشد، حتی اگر تلاش قبلی timeout شده باشد. هر تصویر و صدا جداگانه محاسبه می‌شود و هزینهٔ دقیق در دسترس نیست. برای ادامه و هر مدیای ناقص فقط یک تلاش انجام شود؟';
     if (!window.confirm(warning)) return;
     setResuming(true); setError("");
     try { await api.resumeStudioProject(current.id,true); await refresh(); }

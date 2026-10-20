@@ -641,7 +641,7 @@ def cached_shot(inputs: list[str], filters: list[str], index: int, duration: flo
     temporary = root / f'{key}.partial.mkv'
     graph = filters[:-1] + [filters[-1] + f';[a{index}]aresample=48000,apad,atrim=duration={duration:.9f}[audio]']
     subprocess.run([ass_burner_ffmpeg(), '-hide_banner','-v','error','-y',
-        '-filter_complex_threads','1','-filter_threads','1',*inputs,'-filter_complex',';'.join(graph),
+        '-filter_complex_threads','2','-filter_threads','2',*inputs,'-filter_complex',';'.join(graph),
         '-map',f'[v{index}]','-map','[audio]','-c:v','libx264','-threads','2',
         '-preset','ultrafast','-crf','12','-pix_fmt','yuv420p','-c:a','pcm_s16le',
         '-t',f'{duration:.9f}',str(temporary)],check=True,capture_output=True)
@@ -971,13 +971,13 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
                 f"eq=brightness=-0.07:contrast=1.05:enable='{windows}'," if windows else "")
     vf.append(f"[cv]{emphasis}null[cvx]")
     if overlay:
-        vf.append(f"[cvx][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},format=yuv420p[vbase]")
+        vf.append(f"[cvx][vig]overlay=0:0:format=yuv420:shortest=1,{subtitles_filter(ass, fonts)},format=yuv420p[vbase]")
         vf.append(f"[{n + 1}:v]format=yuva420p,setpts=PTS-STARTPTS[tso]")
-        vf.append(f"[vbase][tso]overlay=0:0:format=auto:eof_action=pass,format=yuv420p[{content}]")
+        vf.append(f"[vbase][tso]overlay=0:0:format=yuv420:eof_action=pass,format=yuv420p[{content}]")
     else:
-        vf.append(f"[cvx][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},"
+        vf.append(f"[cvx][vig]overlay=0:0:format=yuv420:shortest=1,{subtitles_filter(ass, fonts)},"
                   f"format=yuv420p[{content}]")
-    inputs += ["-loop", "1", "-framerate", fps, "-i", str(vignette)]
+    inputs += ["-threads", "1", "-loop", "1", "-framerate", "1", "-i", str(vignette)]
     next_input = n + 1
     if overlay:
         inputs += ["-c:v", "libvpx-vp9", "-i", str(overlay)]
@@ -1006,8 +1006,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         # clock first so picture and sound keep identical duration.
         vf.append("[cpad]aresample=48000,loudnorm=I=-16:TP=-1:LRA=9,"
                   "aresample=48000[aout]")
-    cmd = [ffmpeg, "-hide_banner", "-y", "-filter_complex_threads", "1", "-filter_threads", "1", *inputs, "-filter_complex", ";".join(vf),
-           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-threads", "2", "-crf", "17", "-preset", "veryfast",
+    cmd = [ffmpeg, "-hide_banner", "-y", "-filter_complex_threads", "2", "-filter_threads", "2", *inputs, "-filter_complex", ";".join(vf),
+           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-threads", "2", "-crf", "17", "-preset", "ultrafast",
            "-profile:v", "high", "-pix_fmt", "yuv420p",
            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
