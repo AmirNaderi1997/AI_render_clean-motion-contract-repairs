@@ -27,6 +27,7 @@ class StoryboardUpdateBody(BaseModel):
 
 class StoryboardApproveBody(BaseModel):
     provider: str | None = None
+    retry_confirmed: bool = Field(default=False,strict=True)
 
 
 @router.post("/create")
@@ -74,7 +75,7 @@ def approve_storyboard(job_id: str, request: Request, body: StoryboardApproveBod
         raise HTTPException(400, "no storyboard to approve")
     from brain.content_creator import approve_and_generate
     try:
-        approve_and_generate(job, provider_name=body.provider if body else None)
+        approve_and_generate(job, provider_name=body.provider if body else None,retry_confirmed=body.retry_confirmed if body else False)
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
     return {"status": "generating"}

@@ -20,7 +20,7 @@ class TTSResult:
     provider: str = ""
 
 
-_ELEVENLABS_TIMEOUT_SECONDS = 10
+_ELEVENLABS_TIMEOUT_SECONDS = 200
 
 
 def _get_audio_duration(path: str) -> float:

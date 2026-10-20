@@ -333,9 +333,14 @@ async def cancel_running_project(request: Request, project_id: str):
     except ValueError as exc: raise HTTPException(409, str(exc))
 
 
+class ResumeRequest(BaseModel):
+    retry_confirmed: bool = Field(default=False,strict=True)
+
+
 @router.post('/projects/{project_id}/resume')
-async def resume_stopped_project(request: Request, project_id: str):
-    try: return await asyncio.to_thread(resume_project, project_id, _user(request))
+async def resume_stopped_project(request: Request, project_id: str, body: ResumeRequest | None = None):
+    confirmed=bool(body and body.retry_confirmed)
+    try: return await asyncio.to_thread(resume_project, project_id, _user(request),retry_confirmed=confirmed)
     except KeyError: raise HTTPException(404, 'project not found')
     except ValueError as exc: raise HTTPException(409, str(exc))
 

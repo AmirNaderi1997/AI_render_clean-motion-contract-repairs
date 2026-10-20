@@ -120,8 +120,9 @@ export default function Studio() {
   const [resuming, setResuming] = React.useState(false);
   const resume = async () => {
     if (!current || resuming) return;
+    if (!window.confirm('تلاش مجدد ممکن است دوباره هزینه داشته باشد، حتی اگر تلاش قبلی timeout شده باشد. هر تصویر و صدا جداگانه محاسبه می‌شود و هزینهٔ دقیق در دسترس نیست. برای هر مدیای ناقص فقط یک تلاش انجام شود؟')) return;
     setResuming(true); setError("");
-    try { await api.resumeStudioProject(current.id); await refresh(); }
+    try { await api.resumeStudioProject(current.id,true); await refresh(); }
     catch (e) { setError(friendlyError(e, "continue this project")); }
     finally { setResuming(false); }
   };

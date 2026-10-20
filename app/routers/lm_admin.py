@@ -56,7 +56,7 @@ class RouteUpdate(Strict):
     models: list[str] = Field(min_length=1, max_length=8)
     endpoint: str = Field(pattern="^(chat|responses|messages|embeddings|image|speech)$")
     enabled: bool = True
-    timeout: int = Field(default=90, ge=5, le=180)
+    timeout: int = Field(default=90, ge=5, le=3600)
     max_retries: int = Field(default=0, ge=0, le=2)
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int = Field(default=16000, ge=32, le=32000)
@@ -121,6 +121,8 @@ def routes(): return list(gateway.defaults().values())
 def update_route(route_id: str, body: RouteUpdate):
     row = gateway.defaults().get(route_id)
     if row is None: raise HTTPException(404, "Unknown route")
+    if row['capability'] in {'image','speech','video','music','transcription'} and (body.max_retries or body.automatic_fallback):
+        raise HTTPException(422,'Media retries and fallback require explicit user confirmation for every attempt')
     catalog = store.records("models")
     if len(set(body.models)) != len(body.models) or any(mid not in catalog for mid in body.models):
         raise HTTPException(422, "Choose unique IDs from the actual model catalog")

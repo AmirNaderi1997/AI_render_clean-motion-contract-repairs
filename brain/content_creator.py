@@ -210,11 +210,20 @@ def get_storyboard_status(job) -> Optional[dict]:
     return json.loads(gs_path.read_text())
 
 
-def approve_and_generate(job, provider_name: Optional[str] = None) -> None:
+def approve_and_generate(job, provider_name: Optional[str] = None, *, retry_confirmed: bool = False) -> None:
+    import fcntl
+    with (job.dir/'.media-submit.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        return _approve_and_generate(job,provider_name,retry_confirmed=retry_confirmed)
+
+
+def _approve_and_generate(job, provider_name: Optional[str] = None, *, retry_confirmed: bool = False) -> None:
     gs_path = job.dir / "generation_status.json"
     gs = json.loads(gs_path.read_text()) if gs_path.exists() else {}
     if gs.get("state") == "generating":
         return
+    if gs.get('state') == 'failed' and not retry_confirmed:
+        raise ValueError('تلاش مجدد تولید مدیا هزینه دارد و نیازمند تأیید صریح شماست.')
 
     provider_name = provider_name or gs.get("provider") or "local_fixture"
     try:
@@ -225,6 +234,8 @@ def approve_and_generate(job, provider_name: Optional[str] = None) -> None:
         raise ValueError(f"Provider {provider_name} is not configured")
 
     gs["state"] = "generating"
+    authorization_id=uuid.uuid4().hex
+    gs['authorization_id']=authorization_id
     gs["provider"] = provider_name
     gs.pop("error", None)
     gs_path.write_text(json.dumps(gs, indent=2))
@@ -232,12 +243,12 @@ def approve_and_generate(job, provider_name: Optional[str] = None) -> None:
     if CELERY_AVAILABLE:
         from app.tasks import task_generate_content
         task_generate_content.apply_async(
-            args=(job.id, {"provider_name": provider_name}),
+            args=(job.id, {"provider_name": provider_name, 'authorization_id':authorization_id}),
             headers=celery_request_headers(),
         )
     else:
         threading.Thread(
-            target=_run_generation, args=(job.id, provider_name), daemon=True
+            target=_run_generation, args=(job.id, provider_name), kwargs={'authorization_id':authorization_id}, daemon=True
         ).start()
 
 
@@ -245,7 +256,7 @@ from brain.lm_gateway import job_scope
 
 
 @job_scope
-def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = False) -> None:
+def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = False, authorization_id: str | None = None) -> None:
     from app.jobs import get as get_job, _write_status
 
     job = get_job(job_id)
@@ -258,6 +269,17 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
     gen_dir.mkdir(exist_ok=True)
 
     try:
+        if provider_name != 'local_fixture':
+            import re
+            status=json.loads(gs_path.read_text())
+            if not authorization_id or not re.fullmatch('[a-f0-9]{32}',authorization_id) or status.get('authorization_id') != authorization_id:
+                raise ValueError('Fresh user authorization is required for media generation')
+            claim=gen_dir/f'.attempt-{authorization_id}.claimed'
+            try:
+                descriptor=os.open(claim,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
+                os.close(descriptor)
+            except FileExistsError:
+                return  # Duplicate delivery cannot alter the original attempt's state or submit media.
         provider = get_provider(provider_name)
         sb_data = json.loads(sb_path.read_text())
         storyboard = Storyboard.from_dict(sb_data)

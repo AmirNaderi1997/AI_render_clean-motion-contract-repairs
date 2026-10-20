@@ -169,6 +169,12 @@ def _wire(endpoint, data, timeout):
     try:
         with _client(timeout) as client:
             request_headers = headers()
+            if endpoint in {'image','speech','video'}:
+                from .media_policy import response_timeout,request_headers as media_headers,require_gateway_safety
+                timeout=response_timeout(endpoint,timeout,data)
+                client.timeout=httpx.Timeout(timeout,connect=min(timeout,10))
+                request_headers.update(media_headers(endpoint,timeout))
+                require_gateway_safety(client,_url('editor-media-policy'),headers())
             if endpoint == "messages": request_headers["anthropic-version"] = "2023-06-01"
             response = client.post(_url(adapters.PATHS[endpoint]), headers=request_headers, json=data)
             if not response.is_success:
@@ -243,7 +249,8 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
     if extra and extra.get("response_format"): required.add("structured")
     models = store.records("models")
     candidates = [model_override] if model_override else cfg["models"]
-    if not cfg["automatic_fallback"] or endpoint == "embeddings": candidates = candidates[:1]
+    is_media=endpoint in {'image','speech','video'}
+    if is_media or not cfg["automatic_fallback"] or endpoint == "embeddings": candidates = candidates[:1]
     started = time.monotonic(); attempts = []; error = None; response = hdr = None
     # One bounded retry owner. The upstream gateway's own fallback is observed, never recursively replayed.
     if not _slots.acquire(timeout=2): raise GatewayError("AI request queue is busy", 429)
@@ -253,7 +260,7 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
             item = models.get(mid)
             if not item or not item.get("enabled") or not item.get("available", True): continue
             if not probe and not required.issubset(capabilities(item)): continue
-            retries = 0 if probe or mid.startswith("auto") or mid == "fusion" else cfg["max_retries"]
+            retries = 0 if is_media or probe or mid.startswith("auto") or mid == "fusion" else cfg["max_retries"]
             for attempt in range(retries+1):
                 if time.monotonic()-started > min(300, cfg["timeout"]*2): break
                 body = adapters.payload(endpoint, mid, messages, tokens=min(tokens or cfg["max_tokens"], cfg["max_tokens"]),
@@ -271,11 +278,11 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
                     _audit(record)
                     return response, record
                 except GatewayError as exc:
-                    if endpoint == 'image' and exc.status != 429:
+                    if is_media:
                         # An ambiguous media failure may already have been billed.
                         # Do not submit another image automatically after timeout/5xx.
                         exc.retryable = False
-                    if mid.startswith("google:") and exc.status == 404 and "model_not_found" in str(exc):
+                    if not is_media and mid.startswith("google:") and exc.status == 404 and "model_not_found" in str(exc):
                         # Disabled Google model: skip, without quota preflight or retry.
                         exc.retryable = True
                     error = exc
@@ -400,20 +407,23 @@ def probe_model(mid, capability="chat"):
 
 @observe_request
 def speech(route, text, voice):
-    """Verified binary media contract; only definite 429 rejections can fall back."""
+    """Verified binary media contract; exactly one submission, including on 429."""
     cfg = defaults().get(route)
     if not cfg or not cfg.get('enabled') or not gateway_settings()['enabled']:
         raise GatewayError('Speech routing is disabled',503)
     catalog=store.records('models'); started=time.monotonic(); attempts=[]
-    candidates=cfg['models'] if cfg.get('automatic_fallback') else cfg['models'][:1]
+    candidates=cfg['models'][:1]
     for mid in candidates:
         item=catalog.get(mid,{})
         if not model_allowed(mid) or not item.get('enabled') or not item.get('available',True) or 'speech' not in capabilities(item):
             continue
         body={'model':mid,'input':text,'voice':voice,'response_format':'mp3'}
         try:
-            with _client(cfg['timeout']) as client:
-                response=client.post(_url(adapters.PATHS['speech']),headers=headers(),json=body)
+            from .media_policy import response_timeout,request_headers as media_headers,require_gateway_safety
+            timeout=response_timeout('speech',cfg['timeout'],body)
+            with _client(timeout) as client:
+                require_gateway_safety(client,_url('editor-media-policy'),headers())
+                response=client.post(_url(adapters.PATHS['speech']),headers={**headers(),**media_headers('speech',timeout)},json=body)
             attempts.append({'model':mid,'http_status':response.status_code})
             if not response.is_success:
                 raise GatewayError(f'LM speech HTTP {response.status_code}: {safe(response.text,200)}',response.status_code)
@@ -423,8 +433,6 @@ def speech(route, text, voice):
             return response.content
         except Exception as exc:
             _audit(_record(route,'speech',candidates[0],started,attempts,error=exc,request={'model':mid,'input':text}))
-            if getattr(exc,'status',None)==429:
-                continue
             raise
     raise GatewayError('No verified speech model is available',503)
 

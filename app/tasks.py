@@ -143,17 +143,18 @@ if CELERY_AVAILABLE:
         _execute(self, "denoise", job_id, run)
 
 
-    @celery.task(bind=True, name="airender.generate_content", max_retries=2, default_retry_delay=30)
+    @celery.task(bind=True, name="airender.generate_content", max_retries=0, acks_late=False, reject_on_worker_lost=False)
     def task_generate_content(self, job_id: str, params: dict) -> None:
         from brain.content_creator import _run_generation
 
         def run() -> None:
+            if self.request.retries:
+                raise ValueError('Media retry requires fresh user confirmation')
             _job(job_id)
-            _run_generation(job_id, params["provider_name"], raise_errors=True)
+            _run_generation(job_id, params["provider_name"], raise_errors=True, authorization_id=params.get('authorization_id'))
 
-        _execute(
-            self, "content generation", job_id, run,
-        )
+        # Never pass paid media into the generic automatic retry wrapper.
+        run()
 
 
     @celery.task(bind=True, name="airender.studio_message", max_retries=1, default_retry_delay=15)

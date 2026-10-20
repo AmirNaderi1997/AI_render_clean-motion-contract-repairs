@@ -445,7 +445,7 @@ def cancel_project(project_id: str, user_key: str) -> dict:
     return result
 
 
-def resume_project(project_id: str, user_key: str) -> dict:
+def resume_project(project_id: str, user_key: str, *, retry_confirmed: bool = False) -> dict:
     """Resume one existing motion job, preserving valid scene/narration checkpoints."""
     import fcntl
     project = run(repo.get_project(project_id, user_key))
@@ -468,7 +468,9 @@ def resume_project(project_id: str, user_key: str) -> dict:
             jobstore.start_render(job, preview=False, loudnorm=True)
             stage = 'rendering'
         elif generation.get('state') == 'failed':
-            approve_and_generate(job, provider_name=_provider())
+            if not retry_confirmed:
+                raise ValueError('تلاش مجدد ممکن است دوباره هزینه داشته باشد؛ ابتدا تأیید کنید.')
+            approve_and_generate(job, provider_name=_provider(), retry_confirmed=True)
             stage = 'generating assets'
         else:
             raise ValueError('مرحلهٔ قابل ادامه‌ای در این پروژه پیدا نشد.')

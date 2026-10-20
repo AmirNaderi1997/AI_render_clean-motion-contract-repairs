@@ -1,0 +1,80 @@
+--- server/dist/services/media.js
++++ server/dist/services/media.js
+@@ -8,6 +8,7 @@
+ // published catalog and arrive via catalog-sync (premium on the live tier within
+ // ~12h, free once each model is 30 days old) — never seeded by migrations.
+ import { getDb } from '../db/index.js';
++import { editorMediaTimeout, editorMediaChain } from '../lib/editor-media-policy.js';
+ import { parseRetryAfterMs } from '../providers/base.js';
+ import { RetryHintTracker } from '../lib/retry-hint.js';
+ import { secondsUntilNextMonth } from './key-budget.js';
+@@ -160,6 +161,7 @@
+  *  top of the per-request timeout so a departed client drops the upstream
+  *  request instead of leaving it to run out the clock. */
+ clientSignal) {
++    timeoutMs = editorMediaTimeout(modality,timeoutMs);
+     const timeoutSignal = AbortSignal.timeout(timeoutMs);
+     const signal = clientSignal ? AbortSignal.any([timeoutSignal, clientSignal]) : timeoutSignal;
+     const r = await proxyFetch(url, { ...init, signal }, platform, modality, timeoutMs);
+@@ -367,7 +369,7 @@
+     if (!providerModelId) {
+         throw new MediaError(`huggingface video model '${row.model_id}' is missing providerModelId metadata`, 500);
+     }
+-    const deadline = Date.now() + VIDEO_FETCH_TIMEOUT_MS;
++    const deadline = Date.now() + editorMediaTimeout('video',VIDEO_FETCH_TIMEOUT_MS);
+     const remaining = () => Math.max(1, deadline - Date.now());
+     const query = '?_subdomain=queue';
+     const queueUrl = `https://router.huggingface.co/fal-ai/${providerModelId}${query}`;
+@@ -732,7 +734,7 @@
+ }
+ /** Generate image(s), failing over across providers serving the modality. */
+ export async function runImageGeneration(model, params) {
+-    const chain = resolveMediaChain(model, 'image');
++    const chain = editorMediaChain(resolveMediaChain(model, 'image'));
+     let lastError = null;
+     // Only a chain rate limited end to end earns a Retry-After (the soonest).
+     const hints = new RetryHintTracker();
+@@ -772,7 +774,7 @@
+  *  `clientSignal` is the API caller's connection: when it aborts, the in-flight
+  *  upstream request is dropped and no further provider is tried. */
+ export async function runVideoGeneration(model, params, clientSignal) {
+-    const chain = resolveMediaChain(model, 'video');
++    const chain = editorMediaChain(resolveMediaChain(model, 'video'));
+     let lastError = null;
+     // Only a chain rate limited end to end earns a Retry-After (the soonest).
+     const hints = new RetryHintTracker();
+@@ -1027,7 +1029,7 @@
+ }
+ /** Synthesize speech, failing over across providers serving the modality. */
+ export async function runSpeech(model, params) {
+-    const chain = resolveMediaChain(model, 'audio');
++    const chain = editorMediaChain(resolveMediaChain(model, 'audio'));
+     let lastError = null;
+     // Only a chain rate limited end to end earns a Retry-After (the soonest).
+     const hints = new RetryHintTracker();
+@@ -1062,4 +1064,4 @@
+     }
+     throw chainError('audio', lastError, hints);
+ }
+-//# sourceMappingURL=media.js.map
+\ No newline at end of file
++//# sourceMappingURL=media.js.map
+--- server/dist/routes/proxy.js
++++ server/dist/routes/proxy.js
+@@ -39,6 +39,9 @@
+ import { compressRequest, formatCompressionHeader } from '../services/compression/pipeline.js';
+ import { applyDecisionRouting, routingStrategyHeader } from '../services/routing-decision.js';
+ export const proxyRouter = Router();
++import { editorMediaPolicy } from '../lib/editor-media-policy.js';
++proxyRouter.use((req,res,next)=>editorMediaPolicy(req,next));
++proxyRouter.get('/editor-media-policy',(_req,res)=>res.json({version:1,single_attempt:true,minimum_seconds:{image:150,audio:200,video:300}}));
+ // Virtual "auto" model. Clients like Hermes require a non-empty `model` field
+ // on every request, but freellmapi's whole point is to pick the model itself.
+ // Requesting this id means "let the router decide" — identical to omitting
+@@ -2965,4 +2968,4 @@
+ // avoid an import cycle); imported above for internal use and re-exported here
+ // for routes/responses.ts which imports it from this module.
+ export { logRequest };
+-//# sourceMappingURL=proxy.js.map
+\ No newline at end of file
++//# sourceMappingURL=proxy.js.map

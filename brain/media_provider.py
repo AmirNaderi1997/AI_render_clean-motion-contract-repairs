@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
-IMAGE_ATTEMPTS = 3  # image models occasionally reply with text only; bounded retry
+IMAGE_ATTEMPTS = 1  # Paid generation is never retried without explicit user confirmation.
 from .lm_gateway import observe_specialized
 
 

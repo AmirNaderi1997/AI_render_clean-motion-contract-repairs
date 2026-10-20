@@ -57,12 +57,14 @@ def test_resume_reuses_owned_job_and_rejects_other_users(monkeypatch,tmp_path):
     monkeypatch.setattr(o,'_provider',lambda:'lm_gateway')
     generation={'state':'failed'};calls=[]
     monkeypatch.setattr(content_creator,'get_storyboard_status',lambda _:generation)
-    def approve(existing,provider_name):
+    def approve(existing,provider_name,**kwargs):
         assert existing is job
         calls.append(provider_name);generation['state']='generating'
     monkeypatch.setattr(content_creator,'approve_and_generate',approve)
     with pytest.raises(KeyError): o.resume_project(project['id'],'different-user')
-    assert o.resume_project(project['id'],'owner')['stage']=='generating assets'
+    with pytest.raises(ValueError): o.resume_project(project['id'],'owner')
+    assert calls==[]
+    assert o.resume_project(project['id'],'owner',retry_confirmed=True)['stage']=='generating assets'
     assert o.resume_project(project['id'],'owner')['status']=='running'
     assert calls==['lm_gateway']
     assert run(repo.get_project(project['id'],'owner'))['external_ref']=='same-job'
