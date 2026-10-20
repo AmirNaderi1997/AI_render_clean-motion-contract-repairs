@@ -32,6 +32,7 @@ ENV REMOTION_BROWSER_EXECUTABLE=/usr/bin/chromium REMOTION_CONCURRENCY=2
 
 COPY app/ app/
 COPY brain/ brain/
+COPY creative/ creative/
 COPY engine/ engine/
 COPY hermes/ hermes/
 COPY logging_config.py request_context.py .

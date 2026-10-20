@@ -3,6 +3,8 @@
 FROM ai-render-runtime:pre-lmapi
 COPY app/ /app/app/
 COPY brain/ /app/brain/
+COPY creative/ /app/creative/
+COPY engine/ /app/engine/
 COPY scripts/ /app/scripts/
 COPY alembic/ /app/alembic/
 COPY alembic.ini request_context.py /app/
