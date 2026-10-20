@@ -471,6 +471,11 @@ def transcribe(
 
     fhash = file_hash(video)
     selected_engine = choose_engine(language, engine)
+    if transcript_path.exists() and selected_engine=='elevenlabs':
+        cached=json.loads(transcript_path.read_text())
+        if (cached.get('file_hash')==fhash and cached.get('requested_language')==language
+                and cached.get('words') and cached.get('engine') in {'elevenlabs','elevenlabs_jarvis','elevenlabs_sarovi','whisper'}):
+            return effective_transcript(out_dir)
     elevenlabs_error: Optional[Exception] = None
 
     if selected_engine == "elevenlabs":
@@ -496,8 +501,24 @@ def transcribe(
 
             return effective_transcript(out_dir)
         except Exception as exc:
-            log.warning("ElevenLabs failed (%s), trying local Whisper", exc)
+            log.warning("Own ElevenLabs STT failed (%s); trying the configured provider chain", type(exc).__name__)
             elevenlabs_error = exc
+        # Explicit user policy: own ElevenLabs relay, Jarvis ElevenLabs,
+        # Sarovi ElevenLabs, then local Whisper. Never replay a provider.
+        from brain.transcribe_elevenlabs import transcribe_gateway
+        history=[{'provider':'elevenlabs_own_vercel','status':'failed','error_type':type(elevenlabs_error).__name__}]
+        for provider in ('jarvis','sarovi'):
+            try:
+                transcript,cost=transcribe_gateway(video,out_dir,provider=provider,language=language,file_digest=fhash)
+                _archive_current(out_dir)
+                transcript_path.write_text(json.dumps(transcript,ensure_ascii=False))
+                history.append({'provider':provider,'status':'completed'})
+                (out_dir/'asr_attempts.json').write_text(json.dumps(history))
+                (out_dir/'asr_cost.json').write_text(json.dumps({'engine':transcript['engine'],'audio_seconds':transcript.get('duration',0),'cost_usd':cost}))
+                return effective_transcript(out_dir)
+            except Exception as exc:
+                history.append({'provider':provider,'status':'unavailable_or_failed','error_type':type(exc).__name__})
+        (out_dir/'asr_attempts.json').write_text(json.dumps(history))
     from brain.lm_direct import config as direct_config
     local_stt = direct_config()['stt']
     if elevenlabs_error is not None and not local_stt['enabled']:

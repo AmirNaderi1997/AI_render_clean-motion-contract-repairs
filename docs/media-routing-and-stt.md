@@ -12,8 +12,11 @@ a verified gateway STT model is registered. No invented Scribe ID or `auto`.
 
 Direct fallbacks now include a separate Local Whisper setting (enabled, model,
 low-confidence text improvement), independent of direct text-provider keys.
-Talking, Localize and generic transcription use the shared pipeline: one
-remote gateway STT attempt, then optional local Whisper. No repeated paid STT.
+Talking, Localize and generic transcription use the shared pipeline: own
+ElevenLabs via the existing Vercel relay, Jarvis ElevenLabs via Gateway,
+Sarovi ElevenLabs via Gateway, then optional local Whisper. One request per
+remote provider, no automatic retry of the same provider. Jarvis/Sarovi require
+registered verified Scribe IDs; absent models are skipped, not invented.
 Whisper model assets can be preinstalled under `/root/.cache/editor-whisper/small`
 on production (existing 100 GB cache bind mounts) or the local job sibling
 `cache/whisper/small`. `WHISPER_LOCAL_MODELS_DIR` overrides this location.

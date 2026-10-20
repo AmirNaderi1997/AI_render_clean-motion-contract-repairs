@@ -60,7 +60,7 @@ export default function DirectFallbacks() {
     {notice && <p role="status">{notice}</p>}
     {state.stt && <section className="ai-direct-card">
       <h3>Speech-to-text fallback · Local Whisper</h3>
-      <p className="eg-muted">Runs locally after the primary STT fails. No second paid transcription request. Low-confidence text can be corrected through the configured AI route; raw words and timestamps remain recoverable.</p>
+      <p className="eg-muted">STT priority: your ElevenLabs via Vercel → Jarvis ElevenLabs → Sarovi ElevenLabs → Local Whisper. Each remote provider is tried once, only with its registered STT model. Low-confidence local text can be corrected through the configured AI route; raw words and timestamps remain recoverable.</p>
       <label><input type="checkbox" checked={state.stt.enabled} onChange={e=>{setDirty(true);setState({...state,stt:{...state.stt!,enabled:e.target.checked}});}}/> Enable local STT fallback</label>
       <label>Whisper model<select value={state.stt.model} onChange={e=>{setDirty(true);setState({...state,stt:{...state.stt!,model:e.target.value}});}}>{['base','small','medium','large-v3'].map(m=><option key={m}>{m}</option>)}</select></label>
       <label><input type="checkbox" checked={state.stt.improve_low_quality} onChange={e=>{setDirty(true);setState({...state,stt:{...state.stt!,improve_low_quality:e.target.checked}});}}/> Improve low-confidence text with AI</label>

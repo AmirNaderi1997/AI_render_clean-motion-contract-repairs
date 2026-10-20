@@ -133,8 +133,7 @@ def transcribe_elevenlabs(
     Raises RuntimeError on API failure (caller should fall back to Whisper).
     """
     api_key = os.environ.get("ELEVENLABS_API_KEY", "")
-    from brain import lm_gateway
-    if not api_key and not lm_gateway.configured():
+    if not api_key:
         raise RuntimeError("ELEVENLABS_API_KEY not set")
 
     key = _cache_key(file_digest, language, SCRIBE_MODEL, keyterms)
@@ -148,19 +147,6 @@ def transcribe_elevenlabs(
 
     wav = _extract_audio(video, out_dir)
     try:
-        if lm_gateway.configured():
-            # Gateway is the sole remote STT owner. A missing/unverified model
-            # fails into local Whisper, never a second paid direct provider.
-            from types import SimpleNamespace
-            data=lm_gateway.transcription(wav,language)
-            entries=[SimpleNamespace(type='word',text=w.get('text',w.get('word','')),
-                start=w['start'],end=w['end'],logprob=None) for w in data.get('words',[]) if 'start' in w and 'end' in w]
-            if not entries:raise RuntimeError('STT returned no word timestamps; use local Whisper')
-            duration=float(data.get('duration') or entries[-1].end)
-            transcript=_map_response(SimpleNamespace(words=entries,language_code=data.get('language',language)),file_digest,key,language,duration)
-            transcript['engine']='lm_gateway_stt';transcript['model_id']=data.get('model','')
-            archive.parent.mkdir(exist_ok=True);archive.write_text(json.dumps(transcript,ensure_ascii=False))
-            return transcript,None
         import httpx as _httpx
         from elevenlabs import ElevenLabs
         from brain.elevenlabs_transport import base_url
@@ -184,7 +170,7 @@ def transcribe_elevenlabs(
         t0 = time.monotonic()
         with open(wav, "rb") as f:
             try:
-                resp = client.speech_to_text.convert(file=f, **kwargs)
+                resp = client.speech_to_text.convert(file=f, request_options={'max_retries':0}, **kwargs)
             except Exception as first_err:
                 # Quota/auth failures are permanent for this request; retrying
                 # only burns another request cycle before the inevitable
@@ -215,3 +201,23 @@ def transcribe_elevenlabs(
 
     finally:
         wav.unlink(missing_ok=True)
+
+
+def transcribe_gateway(video, out_dir, *, provider, language, file_digest):
+    """One provider-pinned gateway STT attempt; no guessed model IDs."""
+    from brain import lm_gateway
+    from types import SimpleNamespace
+    wav=_extract_audio(video,out_dir)
+    try:
+        data=lm_gateway.transcription(wav,language,provider=provider)
+        entries=[SimpleNamespace(type='word',text=w.get('text',w.get('word','')),
+            start=w['start'],end=w['end'],logprob=None) for w in data.get('words',[]) if 'start' in w and 'end' in w]
+        if not entries:raise RuntimeError('STT returned no word timestamps')
+        duration=float(data.get('duration') or entries[-1].end)
+        key=_cache_key(file_digest,language,str(data.get('model','')))
+        transcript=_map_response(SimpleNamespace(words=entries,language_code=data.get('language',language)),file_digest,key,language,duration)
+        transcript.update(engine='elevenlabs_'+provider,model_id=data.get('model',''))
+        archive=out_dir/'transcripts'/f'{key}.json';archive.parent.mkdir(exist_ok=True)
+        archive.write_text(json.dumps(transcript,ensure_ascii=False))
+        return transcript,None
+    finally:wav.unlink(missing_ok=True)

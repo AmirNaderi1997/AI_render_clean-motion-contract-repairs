@@ -412,12 +412,17 @@ def probe_model(mid, capability="chat"):
 
 
 @observe_request
-def transcription(audio, language=None):
+def transcription(audio, language=None, *, provider=None):
     """One verified multipart STT submission; never retries paid transcription."""
     cfg=defaults().get('transcription',{})
     if not cfg.get('enabled') or not gateway_settings()['enabled']:
         raise GatewayError('Transcription routing is disabled',503)
-    candidates=cfg.get('models',[])[:1]
+    candidates=cfg.get('models',[])
+    if provider:
+        group={'jarvis':'jarvis-all-models','sarovi':'sarovi-all-models'}.get(provider)
+        if not group:raise GatewayError('Unsupported STT provider',422)
+        candidates=[m for m in candidates if m.endswith('#'+group) and ('scribe' in m.lower() or 'eleven' in m.lower())]
+    candidates=candidates[:1]
     model=candidates[0] if candidates else ''
     item=store.records('models').get(model,{})
     if not model_allowed(model) or not item.get('enabled') or 'transcription' not in capabilities(item):
