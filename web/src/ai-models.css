@@ -11,3 +11,5 @@
 .ai-direct-actions{margin-inline-start:auto;display:flex;gap:6px}
 .ai-direct-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .ai-direct-card input,.ai-direct-card select{max-width:100%;min-width:0}
+.ai-route-layout nav button{display:grid;gap:2px;width:100%;white-space:normal;justify-content:stretch;border-radius:10px}.ai-route-layout nav button small{opacity:.7;font-size:12px}.ai-route-layout nav button[aria-pressed=true]{background:var(--active)}.ai-hint{color:var(--text-3);font-size:13px;margin:-8px 0 14px}.ai-toolbar select{max-width:100%;min-width:140px}
+.ai-panel .ai-alert{margin-bottom:16px;overflow-wrap:anywhere}.ai-alert button{margin-top:8px}

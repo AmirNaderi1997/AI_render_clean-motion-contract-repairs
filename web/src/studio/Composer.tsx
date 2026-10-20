@@ -1,0 +1,79 @@
+import React from "react";
+import { Icon } from "../components/Icon";
+import { Menu } from "../components/Menu";
+import { templates } from "../templateData";
+import { formatBytes } from "../format";
+
+export type PendingFile = { key: string; file: File; progress: number; attachmentId?: string; url: string };
+
+interface ComposerProps {
+  text: string; setText: (value: string) => void;
+  files: PendingFile[]; onRemoveFile: (file: PendingFile) => void; onFiles: (files: FileList | File[]) => void;
+  /** Work is in flight. */
+  processing: boolean;
+  /** The backend can cancel the current work (a running project). When false we show a non-cancelable indicator. */
+  onStop?: () => void;
+  onSend: () => void;
+  error: string; onDismissError: () => void;
+  hasSpeech: boolean; listening: boolean; onListen: () => void;
+  autoFocus?: boolean; placeholder?: string; variant?: "home" | "dock";
+  textareaRef?: React.RefObject<HTMLTextAreaElement>;
+}
+
+export function Composer(props: ComposerProps) {
+  const { text, setText, files, onRemoveFile, onFiles, processing, onStop, onSend, error, onDismissError, hasSpeech, listening, onListen, placeholder, variant = "dock" } = props;
+  const own = React.useRef<HTMLTextAreaElement>(null);
+  const ref = props.textareaRef || own;
+  const fileInput = React.useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = React.useState(false);
+  const uploading = files.some(file => !file.attachmentId);
+
+  // Auto-resize: grows with content up to a cap, then scrolls.
+  React.useLayoutEffect(() => {
+    const node = ref.current; if (!node) return;
+    node.style.height = "auto";
+    node.style.height = `${Math.min(node.scrollHeight, 200)}px`;
+  }, [text, ref]);
+  React.useEffect(() => { if (props.autoFocus) ref.current?.focus({ preventScroll: true }); }, [props.autoFocus, ref]);
+
+  const canSend = !processing && !uploading && (text.trim().length > 0 || files.length > 0);
+  const submit = () => { if (canSend) onSend(); };
+
+  return <div className={`composer composer-${variant}`}>
+    <div className="composer-box" data-dragging={dragging || undefined}
+      onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
+      onDrop={event => { event.preventDefault(); setDragging(false); void onFiles(Array.from(event.dataTransfer.files)); }}>
+      {error ? <div className="notice composer-error" data-tone="error" role="alert"><span className="grow">{error}</span><button className="icon-btn" style={{ ["--size" as string]: "24px" }} onClick={onDismissError} aria-label="Dismiss error"><Icon name="close" size={14}/></button></div> : null}
+      {files.length ? <ul className="attach-row" aria-label="Attachments">{files.map((item, index) => <li key={item.key} className="attach-chip">
+        {item.file.type.startsWith("image/") ? <img src={item.url} alt=""/> : <span className="attach-icon"><Icon name={item.file.type.startsWith("video/") ? "video" : "music"} size={18}/></span>}
+        <span className="attach-meta"><b className="wrap-safe">{item.file.name}</b><small>{item.attachmentId ? formatBytes(item.file.size) : `Uploading ${Math.round(item.progress)}%`}</small></span>
+        <button className="icon-btn" style={{ ["--size" as string]: "24px" }} onClick={() => onRemoveFile(item)} aria-label={`Remove ${item.file.name}`}><Icon name="close" size={14}/></button>
+        {!item.attachmentId ? <i className="attach-progress" style={{ width: `${item.progress}%` }}/> : null}
+      </li>)}</ul> : null}
+
+      <textarea ref={ref} className="composer-input bidi" dir="auto" rows={1} value={text} placeholder={placeholder || "Describe your video or edit…"}
+        aria-label="Message EditorGPT" enterKeyHint="send"
+        onChange={event => setText(event.target.value)}
+        onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); } }}/>
+
+      <div className="composer-bar">
+        <Menu label="Add to message" side="top" trigger={triggerProps => <button type="button" className="icon-btn" {...triggerProps} aria-label="Attach or choose a template" data-tip="Attach or choose a template" data-tip-pos="top"><Icon name="plus" size={20}/></button>}>
+          {close => <>
+            <button role="menuitem" className="menu-item" onClick={() => { close(); fileInput.current?.click(); }}><Icon name="paperclip" size={18}/><span>Add video, image or audio</span></button>
+            <div className="menu-sep"/>
+            <div className="menu-label">Templates</div>
+            {templates.slice(0, 6).map(item => <button key={item.id} role="menuitem" className="menu-item" onClick={() => { setText(item.prompt); close(); ref.current?.focus(); }}><Icon name={item.icon} size={18}/><span>{item.title}</span></button>)}
+          </>}
+        </Menu>
+        <input ref={fileInput} type="file" multiple hidden accept="video/*,image/*,audio/*" onChange={event => { const picked = Array.from(event.target.files || []); event.target.value = ""; if (picked.length) void onFiles(picked); }}/>
+        <span className="grow"/>
+        {hasSpeech ? <button type="button" className="icon-btn" aria-pressed={listening} onClick={onListen} aria-label={listening ? "Stop voice input" : "Use voice input"} data-tip="Voice input" data-tip-pos="top"><Icon name="mic" size={19}/></button> : null}
+        {processing
+          ? onStop
+            ? <button type="button" className="icon-btn icon-btn-solid icon-btn-lg composer-send" onClick={onStop} aria-label="Stop" data-tip="Stop" data-tip-pos="top"><Icon name="stop" size={18}/></button>
+            : <button type="button" className="icon-btn icon-btn-solid icon-btn-lg composer-send" disabled aria-label="Working…"><span className="spinner composer-spinner"/></button>
+          : <button type="button" className="icon-btn icon-btn-solid icon-btn-lg composer-send" onClick={submit} disabled={!canSend} aria-label="Send message" data-tip="Send" data-tip-pos="top"><Icon name="send" size={19}/></button>}
+      </div>
+    </div>
+  </div>;
+}
