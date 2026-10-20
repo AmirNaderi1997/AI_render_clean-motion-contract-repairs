@@ -74,7 +74,7 @@ def _resolved_intent(text, attachments, current, on_title=None):
         log.warning('Intent/title response unavailable; using existing deterministic intent routing', exc_info=True)
         if on_title:
             clean = re.sub(r'https?://\S+', '', text).strip()
-            if any(word in text.lower() for word in ('فارسی', 'دوبله', 'ترجمه', 'localiz')):
+            if _intent(text, attachments, current) == 'localize':
                 title = 'فارسی‌سازی و دوبله ویدیو' if re.search(r'[\u0600-\u06ff]', text) else 'Video localization and dubbing'
             else:
                 title = ' '.join(clean.split()[:8]) or 'ساخت ویدیو از لینک'
