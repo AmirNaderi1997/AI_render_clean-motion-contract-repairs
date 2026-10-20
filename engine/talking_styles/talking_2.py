@@ -519,3 +519,21 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     if proc.wait() != 0:
         raise RuntimeError(f"ffmpeg failed: {base.ffmpeg_error(''.join(log_tail))}")
     return out
+
+
+# --- Tscaps hook layer (additive: without it the output is exactly the built-in ASS rendering) -------------------
+
+render_plain = render
+
+
+def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, **kwargs) -> Path:  # noqa: F811
+    """The opening hook is drawn by the Tscaps engine; captions, chips and cards stay with the built-in renderer."""
+    if kwargs.get("overlay") is not None:
+        return render_plain(video, plan, out, work_dir=work_dir, **kwargs)
+    from engine import tscaps_overlay as tso
+    split_spans = [(s.out_start, s.out_start + s.length) for s in plan.shots if s.split]
+    seam = SPLIT_Y / H
+    fps = int(round(eval_fps(probe_fps(video)) or 30))
+    cues = tso.hook_cue(plan.hook, y_for=lambda t: seam if any(a <= t < b for a, b in split_spans) else None)
+    return tso.render_with_overlay(render_plain, video, plan, out, work_dir=work_dir, cues=cues,
+                                   strip=lambda p: tso.without(p, hook=None), fps=fps, duration=plan.duration, **kwargs)

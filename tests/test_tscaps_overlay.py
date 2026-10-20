@@ -62,7 +62,7 @@ def test_talking_4_falls_back_to_built_in_captions_when_the_overlay_fails(tmp_pa
     seen = []
     monkeypatch.setattr(talking_4.base, "probe_fps", lambda video: "30/1")
     monkeypatch.setattr(tso, "render_overlay", lambda *a, **k: (_ for _ in ()).throw(tso.OverlayUnavailable("no chrome")))
-    monkeypatch.setattr(talking_4.base, "render", lambda video, plan, out, **k: seen.append((plan, k.get("overlay"))) or out)
+    monkeypatch.setattr(talking_4.base, "render_plain", lambda video, plan, out, **k: seen.append((plan, k.get("overlay"))) or out)
     plan = make_plan()
     talking_4.render(tmp_path / "v.mp4", plan, tmp_path / "o.mp4", work_dir=tmp_path)
     assert seen[0][0].captions and seen[0][0].hook and seen[0][1] is None        # ASS captions kept, no overlay
@@ -74,7 +74,7 @@ def test_talking_4_hands_ass_nothing_to_draw_when_the_overlay_exists(tmp_path, m
     fake.write_bytes(b"x" * 2000)
     monkeypatch.setattr(talking_4.base, "probe_fps", lambda video: "30/1")
     monkeypatch.setattr(tso, "render_overlay", lambda *a, **k: fake)
-    monkeypatch.setattr(talking_4.base, "render", lambda video, plan, out, **k: seen.append((plan, k.get("overlay"))) or out)
+    monkeypatch.setattr(talking_4.base, "render_plain", lambda video, plan, out, **k: seen.append((plan, k.get("overlay"))) or out)
     talking_4.render(tmp_path / "v.mp4", make_plan(), tmp_path / "o.mp4", work_dir=tmp_path)
     assert seen[0][0].captions == [] and seen[0][0].hook is None and seen[0][1] == fake
 
@@ -91,7 +91,7 @@ def test_a_failed_overlay_composite_is_retried_with_built_in_captions(tmp_path, 
         if k.get("overlay"):
             raise RuntimeError("ffmpeg failed")
         return out
-    monkeypatch.setattr(talking_4.base, "render", render)
+    monkeypatch.setattr(talking_4.base, "render_plain", render)
     talking_4.render(tmp_path / "v.mp4", make_plan(), tmp_path / "o.mp4", work_dir=tmp_path)
     assert calls == [fake, None]
 
@@ -105,3 +105,67 @@ def test_engine_renders_a_transparent_overlay_of_the_requested_size(tmp_path):
     probe = subprocess.run(["ffprobe", "-v", "error", "-c:v", "libvpx-vp9", "-show_entries", "stream=width,height,pix_fmt", "-of", "csv=p=0", str(out)],
                            capture_output=True, text=True).stdout.strip()
     assert probe.startswith("vp9,540,960") or "540,960" in probe and "yuva" in probe
+
+
+# ── hook / moment layers for the other talking styles ────────────────────────
+def test_vertical_overrides_become_their_own_kind_in_the_spec():
+    cues = [tso.Cue("hook", 0, 2, tso.words_for("الف ب", 0, 2), y=0.27), tso.Cue("hook", 3, 5, tso.words_for("ج د", 3, 5))]
+    spec = tso.build_spec(cues, 1080, 1920)
+    assert set(spec["kinds"]) == {"hook@0.27", "hook"}
+    assert spec["kinds"]["hook@0.27"]["alignment"]["verticalOffset"] == 0.27 and spec["kinds"]["hook"]["alignment"]["verticalOffset"] == 0.62
+    assert [c["kind"] for c in spec["cues"]] == ["hook@0.27", "hook"]
+
+
+def test_title_hook_and_note_cues():
+    titles = tso.title_cues([{"start": 5, "end": 7.5, "text": "بازی عوض شد"}], y_for=lambda t: 0.34)
+    assert titles[0].kind == "moment" and titles[0].y == 0.34 and titles[0].words[0].tag == "emphasis"
+    hook = tso.hook_cue({"start": 0, "end": 3, "text": "سه کلمه اینجاست"}, accent_first=True)
+    assert hook[0].kind == "hook" and hook[0].words[0].tag == "emphasis" and hook[0].start == 0.1
+    notes = tso.note_cues([{"start": 10, "end": 12, "text": "این، مهمترین نکته"}])
+    assert [w.t for w in notes[0].words] == ["این", "مهمترین", "نکته"] and notes[0].words[-1].tag == "emphasis"
+    assert tso.hook_cue(None) == [] and tso.title_cues([]) == []
+
+
+def _styled_plan():
+    plan = make_plan()
+    plan.titles = [{"start": 8.0, "end": 10.0, "text": "نکته کلیدی"}]
+    return plan
+
+
+@pytest.mark.parametrize("module_name", ["talking_2", "talking_3"])
+def test_split_styles_draw_only_hook_and_titles_with_the_overlay(module_name, tmp_path, monkeypatch):
+    import importlib
+    module = importlib.import_module(f"engine.talking_styles.{module_name}")
+    fake = tmp_path / "ov.webm"
+    fake.write_bytes(b"x" * 2000)
+    seen = []
+    monkeypatch.setattr(module, "probe_fps", lambda video: "30/1")
+    monkeypatch.setattr(tso, "render_overlay", lambda cues, *a, **k: seen.append([c.kind for c in cues]) or fake)
+    calls = []
+    monkeypatch.setattr(module, "render_plain", lambda video, plan, out, **k: calls.append((plan, k.get("overlay"))) or out)
+    plan = _styled_plan()
+    plan.full_pictures = set() if not hasattr(plan, "full_pictures") else plan.full_pictures
+    module.render(tmp_path / "v.mp4", plan, tmp_path / "o.mp4", work_dir=tmp_path)
+    assert calls[0][1] == fake and calls[0][0].hook is None and calls[0][0].captions                     # captions stay with ASS
+    assert seen[0][0] == "hook" and ("moment" in seen[0]) == (module_name == "talking_3")
+
+
+def test_talking_1_hands_only_the_emphasis_phrases_to_the_overlay(tmp_path, monkeypatch):
+    from engine.talking_styles import talking_1
+    fake = tmp_path / "ov.webm"
+    fake.write_bytes(b"x" * 2000)
+    monkeypatch.setattr(tso, "render_overlay", lambda cues, *a, **k: fake if all(c.kind == "moment" for c in cues) else None)
+    calls = []
+    monkeypatch.setattr(talking_1, "render_plain", lambda video, plan, out, **k: calls.append(k) or out)
+    plan = talking_1.ReelPlan(shots=[], captions=[{"start": 1, "end": 2, "text": "الف"}],
+                              notes=[{"start": 5.0, "end": 7.0, "text": "نکته مهم"}], duration=20.0)
+    talking_1.render(tmp_path / "v.mp4", plan, tmp_path / "o.mp4", hook="هوک", highlight=[], name="", title="", work_dir=tmp_path)
+    assert calls[0]["overlay"] == fake and calls[0]["hook"] == "هوک"
+
+
+def test_talking_1_keeps_the_old_ass_emphasis_when_there_is_no_overlay():
+    from engine.talking_styles import talking_1
+    plan = talking_1.ReelPlan(shots=[], captions=[], notes=[{"start": 5.0, "end": 7.0, "text": "نکته مهم"}], duration=20.0)
+    with_ass = talking_1.build_ass(plan, "هوک", [], "", "", None)
+    without = talking_1.build_ass(plan, "هوک", [], "", "", None, moments=False)
+    assert ",emph,," in with_ass and ",emph,," not in without

@@ -230,8 +230,9 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
 
 def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Optional[Path] = None,
            cta: str = "", render_settings: Optional[dict] = None,
-           logo_path: Optional[Path] = None,
+           logo_path: Optional[Path] = None, overlay: Optional[Path] = None,
            on_progress: Optional[Callable[[int], None]] = None, **_ignored) -> Path:
+    """`overlay`: optional transparent WebM from engine/tscaps_overlay.py, composited above the ASS layer."""
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
@@ -329,8 +330,16 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
                            if s.split and id(s) not in plan.full_pictures) or "0"
     content = "vmain" if outro else "vout"
     vf.append(f"[cv][seam]overlay=0:0:format=auto:shortest=1:enable='{split_times}'[cs]")
-    vf.append(f"[cs][vig]overlay=0:0:format=auto:shortest=1,noise=alls=7:allf=t,"
-              f"{subtitles_filter(ass, fonts)},format=yuv420p[{content}]")
+    if overlay:
+        inputs += ["-c:v", "libvpx-vp9", "-i", str(overlay)]
+        vf.append(f"[cs][vig]overlay=0:0:format=auto:shortest=1,noise=alls=7:allf=t,"
+                  f"{subtitles_filter(ass, fonts)},format=yuv420p[vbase]")
+        vf.append(f"[{nxt}:v]format=yuva420p,setpts=PTS-STARTPTS[tso]")
+        vf.append(f"[vbase][tso]overlay=0:0:format=auto:eof_action=pass,format=yuv420p[{content}]")
+        nxt += 1
+    else:
+        vf.append(f"[cs][vig]overlay=0:0:format=auto:shortest=1,noise=alls=7:allf=t,"
+                  f"{subtitles_filter(ass, fonts)},format=yuv420p[{content}]")
     if outro:
         inputs += ["-i", str(outro)]
         vf.append(f"[{nxt}:v]setsar=1,format=yuv420p[vend]")
@@ -367,3 +376,25 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     if proc.wait() != 0:
         raise RuntimeError(f"ffmpeg failed: {split.base.ffmpeg_error(''.join(log_tail))}")
     return out
+
+
+# --- Tscaps layer for the hook and key moments (additive: without it the output is the built-in ASS rendering) -----
+
+render_plain = render
+
+
+def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, **kwargs) -> Path:  # noqa: F811
+    """The hook and the key-moment titles are drawn by the Tscaps engine; captions and chips stay built-in."""
+    if kwargs.get("overlay") is not None:
+        return render_plain(video, plan, out, work_dir=work_dir, **kwargs)
+    from engine import tscaps_overlay as tso
+    spans = [(s.out_start, s.out_start + s.length) for s in plan.shots if s.split and id(s) not in plan.full_pictures]
+
+    def over_split(t: float) -> bool:
+        return any(a <= t < b for a, b in spans)
+
+    cues = (tso.hook_cue(plan.hook, accent_first=True, y_for=lambda t: 0.27 if over_split(t) else None)
+            + tso.title_cues(plan.titles, y_for=lambda t: 0.26 if over_split(t) else 0.34))
+    fps = int(round(eval_fps(probe_fps(video)) or 30))
+    return tso.render_with_overlay(render_plain, video, plan, out, work_dir=work_dir, cues=cues,
+                                   strip=lambda p: tso.without(p, hook=None, titles=[]), fps=fps, duration=plan.duration, **kwargs)

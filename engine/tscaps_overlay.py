@@ -58,6 +58,7 @@ class Cue:
     start: float
     end: float
     words: list[Word] = field(default_factory=list)
+    y: float | None = None   # vertical centre as a fraction of the frame height; None = the role's default
 
 
 def enabled() -> bool:
@@ -110,11 +111,23 @@ def _blank(path: Path, width: int, height: int, fps: int, duration: float) -> No
 
 def build_spec(cues: list[Cue], width: int, height: int, kinds: dict[str, dict] | None = None) -> dict:
     roles = {**ROLES, **(kinds or {})}
-    used = {cue.kind for cue in cues}
-    return {"width": width, "height": height, "fonts": FONTS,
-            "kinds": {name: roles[name] for name in used if name in roles},
-            "cues": [{"kind": c.kind, "start": round(c.start, 3), "end": round(c.end, 3),
-                      "words": [{"t": w.t, "s": w.s, "e": w.e, "tag": w.tag} for w in c.words]} for c in cues if c.words]}
+    out_kinds: dict[str, dict] = {}
+
+    def kind_of(cue: Cue) -> str:
+        if cue.kind not in roles:
+            return cue.kind
+        if cue.y is None:
+            out_kinds.setdefault(cue.kind, roles[cue.kind])
+            return cue.kind
+        name = f"{cue.kind}@{cue.y:.2f}"        # the same look at another height (e.g. above a split-screen seam)
+        out_kinds.setdefault(name, {**roles[cue.kind], "alignment": {**roles[cue.kind]["alignment"], "verticalOffset": cue.y}})
+        return name
+
+    names = [kind_of(c) for c in cues if c.words]
+    return {"width": width, "height": height, "fonts": FONTS, "kinds": out_kinds,
+            "cues": [{"kind": name, "start": round(c.start, 3), "end": round(c.end, 3),
+                      "words": [{"t": w.t, "s": w.s, "e": w.e, "tag": w.tag} for w in c.words]}
+                     for name, c in zip(names, [c for c in cues if c.words])]}
 
 
 def render_overlay(cues: list[Cue], out: Path, *, width: int, height: int, fps: int, duration: float,
@@ -140,6 +153,15 @@ def render_overlay(cues: list[Cue], out: Path, *, width: int, height: int, fps: 
 
 
 # --- cues from a talking plan ----------------------------------------------------------------------------------------
+
+def without(plan, **fields):
+    """A shallow copy of `plan` with some fields replaced (plans carry extra attributes a dataclass copy would lose)."""
+    import copy
+    clone = copy.copy(plan)
+    for name, value in fields.items():
+        setattr(clone, name, value)
+    return clone
+
 
 def _tidy(cues: list[Cue]) -> list[Cue]:
     """Sorted, never overlapping (the engine shows one section at a time)."""
@@ -177,3 +199,62 @@ def reel_cues(plan, *, captions: bool = True, hook: bool = True, moments: bool =
                 phrase = " ".join(part for part in (c.get("lead"), c.get("key")) if part)
                 cues.append(Cue("caption", start, end, words_for(phrase, start, end, emphasize=c.get("key") or "")))
     return _tidy(cues)
+
+
+def title_cues(titles: list[dict], *, y_for=None) -> list[Cue]:
+    """Key moments given as {"start","end","text"}; the first word is lifted as the accent when there are several."""
+    cues = []
+    for title in titles or []:
+        text = (title.get("text") or "").strip()
+        start, end = float(title["start"]), float(title["end"])
+        if not text or end <= start:
+            continue
+        first = text.split()[0] if len(text.split()) >= 2 else ""
+        cues.append(Cue("moment", start, end, words_for(text, start, end, emphasize=first, reveal=min(1.0, (end - start) * 0.6)),
+                        y=y_for(start) if y_for else None))
+    return cues
+
+
+def hook_cue(hook: dict | None, *, y_for=None, accent_first: bool = False, reveal: float = 1.4) -> list[Cue]:
+    if not hook or not (hook.get("text") or "").strip():
+        return []
+    start, end = float(hook["start"]) + 0.1, float(hook["end"])
+    first = hook["text"].split()[0] if accent_first and len(hook["text"].split()) >= 2 else ""
+    return [Cue("hook", start, end, words_for(hook["text"], start, end, emphasize=first, reveal=reveal), y=y_for(start) if y_for else None)]
+
+
+def note_cues(notes: list[dict]) -> list[Cue]:
+    """Emphasis phrases (talking_1 notes): the last word is the accent, as in the ASS version."""
+    cues = []
+    for note in notes or []:
+        text = (note.get("text") or "").replace("،", "").strip()
+        start, end = float(note["start"]), float(note["end"])
+        parts = text.split()
+        if not parts or end <= start:
+            continue
+        cues.append(Cue("moment", start + 0.12, end, words_for(text, start + 0.12, end, emphasize=parts[-1] if len(parts) > 1 else "",
+                                                               reveal=min(1.2, (end - start) * 0.55))))
+    return cues
+
+
+def render_with_overlay(render, video, plan, out, *, work_dir: Path, cues: list[Cue], strip, fps: int, duration: float,
+                        width: int = 1080, height: int = 1920, **kwargs):
+    """Render with the Tscaps layer when it can be made; otherwise (or if compositing fails) with the style's own text.
+
+    `render` is the style's plain renderer (it accepts `overlay=`), `strip(plan)` returns the plan without what the layer draws."""
+    cues = _tidy(cues)
+    overlay = None
+    if cues and enabled():
+        try:
+            overlay = render_overlay(cues, work_dir / "tscaps_overlay.webm", width=width, height=height, fps=fps,
+                                     duration=duration + 0.1, work_dir=work_dir)
+        except OverlayUnavailable as exc:
+            log.warning("tscaps overlay unavailable, using built-in text: %s", str(exc)[:240])
+        except Exception as exc:  # the layer may improve a reel; it must never fail one
+            log.warning("tscaps overlay failed, using built-in text: %s", str(exc)[:240])
+    if overlay:
+        try:
+            return render(video, strip(plan), out, work_dir=work_dir, overlay=overlay, **kwargs)
+        except Exception as exc:
+            log.warning("render with the tscaps overlay failed (%s); rendering with built-in text", str(exc)[:240])
+    return render(video, plan, out, work_dir=work_dir, **kwargs)

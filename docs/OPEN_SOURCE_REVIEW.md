@@ -98,3 +98,33 @@ Question: can the MIT engine render Persian captions headlessly in our environme
   we ran that build in a scratch checkout; **we did not copy it into this repository.** Productising means either
   vendoring the already-built `style.build.css` files (MIT, derived from MIT sources) or writing our own SCSS helpers.
 * Not yet tested: text behind the speaker, emoji, per-word emphasis tags, burning onto the full HyperFrames output.
+
+## Tscaps integration (shipped on `creative-engine`)
+
+**How it works.** `tools/tscaps` runs the MIT `@tscaps/engine` in headless Chrome (Playwright) and writes a
+*transparent* VP9 WebM that contains only text. The engine paints captions onto a blank video, and a thin wrapper makes
+it use its own "transparent background" mode, which the public builder does not expose. `engine/tscaps_overlay.py`
+plans the cues and calls it; the talking renderers composite the layer with one extra `overlay` in their ffmpeg graph,
+so the video is still encoded once.
+
+| Style | Drawn by Tscaps | Stays built-in |
+|---|---|---|
+| talking_1 | key moments (emphasis phrases) | the old caption system, the pinned hook box, name/title, B&W treatment |
+| talking_2 (and its HyperFrames rough cut) | the opening hook | captions, chips, picture cards |
+| talking_3 | the hook and the chapter-title key moments | captions, chips |
+| talking_4 | **captions, hook and key moments** | nothing (it replaces the plain subtitles) |
+
+Looks (Persian-safe: our Ray/Vazirmatn fonts, zero letter-spacing, right-to-left): captions `loki` (calm white, the spoken
+word lights up), hook `noor` (gold glow), key moment `elio` (large white). More are one CSS file away
+(`tools/tscaps/templates/`, see `NOTICE.md`; 41 were tried on the Persian sample).
+
+**Safety.** A reel never depends on it: no Node, no Chrome, a failed engine run or a failed composite all fall back to
+the style's own ASS text (tested). `TSCAPS_OVERLAY=0` switches it off; `TSCAPS_CHROME` points at a browser; the
+Dockerfile installs the tool and sets `TSCAPS_CHROME=/usr/bin/chromium`.
+
+**Not verified:** Debian's Chromium in the container (alpha VP9 encoding through WebCodecs). If it cannot encode, the
+fall-back applies and nothing breaks, but captions would look as before.
+
+**Not done:** non-talking videos (the Remotion product reel). Its scene titles are designed light cards; a white-text
+overlay does not belong on them, and recolouring them is a design pass of its own. Text behind the speaker is also not
+used yet.
