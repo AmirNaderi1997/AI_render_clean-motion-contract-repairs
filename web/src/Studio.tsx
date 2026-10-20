@@ -130,6 +130,7 @@ export default function Studio() {
   const styles = current?.state?.styles || [];
   const sourceAttachment = current?.state?.attachment_ids?.[0];
   const messages = conversation?.messages || [];
+  const lastUserMessage = [...messages].reverse().find(message => message.role === 'user');
   const processing = isProcessing({ sending, messages, events, project: current, now });
   const items = React.useMemo(() => buildTimeline({ messages, events, projects, pending, processing }), [messages, events, projects, pending, processing]);
   const step = activeStep(items);
@@ -270,6 +271,9 @@ export default function Studio() {
             retryHref={current?.status === "error" ? advancedEditorUrl(current) || undefined : undefined}
             onChoice={choice => void send(choice)} onRetryMessage={retryMessage}/>
           {current && (["talking", "localize"].includes(current.engine) || (current.engine === "motion" && current.state?.confirmed)) && ["error", "canceled", "paused"].includes(current.status) ? <button className="btn btn-secondary" disabled={resuming} onClick={() => void resume()}><Icon name="play" size={14}/>{resuming ? "در حال ادامه…" : "ادامه از مرحلهٔ متوقف‌شده"}</button> : null}
+          {!current && !processing && !pending && lastUserMessage && messages[messages.length - 1]?.content.startsWith('عملیات متوقف شد:') ? <button className="btn btn-secondary" disabled={sending} onClick={() => {
+            if (window.confirm('هنوز پروژه‌ای ساخته نشده است. درخواست اصلی با همان فایل‌ها دوباره بررسی شود؟ این کار ممکن است هزینهٔ API داشته باشد؛ تولید نهایی همچنان نیازمند تأیید برنامه است.')) void send(undefined, { text: lastUserMessage.content, ids: lastUserMessage.attachments || [] });
+          }}><Icon name="play" size={14}/>تلاش مجدد درخواست</button> : null}
           {styles.length > 0 && current?.status === "awaiting_input" ? <div className="action-card"><h3>Choose a style</h3><p>How should this video feel?</p><div className="style-options">{styles.map((style: any) => <button key={style.id || style.key} onClick={() => void send(`سبک ${style.id || style.key}`)}><b className="bidi" dir="auto">{style.label || style.title || style.name}</b><small className="bidi" dir="auto">{style.description || "Talking Reel style"}</small></button>)}</div></div> : null}
           {pendingAction ? <div className="action-card"><h3>Approve this plan?</h3><p>EditorGPT will create the media, voice-over and final render using the plan above.</p>{pendingAction.estimated_cost_usd != null ? <small className="muted-text">Recorded estimate: ${pendingAction.estimated_cost_usd.toFixed(4)}</small> : null}
             <div className="action-buttons"><button className="btn" onClick={() => void api.confirmStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "approve the plan")))}>Approve and continue</button><button className="btn btn-secondary" onClick={() => void api.cancelStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "cancel the plan")))}>Cancel</button></div></div> : null}
