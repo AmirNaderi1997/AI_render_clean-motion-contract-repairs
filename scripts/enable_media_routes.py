@@ -24,6 +24,9 @@ def configure(apply=False):
             'endpoint':capability,'max_retries':0,'automatic_fallback':False,'specialized_fallback':False,
             'timeout':max(row.get('timeout',0),{'image':150,'video':300,'speech':200,'transcription':200,'music':200}[capability]),
             'configuration_note':'Enabled by administrator; one paid attempt only. Unverified contracts remain blocked. Local Whisper fallback for unavailable STT.'}
+        if capability=='transcription':
+            changes[key].update(provider_priority=['elevenlabs_own_vercel','jarvis_elevenlabs','sarovi_elevenlabs','whisper_local'],
+                configuration_note='Own ElevenLabs via Vercel first; then registered verified Jarvis/Sarovi ElevenLabs models; local Whisper last. No Scribe IDs currently registered for gateway fallbacks.')
     if apply:
         folder=Path(settings.JOBS_DIR)/'ai_gateway'/'backups';folder.mkdir(parents=True,exist_ok=True)
         backup=folder/('media_routes_'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')+'.json')

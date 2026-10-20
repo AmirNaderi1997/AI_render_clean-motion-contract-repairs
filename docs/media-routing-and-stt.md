@@ -7,8 +7,9 @@ a settings backup under `JOBS_DIR/ai_gateway/backups`. No inference is performed
 Untested models/contracts are not marked verified by enabling a route. Video,
 music and image-edit contracts that lack a verified adapter remain blocked;
 an enabled configuration is not proof of supported generation. The current
-catalog contains no Scribe ID, so STT uses the configured local fallback until
-a verified gateway STT model is registered. No invented Scribe ID or `auto`.
+catalog contains no Scribe ID for Jarvis/Sarovi; those fallback slots are skipped
+until a verified gateway STT model is registered. Own ElevenLabs through Vercel
+remains first. No invented Scribe ID, substitution with AVEVOICE or `auto`.
 
 Direct fallbacks now include a separate Local Whisper setting (enabled, model,
 low-confidence text improvement), independent of direct text-provider keys.
