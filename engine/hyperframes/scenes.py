@@ -121,7 +121,7 @@ FONT_FILES = {
 
 
 def scene_markup(beat_id: str, start: float, duration: float, html: str) -> str:
-    return (f'<section id="{beat_id}" class="custom-beat clip" data-start="{start:.3f}" data-duration="{duration:.3f}" '
+    return (f'<section id="{beat_id}" class="custom-beat clip" data-composition-id="{beat_id}-scene" data-start="{start:.3f}" data-duration="{duration:.3f}" '
             f'data-track-index="2" dir="rtl">{html}</section>')
 
 
