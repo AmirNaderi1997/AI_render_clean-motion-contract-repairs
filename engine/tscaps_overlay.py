@@ -195,12 +195,18 @@ def reel_cues(plan, *, captions: bool = True, hook: bool = True, moments: bool =
     elif getattr(plan, "hook", None):
         hook_end = float(plan.hook.get("end", 0.0))
     if captions or moments:
+        since_moment = 0
         for index, c in enumerate(plan.captions):
             if c["end"] <= hook_end:
                 continue
             start = max(float(c["start"]), hook_end)
             end = float(c["end"])
-            is_moment = moments and moment_every and index > 0 and index % moment_every == 0 and c.get("key")
+            since_moment += 1
+            # a key moment needs something worth enlarging: not a connective like «که»
+            is_moment = (moments and moment_every and index > 0 and since_moment >= moment_every
+                         and len((c.get("key") or "").strip()) >= 5)
+            if is_moment:
+                since_moment = 0
             if is_moment:
                 cues.append(Cue("moment", start, end, words_for(c["key"], start, end, reveal=min(1.0, (end - start) * 0.6))))
             elif captions:
