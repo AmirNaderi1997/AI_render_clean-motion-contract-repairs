@@ -8,6 +8,11 @@ WORKDIR /motion
 COPY remotion/package*.json ./
 RUN npm ci
 
+FROM node:22-bookworm-slim AS tscaps
+WORKDIR /tscaps
+COPY tools/tscaps/package*.json ./
+RUN npm ci
+
 FROM python:3.12-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,6 +34,10 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --from=motion /motion/node_modules /app/remotion/node_modules
 COPY remotion/ remotion/
 ENV REMOTION_BROWSER_EXECUTABLE=/usr/bin/chromium REMOTION_CONCURRENCY=2
+
+COPY tools/tscaps/ tools/tscaps/
+COPY --from=tscaps /tscaps/node_modules /app/tools/tscaps/node_modules
+ENV TSCAPS_CHROME=/usr/bin/chromium
 
 COPY app/ app/
 COPY brain/ brain/

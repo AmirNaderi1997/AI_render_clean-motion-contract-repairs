@@ -397,7 +397,7 @@ def hook_line(hook: str, highlight: list[str]) -> str:
 
 
 def build_ass(plan: ReelPlan, hook: str, highlight: list[str], name: str, title: str,
-              fonts_dir: Optional[Path]) -> str:
+              fonts_dir: Optional[Path], *, moments: bool = True) -> str:
     end = max(0.05, plan.duration - 0.02)
     hook_size = int(H * 0.041)
     # Wrap a long hook to two lines at the space nearest the middle.
@@ -457,7 +457,8 @@ def build_ass(plan: ReelPlan, hook: str, highlight: list[str], name: str, title:
                           f"{{\\an8\\pos({W / 2:.0f},{y + 6:.1f})}}{_esc(title)}")
     # Emphasis moments belong to the phrase alone: every other overlay is off.
     events = _cut_windows(events, [(n["start"], n["end"]) for n in plan.notes])
-    events += emphasis_events(plan.notes, fonts_dir)
+    if moments:   # False when the Tscaps layer draws the emphasis phrases
+        events += emphasis_events(plan.notes, fonts_dir)
     for t in plan.flashes:
         # A short warm glow across the cut, not a solid wash.
         events.append(_rounded_rect(6, max(0.0, t - 0.1), t + 0.28, 0, 0, W, H, FLASH_COLOUR, 0,
@@ -813,8 +814,9 @@ def render_outro(work_dir: Path, cta: str, fps: str, fonts: Path, *, logo_enable
 def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list[str], name: str, title: str,
            work_dir: Path, music: Optional[Path] = None, cta: str = "",
            render_settings: Optional[dict] = None,
-           logo_path: Optional[Path] = None,
+           logo_path: Optional[Path] = None, overlay: Optional[Path] = None,
            on_progress: Optional[Callable[[int], None]] = None) -> Path:
+    """`overlay`: optional transparent WebM (engine/tscaps_overlay.py) that draws the key moments above the ASS layer."""
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
@@ -827,7 +829,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     fonts = fonts_bundle(work_dir)
     ass = work_dir / "reel.ass"
     settings = render_settings or {}
-    ass_text = build_ass(plan, hook, highlight, name, title, fonts)
+    ass_text = build_ass(plan, hook, highlight, name, title, fonts, moments=overlay is None)
     title_color = str(settings.get("title_color") or YELLOW)
     if re.fullmatch(r"#[0-9A-Fa-f]{6}", title_color):
         old, new = _colour(YELLOW), _colour(title_color)
@@ -901,10 +903,18 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     emphasis = (f"gblur=sigma=9:enable='{windows}',hue=s=0:enable='{windows}',"
                 f"eq=brightness=-0.07:contrast=1.05:enable='{windows}'," if windows else "")
     vf.append(f"[cv]{emphasis}null[cvx]")
-    vf.append(f"[cvx][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},"
-              f"format=yuv420p[{content}]")
+    if overlay:
+        vf.append(f"[cvx][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},format=yuv420p[vbase]")
+        vf.append(f"[{n + 1}:v]format=yuva420p,setpts=PTS-STARTPTS[tso]")
+        vf.append(f"[vbase][tso]overlay=0:0:format=auto:eof_action=pass,format=yuv420p[{content}]")
+    else:
+        vf.append(f"[cvx][vig]overlay=0:0:format=auto:shortest=1,{subtitles_filter(ass, fonts)},"
+                  f"format=yuv420p[{content}]")
     inputs += ["-loop", "1", "-framerate", fps, "-i", str(vignette)]
     next_input = n + 1
+    if overlay:
+        inputs += ["-c:v", "libvpx-vp9", "-i", str(overlay)]
+        next_input += 1
     if outro:
         inputs += ["-i", str(outro)]
         vf.append(f"[{next_input}:v]setsar=1,format=yuv420p[vend]")
@@ -949,3 +959,19 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     if proc.wait() != 0:
         raise RuntimeError(f"ffmpeg failed: {ffmpeg_error(''.join(log_tail))}")
     return out
+
+
+# --- Tscaps layer for key moments (additive: without it the output is the built-in ASS rendering) -----------------
+
+render_plain = render
+
+
+def render(video: Path, plan: ReelPlan, out: Path, **kwargs) -> Path:  # noqa: F811
+    """Emphasis phrases are drawn by the Tscaps engine; the pinned hook, name and Ray captions stay as they are."""
+    if kwargs.get("overlay") is not None:
+        return render_plain(video, plan, out, **kwargs)
+    import dataclasses
+    from engine import tscaps_overlay as tso
+    work_dir = kwargs.pop("work_dir")
+    return tso.render_with_overlay(lambda v, p, o, **k: render_plain(v, p, o, **kwargs, **k), video, plan, out, work_dir=work_dir,
+                                   cues=tso.note_cues(plan.notes), strip=lambda p: p, fps=int(RENDER_FPS), duration=plan.duration)
