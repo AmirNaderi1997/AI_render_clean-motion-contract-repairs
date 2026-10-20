@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildTimeline, isProcessing, renderView, stepDetails, thinkingLabel } from "../src/studio/model.ts";
+import { normalizeChoices, friendlyFailure, buildTimeline, isProcessing, renderView, stepDetails, thinkingLabel } from "../src/studio/model.ts";
 
 const T0 = Date.parse("2026-10-20T10:00:00Z");
 const at = s => new Date(T0 + s * 1000).toISOString();
@@ -85,4 +85,23 @@ test("processing flags", () => {
   assert.equal(isProcessing({ sending: false, messages: [msg(1, "user", 0), msg(2, "assistant", 1)], events: [], now: T0 + 2000 }), false);
   assert.equal(thinkingLabel([ev(1, "message.started", 1)], m), "Understanding your request");
   assert.equal(thinkingLabel([], m), "Thinking");
+});
+
+test("object choices from the backend become labelled answers, never [object Object]", () => {
+  const styles = [{ id: "talking_1", label: "صحبتی ۱" }, { id: "talking_2", label: "صحبتی ۲" }];
+  assert.deepEqual(normalizeChoices(styles, "talking_style"), [{ label: "صحبتی ۱", value: "سبک talking_1" }, { label: "صحبتی ۲", value: "سبک talking_2" }]);
+  assert.deepEqual(normalizeChoices(["a", "b"]), [{ label: "a", value: "a" }, { label: "b", value: "b" }]);
+  assert.deepEqual(normalizeChoices(undefined), []);
+});
+
+test("timeouts get a plain-language summary", () => {
+  assert.match(friendlyFailure("LM API ReadTimeout"), /too long/);
+  assert.equal(friendlyFailure("some other failure"), "some other failure");
+});
+
+test("a non-render failure is shown once, as a failed step, not as a render card", () => {
+  const events = [ev(1, "tool.progress", 1, { project_id: "p1", stage: "editing text", progress: 30 }), ev(2, "tool.failed", 2, { project_id: "p1", stage: "", message: "LM API ReadTimeout" })];
+  const items = buildTimeline({ messages: [msg(1, "user", 0)], events, projects: [project({ last_observed: { status: "error", message: "LM API ReadTimeout" } }, "error")], processing: false });
+  assert.equal(items.filter(i => i.kind === "render").length, 0);
+  assert.equal(items.find(i => i.kind === "activity").steps.at(-1).status, "failed");
 });

@@ -33,9 +33,9 @@ function Attachments({ conversationId, ids, local }: { conversationId?: string; 
   return <div className="msg-files">{ids.map((id, index) => <RemoteAttachment key={id} conversationId={conversationId} id={id} index={index}/>)}</div>;
 }
 
-export function Thread({ items, conversation, projects, localFiles, thinking, compactRender, onOpenPreview, onEditAgain, onRetry, onChoice, onRetryMessage, sourceUrl }: {
+export function Thread({ items, conversation, projects, localFiles, thinking, compactRender, retryHref, onOpenPreview, onEditAgain, onChoice, onRetryMessage, sourceUrl }: {
   items: TimelineItem[]; conversation: StudioConversation | null; projects: StudioProject[]; localFiles?: LocalFileInfo[];
-  thinking?: string; compactRender?: boolean; onOpenPreview: (projectId: string) => void; onEditAgain: (projectId: string) => void; onRetry: () => void;
+  thinking?: string; compactRender?: boolean; retryHref?: string; onOpenPreview: (projectId: string) => void; onEditAgain: (projectId: string) => void;
   onChoice: (choice: string) => void; onRetryMessage: () => void; sourceUrl?: string;
 }) {
   return <ol className="thread" aria-label="Conversation">
@@ -49,12 +49,12 @@ export function Thread({ items, conversation, projects, localFiles, thinking, co
             </div>
           : <div className="assistant"><span className="assistant-mark" aria-hidden="true"><Icon name="spark" size={13}/></span><div className="assistant-body"><RichText text={item.content}/></div></div>}
       </li>;
-      if (item.kind === "activity") return <li key={item.id} className="thread-aux"><ActivityBlock steps={item.steps} live={item.live}/></li>;
+      if (item.kind === "activity") return <li key={item.id} className="thread-aux"><ActivityBlock steps={item.steps} live={item.live} retryHref={retryHref}/></li>;
       if (item.kind === "render") {
         const project = projects.find(p => p.id === item.projectId);
-        return project ? <li key={item.id} className="thread-aux"><RenderCard project={project} sourceUrl={sourceUrl} startedAt={item.startedAt} compact={compactRender} onOpenPreview={() => onOpenPreview(project.id)} onEditAgain={() => onEditAgain(project.id)} onRetry={onRetry}/></li> : null;
+        return project ? <li key={item.id} className="thread-aux"><RenderCard project={project} sourceUrl={sourceUrl} startedAt={item.startedAt} compact={compactRender} onOpenPreview={() => onOpenPreview(project.id)} onEditAgain={() => onEditAgain(project.id)} retryHref={retryHref}/></li> : null;
       }
-      if (item.kind === "question") return item.choices.length ? <li key={item.id} className="thread-aux"><div className="choices" role="group" aria-label={item.question || "Quick replies"}>{item.choices.map(choice => <button key={choice} className="chip" onClick={() => onChoice(choice)}>{choice}</button>)}</div></li> : null;
+      if (item.kind === "question") return item.choices.length && !item.style ? <li key={item.id} className="thread-aux"><div className="choices" role="group" aria-label={item.question || "Quick replies"}>{item.choices.map(choice => <button key={choice.value} className="chip" onClick={() => onChoice(choice.value)}>{choice.label}</button>)}</div></li> : null;
       return null;
     })}
     {thinking ? <li className="thread-aux"><ThinkingRow label={thinking}/></li> : null}

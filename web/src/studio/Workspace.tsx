@@ -83,9 +83,15 @@ function StoryboardEditor({ project, onSaved }: { project: StudioProject; onSave
   </section>;
 }
 
+/** The existing specialist editor for this project, where failed runs can be re-analyzed. */
+export function advancedEditorUrl(project?: StudioProject): string {
+  if (!project) return "";
+  return project.engine === "talking" ? `/talking?job=${project.external_ref}` : project.engine === "localize" ? `/localize?project=${project.external_ref}` : project.external_ref ? `/jobs/${project.external_ref}/render` : "";
+}
+
 function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () => void }) {
   if (!project) return <Empty icon="advanced" title="Nothing to edit yet" text="Once EditorGPT creates a project, the controls that apply to it appear here."/>;
-  const advanced = project.engine === "talking" ? `/talking?job=${project.external_ref}` : project.engine === "localize" ? `/localize?project=${project.external_ref}` : project.external_ref ? `/jobs/${project.external_ref}/render` : "";
+  const advanced = advancedEditorUrl(project);
   return <div className="ws-edit">
     <header><h2>Refine this video</h2><p>Ask for caption, pacing, colour or audio changes in the chat. Controls appear here when the current engine supports them.</p></header>
     {project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}

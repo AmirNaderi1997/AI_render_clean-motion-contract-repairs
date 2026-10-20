@@ -3,7 +3,8 @@ import { api, StudioProject } from "../api";
 import { AuthenticatedMedia } from "../AuthenticatedMedia";
 import { Icon } from "../components/Icon";
 import { formatDuration } from "../format";
-import { renderView } from "./model";
+import { Link } from "react-router-dom";
+import { friendlyFailure, renderView } from "./model";
 
 function useElapsed(startedAt: number, running: boolean) {
   const [now, setNow] = React.useState(() => Date.now());
@@ -19,11 +20,11 @@ function useElapsed(startedAt: number, running: boolean) {
  * One inline card per project. It updates in place while rendering
  * (stage, percentage, elapsed time) and becomes the finished player: no new row per percent.
  */
-export function RenderCard({ project, sourceUrl, startedAt, compact, onOpenPreview, onEditAgain, onRetry }: {
+export function RenderCard({ project, sourceUrl, startedAt, compact, onOpenPreview, onEditAgain, retryHref }: {
   project: StudioProject; sourceUrl?: string; startedAt: number;
   /** Desktop: the video lives in the Preview tab, so the chat shows only the status card. */
   compact?: boolean;
-  onOpenPreview: () => void; onEditAgain: () => void; onRetry: () => void;
+  onOpenPreview: () => void; onEditAgain: () => void; retryHref?: string;
 }) {
   const view = renderView(project);
   const output = view.output ? `${api.studioOutputUrl(project.id)}?version=${encodeURIComponent(view.output)}` : undefined;
@@ -45,7 +46,7 @@ export function RenderCard({ project, sourceUrl, startedAt, compact, onOpenPrevi
         <div className="rc-overlay">
           {view.phase === "failed" ? <Icon name="alert" size={28}/> : <span className="spinner rc-spinner" aria-hidden="true"/>}
           {view.phase !== "rendering" ? <strong>{view.stageLabel}</strong> : null}
-          {view.phase === "failed" && view.message ? <p dir="auto" className="bidi wrap-safe">{view.message}</p> : null}
+          {view.phase === "failed" ? <p dir="auto" className="bidi wrap-safe">{friendlyFailure(view.message)}</p> : null}
           {busy && typeof percent === "number" ? <span className="rc-pct" aria-hidden="true">{percent}%</span> : null}
         </div>
       </>}
@@ -61,6 +62,6 @@ export function RenderCard({ project, sourceUrl, startedAt, compact, onOpenPrevi
       <button className="btn btn-sm btn-secondary" onClick={onOpenPreview}><Icon name="eye" size={15}/>Open in Preview</button>
       <button className="btn btn-sm btn-ghost" onClick={onEditAgain}><Icon name="edit" size={15}/>Edit again</button>
     </div> : null}
-    {view.phase === "failed" ? <div className="rc-actions"><button className="btn btn-sm btn-secondary" onClick={onRetry}><Icon name="refresh" size={15}/>Retry in chat</button></div> : null}
+    {view.phase === "failed" && retryHref ? <div className="rc-actions"><Link className="btn btn-sm btn-secondary" to={retryHref}><Icon name="refresh" size={15}/>Open editor to retry</Link></div> : null}
   </article>;
 }

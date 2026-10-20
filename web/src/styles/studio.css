@@ -210,3 +210,5 @@ button.act-row:hover { color: var(--text-2); }
 }
 
 .render-card[data-compact] { width: min(100%, 420px); }
+
+.act-failure { display: grid; gap: 8px; justify-items: start; margin: 2px 0 6px 24px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--error-soft); color: var(--text); font-size: 13px; }

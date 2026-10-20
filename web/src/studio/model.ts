@@ -28,7 +28,34 @@ export type TimelineItem =
   | { kind: "message"; id: string; role: "user" | "assistant"; content: string; attachments: string[]; createdAt: number; pending?: boolean; failed?: boolean }
   | { kind: "activity"; id: string; steps: ActivityStep[]; live: boolean }
   | { kind: "render"; id: string; projectId: string; startedAt: number }
-  | { kind: "question"; id: string; question: string; choices: string[]; seq: number };
+  | { kind: "question"; id: string; question: string; choices: QuestionChoice[]; seq: number; style: boolean };
+
+export interface QuestionChoice { label: string; /** What to send as the user's answer. */ value: string }
+/** Backend choices are either plain strings or { id, label } objects (talking styles). */
+export function normalizeChoices(raw: unknown, kind?: string): QuestionChoice[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((choice): QuestionChoice[] => {
+    if (typeof choice === "string") return [{ label: choice, value: choice }];
+    if (choice && typeof choice === "object") {
+      const item = choice as Record<string, unknown>;
+      const id = String(item.id ?? item.key ?? "");
+      const label = String(item.label ?? item.title ?? item.name ?? id);
+      if (!label) return [];
+      // Style answers are sent in the form the orchestrator already parses.
+      return [{ label, value: kind === "talking_style" && id ? `سبک ${id}` : label }];
+    }
+    return [];
+  });
+}
+
+/** Plain-language summary of a backend failure message; the raw text stays available in the details. */
+export function friendlyFailure(message: string | undefined): string {
+  const text = (message || "").trim();
+  if (!text) return "Something went wrong with this step.";
+  if (/timeout|timed out|ReadTimeout/i.test(text)) return "The AI service took too long to respond. This is usually temporary.";
+  if (/LM API|gateway|HTTP 5\d\d/i.test(text)) return "The AI service had a problem. This is usually temporary.";
+  return text;
+}
 
 export interface PendingMessage { id: string; content: string; attachments: string[]; createdAt: number; failed?: boolean }
 
@@ -151,8 +178,8 @@ export function buildTimeline({ messages, events, projects, pending, processing 
     const projectId = String(event.data.project_id || "");
     if (event.type === "question.required") {
       flush();
-      const choices = Array.isArray(event.data.choices) ? event.data.choices.map(String) : [];
-      items.push({ kind: "question", id: `q-${event.seq}`, question: String(event.data.question || ""), choices, seq: event.seq });
+      const kind = String(event.data.kind || "");
+      items.push({ kind: "question", id: `q-${event.seq}`, question: String(event.data.question || ""), choices: normalizeChoices(event.data.choices, kind), seq: event.seq, style: kind === "talking_style" });
       continue;
     }
     const renderish = event.type.startsWith("render.") || (["tool.progress", "tool.failed"].includes(event.type) && isRenderStage(event.data.stage));
@@ -188,7 +215,8 @@ export function buildTimeline({ messages, events, projects, pending, processing 
   for (const project of projects) {
     if (placedRender.has(project.id)) continue;
     const view = renderView(project);
-    if (view.phase === "idle" || view.phase === "queued") continue;
+    // A failure with no render stage is already shown as a failed step; don't relabel it "rendering".
+    if (view.phase === "idle" || view.phase === "queued" || view.phase === "failed") continue;
     items.push({ kind: "render", id: `r-${project.id}`, projectId: project.id, startedAt: parseTime(project.updated_at) });
   }
 

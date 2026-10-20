@@ -9,7 +9,7 @@ import { displayTitle, parseTime, relativeTime } from "./format";
 import { friendlyError } from "./ui";
 import { Composer, PendingFile } from "./studio/Composer";
 import { Thread, LocalFileInfo } from "./studio/Thread";
-import { Workspace, WorkspaceTab } from "./studio/Workspace";
+import { Workspace, WorkspaceTab, advancedEditorUrl } from "./studio/Workspace";
 import { PendingMessage, activeStep, buildTimeline, isProcessing, renderView, thinkingLabel } from "./studio/model";
 import { suggestions, templatePrompts } from "./templateData";
 
@@ -257,7 +257,7 @@ export default function Studio() {
           {!conversation && !pending ? <div className="thread-loading" role="status" aria-label="Loading conversation"><span className="skeleton"/><span className="skeleton"/><span className="skeleton"/></div> : null}
           <Thread items={items} conversation={conversation} projects={projects} localFiles={localFiles} thinking={thinking} sourceUrl={sourceUrl} compactRender={layout === "desktop" && desktopOpen}
             onOpenPreview={id => openWorkspace("preview", id)} onEditAgain={editAgain}
-            onRetry={() => { setText("Please retry the last step."); textareaRef.current?.focus(); }}
+            retryHref={current?.status === "error" ? advancedEditorUrl(current) || undefined : undefined}
             onChoice={choice => void send(choice)} onRetryMessage={retryMessage}/>
           {styles.length > 0 && current?.status === "awaiting_input" ? <div className="action-card"><h3>Choose a style</h3><p>How should this video feel?</p><div className="style-options">{styles.map((style: any) => <button key={style.id || style.key} onClick={() => void send(`سبک ${style.id || style.key}`)}><b className="bidi" dir="auto">{style.label || style.title || style.name}</b><small className="bidi" dir="auto">{style.description || "Talking Reel style"}</small></button>)}</div></div> : null}
           {pendingAction ? <div className="action-card"><h3>Approve this plan?</h3><p>EditorGPT will create the media, voice-over and final render using the plan above.</p>{pendingAction.estimated_cost_usd != null ? <small className="muted-text">Recorded estimate: ${pendingAction.estimated_cost_usd.toFixed(4)}</small> : null}
