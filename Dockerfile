@@ -11,7 +11,9 @@ RUN npm ci
 FROM node:22-bookworm-slim AS tscaps
 WORKDIR /tscaps
 COPY tools/tscaps/package*.json ./
-RUN npm ci --ignore-scripts --no-audit --no-fund && npm cache clean --force
+# Captions run in Chromium, not the native Node ONNX backend.
+RUN npm ci --ignore-scripts --no-audit --no-fund && npm cache clean --force \
+    && node -e "require('node:fs').rmSync('node_modules/onnxruntime-node/bin', {recursive:true, force:true})"
 
 FROM python:3.12-slim AS runtime
 
