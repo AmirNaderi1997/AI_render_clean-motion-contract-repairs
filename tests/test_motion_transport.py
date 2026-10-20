@@ -51,3 +51,35 @@ def test_missing_or_insecure_relay_fails_closed(monkeypatch):
     for url in ['', 'http://relay.vercel.app/api/motion','https://api.motion.so/api/motion']:
         monkeypatch.setattr(settings,'MOTION_PROXY_URL',url)
         with pytest.raises(ValueError):relay_url()
+
+
+def test_download_assembles_validated_ranges_without_direct_fallback(monkeypatch,tmp_path):
+    from brain import motion_so
+    import engine.probe
+    content=b'x'*1048576+b'end'
+    requests=[]
+    def handler(request):
+        requests.append(request)
+        start=int(request.headers['range'].split('=')[1].split('-')[0])
+        chunk=content[start:start+1048576]
+        return httpx.Response(206,content=chunk,headers={
+            'content-range':f'bytes {start}-{start+len(chunk)-1}/{len(content)}','etag':'stable'})
+    monkeypatch.setattr(motion_so,'client',lambda:httpx.Client(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(engine.probe,'video_stream',lambda _: {})
+    target=tmp_path/'output.mp4'
+    motion_so._download('https://storage.googleapis.com/bucket/file',target)
+    assert target.read_bytes()==content and len(requests)==2
+    assert requests[1].headers['if-range']=='stable'
+    assert not target.with_suffix('.part').exists()
+
+
+def test_invalid_storage_range_leaves_no_partial_output(monkeypatch,tmp_path):
+    from brain import motion_so
+    calls=[]
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200,content=b'unbounded')
+    monkeypatch.setattr(motion_so,'client',lambda:httpx.Client(transport=httpx.MockTransport(handler)))
+    target=tmp_path/'output.mp4'
+    with pytest.raises(ValueError,match='ranged'):motion_so._download('https://storage.googleapis.com/bucket/file',target)
+    assert len(calls)==1 and not target.exists() and not target.with_suffix('.part').exists()
