@@ -51,6 +51,7 @@ assets/effect_previews/
 
 # Docker
 .lmapi_key
+.motion_key
 backups/
 nginx/certs/
 /certs/

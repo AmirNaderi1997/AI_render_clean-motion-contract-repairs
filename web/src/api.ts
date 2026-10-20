@@ -981,6 +981,15 @@ export const api = {
       body: JSON.stringify({ ...(provider ? { provider } : {}), retry_confirmed: retryConfirmed }),
     }));
   },
+  async motionScenes(id: string): Promise<any> {
+    return j(await authFetch(`${BASE}/jobs/${id}/motion-scenes`));
+  },
+  async createMotionScene(id:string, body:unknown):Promise<any> {
+    return j(await authFetch(`${BASE}/jobs/${id}/motion-scenes`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}));
+  },
+  async placeMotionScene(id:string,key:string,at:number,duration:number,sentenceIndex?:number):Promise<any> {
+    return j(await authFetch(`${BASE}/jobs/${id}/motion-scenes/${key}/timeline`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({at,duration,sentence_index:sentenceIndex})}));
+  },
   async getStoryboardStatus(id: string): Promise<{ state: string; scenes_done: number; scenes_total: number; cost_so_far: number | null; error?: string; warnings?: string[] } | null> {
     return j(await authFetch(`${BASE}/jobs/${id}/storyboard/status`));
   },

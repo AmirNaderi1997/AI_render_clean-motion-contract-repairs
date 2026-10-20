@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     LMAPI_BASE_URL: str = "https://lmapi.rafiei.co/v1"
     LMAPI_API_KEY: str = ""
     LMAPI_API_KEY_FILE: str = ".lmapi_key"
+    MOTION_API_KEY_FILE: str = ".motion_key"
+    MOTION_ENABLED: bool = False
     AI_ADMIN_EMAILS: str = ""
     AI_ADMIN_USER_IDS: str = ""
     AI_PROVIDER_TIMEOUT_SECONDS: int = 300

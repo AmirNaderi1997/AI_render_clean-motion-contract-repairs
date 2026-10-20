@@ -9,6 +9,7 @@ __pycache__/
 /certs/
 .jwt_secret
 .lmapi_key
+.motion_key
 backups/
 .DS_Store
 Claude outputs/

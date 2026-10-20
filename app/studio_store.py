@@ -328,11 +328,19 @@ class Repository:
             if row is None: raise KeyError(action_id)
             row.update(status=status, updated_at=iso(now())); _write(data); return copy.deepcopy(row)
 
-    async def emit(self, conversation_id: str, event_type: str, data_value: dict) -> dict:
+    async def emit(self, conversation_id: str, event_type: str, data_value: dict, *, source_event_id: str | None = None) -> dict:
         created = now()
+        if source_event_id:data_value={**data_value,'source_event_id':source_event_id}
         if DB_AVAILABLE:
             assert AsyncSessionLocal is not None
             async with AsyncSessionLocal() as db:
+                if db.bind.dialect.name=='postgresql':
+                    from sqlalchemy import text
+                    await db.execute(text('SELECT pg_advisory_xact_lock(hashtext(:cid))'),{'cid':conversation_id})
+                if source_event_id:
+                    old=await db.scalar(select(StudioEvent).where(StudioEvent.conversation_id==conversation_id,
+                        StudioEvent.data['source_event_id'].as_string()==source_event_id))
+                    if old:return {'id':old.id,'seq':old.seq,'type':old.event_type,'data':old.data,'created_at':iso(old.created_at)}
                 seq = int((await db.scalar(select(func.coalesce(func.max(StudioEvent.seq), 0)).where(
                     StudioEvent.conversation_id == conversation_id))) or 0) + 1
                 row = StudioEvent(conversation_id=conversation_id, seq=seq, event_type=event_type,
@@ -341,6 +349,9 @@ class Repository:
                 return {"id": row.id, "seq": seq, "type": event_type, "data": data_value, "created_at": iso(created)}
         with _lock:
             store = _read(); events = store["events"].setdefault(conversation_id, [])
+            if source_event_id:
+                old=next((e for e in events if e['data'].get('source_event_id')==source_event_id),None)
+                if old:return copy.deepcopy(old)
             value = {"id": len(events) + 1, "seq": len(events) + 1, "type": event_type,
                      "data": data_value, "created_at": iso(created)}
             events.append(value); _write(store); return copy.deepcopy(value)

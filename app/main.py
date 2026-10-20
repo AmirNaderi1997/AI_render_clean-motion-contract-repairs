@@ -182,6 +182,8 @@ app.include_router(style.router)
 app.include_router(style.legacy_router)
 app.include_router(content.router)
 app.include_router(content.legacy_router)
+from .routers import motion_so as motion_so_routes
+app.include_router(motion_so_routes.router)
 app.include_router(denoise.router)
 app.include_router(premiere.router)
 app.include_router(qc.router)

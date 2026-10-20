@@ -28,6 +28,16 @@ class Scene:
     # from an LLM or a public API request.
     source_asset: str = ""
     source_asset_index: int | None = None
+    motion_engine: Literal['default','motion_so'] = 'default'
+    motion_effort: Literal['light','medium','high'] = 'light'
+    motion_background: str = '#101010'
+
+    def __post_init__(self):
+        import re
+        if self.motion_engine not in {'default','motion_so'} or self.motion_effort not in {'light','medium','high'}:
+            raise ValueError('Unsupported motion engine or effort')
+        if not re.fullmatch(r'#[0-9a-fA-F]{6}',self.motion_background):
+            raise ValueError('Motion background must be a hex color')
 
     def to_dict(self) -> dict:
         return asdict(self)

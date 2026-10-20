@@ -5,6 +5,7 @@ import { AuthenticatedMedia } from "../AuthenticatedMedia";
 import { Icon } from "../components/Icon";
 import { displayTitle } from "../format";
 import { renderView } from "./model";
+import {MotionScenes} from './MotionScenes';
 
 export type WorkspaceTab = "preview" | "edit";
 
@@ -75,6 +76,8 @@ function StoryboardEditor({ project, onSaved }: { project: StudioProject; onSave
     {scenes.map((scene, index) => <details className="scene" key={scene.index ?? index}>
       <summary><span className="scene-n">{index + 1}</span><b className="wrap-safe bidi" dir="auto">{scene.text_overlay || `Scene ${index + 1}`}</b><small>{scene.duration_s}s</small><Icon name="chevronDown" size={16} className="scene-chev"/></summary>
       <div className="scene-body">
+        <div className="field"><label htmlFor={`s-engine-${index}`}>Motion tool</label><select id={`s-engine-${index}`} className="input" value={scene.motion_engine || 'default'} onChange={event=>update(index,{motion_engine:event.target.value})}><option value="default">Existing engine</option><option value="motion_so">Motion.so · uses account credits</option></select></div>
+        {scene.motion_engine==='motion_so' ? <><p className="eg-muted">Silent motion clip. Captions and narration stay in EditorGPT. References are sent to Motion only after approval. Exact credit cost is unknown; no automatic retry.</p><div className="field"><label htmlFor={`s-visual-${index}`}>Visual direction</label><textarea id={`s-visual-${index}`} className="input" value={scene.media_prompt || scene.description || ''} onChange={event=>update(index,{media_prompt:event.target.value})}/></div><div className="field"><label htmlFor={`s-effort-${index}`}>Motion effort</label><select id={`s-effort-${index}`} className="input" value={scene.motion_effort || 'light'} onChange={event=>update(index,{motion_effort:event.target.value})}>{['light','medium','high'].map(e=><option key={e} value={e}>{e}</option>)}</select></div><div className="field"><label htmlFor={`s-bg-${index}`}>Solid background</label><input id={`s-bg-${index}`} type="color" value={scene.motion_background || '#101010'} onChange={event=>update(index,{motion_background:event.target.value})}/></div></> : null}
         <div className="field"><label htmlFor={`s-text-${index}`}>On-screen text</label><input id={`s-text-${index}`} className="input bidi" dir="auto" value={scene.text_overlay || ""} onChange={event => update(index, { text_overlay: event.target.value })}/></div>
         <div className="field"><label htmlFor={`s-nar-${index}`}>Narration</label><textarea id={`s-nar-${index}`} className="input bidi" dir="auto" rows={3} value={scene.narration_text || ""} onChange={event => update(index, { narration_text: event.target.value })}/></div>
         <div className="field"><label htmlFor={`s-dur-${index}`}>Duration (seconds)</label><input id={`s-dur-${index}`} className="input" type="number" min="0.5" max="30" step="0.5" value={scene.duration_s} onChange={event => update(index, { duration_s: Number(event.target.value) })}/></div>
@@ -95,6 +98,7 @@ function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () =
   return <div className="ws-edit">
     <header><h2>Refine this video</h2><p>Ask for caption, pacing, colour or audio changes in the chat. Controls appear here when the current engine supports them.</p></header>
     {project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}
+    {project.external_ref && project.engine!=='localize' ? <MotionScenes jobId={project.external_ref} onSaved={onSaved}/> : null}
     {advanced
       ? <NavLink className="adv-link" to={advanced}><Icon name="advanced" size={20}/><span><b>Advanced editor</b><small>Timeline, audio and detailed controls</small></span><Icon name="chevron" size={18}/></NavLink>
       : <p className="ws-hint">Ask for a change in the chat and a new version is created without overwriting this one.</p>}

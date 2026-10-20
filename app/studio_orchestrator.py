@@ -300,7 +300,8 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
     _emit(conversation_id, "tool.started", tool="create_storyboard", message="در حال ساخت سناریو و استوری‌بورد قابل‌ویرایش هستم.")
     result = execute("create_storyboard", {"prompt": prompt, "user_key": user_key, "provider": provider,
         "language": "fa", "source_assets": assets,
-        "creative_brief": {"goal": (plan.brief.goal if plan else "") or "تبلیغ و معرفی محصول",
+        "creative_brief": {"motion_engine":'motion_so' if 'motion.so' in text.lower() else 'default',
+                           "goal": (plan.brief.goal if plan else "") or "تبلیغ و معرفی محصول",
                            "brand": "از هویت بصری منابع واقعی پیروی کن",
                            "avoid": "؛ ".join(plan.brief.must_not) if plan and plan.brief.must_not else "ادعاهای تأییدنشده"}})
     project = run(repo.create_project(conversation_id, user_key, "motion",
@@ -311,7 +312,8 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
         result["external_ref"]))
     # Uploaded/downloaded source assets use the local still-to-motion path; do not
     # present the storyboard model's hypothetical image-generation total as a bill.
-    estimate = 0.0 if provider == "local_fixture" else result["storyboard"].get("estimated_total_cost")
+    using_motion=any(s.get('motion_engine')=='motion_so' for s in result['storyboard'].get('scenes',[]))
+    estimate = None if using_motion else 0.0 if provider == "local_fixture" else result["storyboard"].get("estimated_total_cost")
     action = run(repo.create_action(conversation_id, project["id"], "generate_motion_video",
         {"job_id": result["external_ref"], "provider": provider},
         idempotency_key(conversation_id, message_id, "generate_motion_video", {"job": result["external_ref"]}), estimate))
@@ -319,6 +321,9 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
     _assistant(conversation_id, user_key,
         f"استوری‌بورد آماده است: {len(result['storyboard'].get('scenes', []))} صحنه، حدود {result['storyboard'].get('total_duration_s', duration):g} ثانیه. "
         "قبل از تولید دارایی‌ها، نریشن و رندر سنگین آن را تأیید یا اصلاح کنید.")
+    if using_motion:
+        count=sum(s.get('motion_engine')=='motion_so' for s in result['storyboard'].get('scenes',[]))
+        _assistant(conversation_id,user_key,f'Motion.so برای {count} کلیپ صحنه انتخاب شده است؛ هر کلیپ جداگانه اعتبار مصرف می‌کند. تأیید شما اجازه ارسال شرح صحنه و تصاویر مرجع همان صحنه به Motion را می‌دهد؛ هزینه دقیق از API قابل محاسبه نیست. نریشن و زیرنویس را EditorGPT می‌سازد. هیچ تلاش مجدد خودکاری انجام نمی‌شود.')
     _emit(conversation_id, "storyboard.ready", project_id=project["id"], action_id=action["id"],
           storyboard=result["storyboard"], estimated_cost_usd=estimate,
           images=[{"index": index, "name": Path(item).name} for index, item in enumerate(assets)])
@@ -516,6 +521,41 @@ async def _announce_creative(conversation_id: str, user_key: str, project: dict,
     await repo.add_message(conversation_id, user_key, "assistant", text)
 
 
+async def _sync_motion_messages(conversation_id,project,job,user_key):
+    seen=set(project['state'].get('motion_event_ids',[]));before=len(seen)
+    async def emit(kind,data,*,source_event_id):
+        if source_event_id in seen:return
+        await repo.emit(conversation_id,kind,data,source_event_id=source_event_id)
+        seen.add(source_event_id)
+    for file in sorted((job.dir/'generated'/'motion_so').glob('*.json'))[:100]:
+        if not re.fullmatch('[a-f0-9]{24}',file.stem):continue
+        try:data=json.loads(file.read_text())
+        except (OSError,ValueError):continue
+        messages_file=file.with_name(file.stem+'.messages.json')
+        if messages_file.is_file():
+            try:data.update(json.loads(messages_file.read_text()))
+            except (OSError,ValueError):pass
+        remote=data.get('job_id')
+        if not remote:continue
+        activity='motion-so-'+str(remote)
+        common={'project_id':project['id'],'tool':'motion_so','stage':'motion_generation',
+            'activity_id':activity,'provider':'motion_so'}
+        await emit('tool.started',{**common,'message':'Motion Agent · در حال ساخت موشن صحنه'},source_event_id=activity+':started')
+        for message in data.get('messages',[]):
+            identity=f"{activity}:{message['id']}:{message['revision']}"
+            await emit('tool.progress',{**common,'message':message['text'],
+                'source_timestamp':message.get('timestamp'),'thinking':False},source_event_id=identity)
+        if data.get('messages_unavailable'):
+            await emit('tool.progress',{**common,'message':'گزارش متنی Motion موقتاً در دسترس نیست؛ پیگیری همان جاب ادامه دارد.'},source_event_id=activity+':messages-unavailable')
+        if data.get('status')=='ready':
+            await emit('tool.completed',{**common,'message':'کلیپ Motion آماده و ذخیره شد؛ ادامهٔ تدوین، صدا، زیرنویس و رندر با موتور EditorGPT انجام می‌شود.'},source_event_id=activity+':ready')
+        elif data.get('status') in {'failed','awaiting_user_input','submission_uncertain','polling_paused'}:
+            await emit('tool.completed',{**common,'message':'Motion نیازمند بررسی یا ادامهٔ پیگیری است؛ درخواست تولید تازه‌ای ارسال نشده است.'},source_event_id=activity+':'+data['status'])
+    if len(seen)!=before:
+        project['state']={**project['state'],'motion_event_ids':sorted(seen)[-5000:]}
+        await repo.update_project(project['id'],user_key,state=project['state'])
+
+
 async def sync_conversation(conversation_id: str, user_key: str) -> None:
     conversation = await repo.get_conversation(conversation_id, user_key)
     for project in conversation.get("projects", []):
@@ -525,6 +565,8 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
         if not ref or project["status"] == "canceled": continue
         try:
             engine = project["engine"]
+            owned_job=jobstore.get(ref) if engine!='localize' else None
+            if owned_job:await _sync_motion_messages(conversation_id,project,owned_job,user_key)
             if engine == "localize":
                 from app import localize
                 status = localize.public(localize.load(ref)); raw_status = status.get("status", "")
@@ -557,6 +599,7 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                               "error" if generation.get("state") == "failed" or job.render.status == "error" else "running")
                 stage = ("storyboard ready" if not confirmed else
                          "rendering" if job.render.status in {"queued", "running"} else
+                         f"Motion.so: {generation['motion_so']['status']}" if generation.get('state')=='generating' and generation.get('motion_so') else
                          "generating assets" if generation.get("state") == "generating" else generation.get("state", "planning"))
                 progress = job.render.progress if job.render.status in {"queued", "running", "done"} else None
                 output = f"/api/jobs/{ref}/exports/{job.render.output}" if job.render.status == "done" and job.render.output else None

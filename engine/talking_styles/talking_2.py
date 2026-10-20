@@ -62,6 +62,7 @@ class Shot:
     out_start: float = 0.0
     picture: Optional[str] = None      # image path for the top card
     slot: Optional[int] = None         # sentence index of the B-roll slot
+    picture_in: float = 0.0            # motion clip offset, continuous across cut pieces
 
     @property
     def length(self) -> float:
@@ -165,6 +166,11 @@ def plan_reel(transcript: dict, decisions: dict, faces: list[tuple[float, float,
         t += shot.length
     total = t
     main = shots[1:] if cold else shots
+    for group in _groups(main):
+        offset=0.0
+        for shot in group:
+            shot.picture_in=offset
+            offset+=shot.length
 
     def out_time(src: float) -> float:
         for shot in main:
@@ -456,11 +462,18 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         cw, ch, x, y = speaker_crop(shot, sw, sh, base_zoom, close_zoom)
         cut = f"[s{k}]trim={shot.src_in:.3f}:{shot.src_out:.3f},setpts=PTS-STARTPTS,crop={cw}:{ch}:{x}:{y}"
         if shot.split:
-            inputs += ["-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(panel_for(shot))]
             frames = max(1, round(shot.length * fps_value))
-            # Continue the push across shots of the same picture so it never jumps back.
-            vf.append(f"[{next_input}:v]zoompan=z='1.0+{PICTURE_ZOOM * zoom_amount:.4f}*on/{frames}':"
-                      f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={W}x{SPLIT_Y}:fps={fps},setsar=1[t{k}]")
+            if shot.picture and Path(shot.picture).suffix.lower()=='.mp4':
+                from ..probe import probe_duration
+                seek=min(shot.picture_in,max(0,probe_duration(Path(shot.picture))-1/fps_value))
+                inputs += ['-ss',f'{seek:.3f}','-i',shot.picture]
+                vf.append(f'[{next_input}:v]setpts=PTS-STARTPTS,scale={W}:{SPLIT_Y}:force_original_aspect_ratio=decrease,'
+                          f'pad={W}:{SPLIT_Y}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps},'
+                          f'tpad=stop_mode=clone:stop_duration={shot.length:.3f},trim=duration={shot.length:.3f},setsar=1[t{k}]')
+            else:
+                inputs += ["-loop", "1", "-framerate", fps, "-t", f"{shot.length:.3f}", "-i", str(panel_for(shot))]
+                vf.append(f"[{next_input}:v]zoompan=z='1.0+{PICTURE_ZOOM * zoom_amount:.4f}*on/{frames}':"
+                          f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={W}x{SPLIT_Y}:fps={fps},setsar=1[t{k}]")
             vf.append(f"{cut},{source_colour},scale={W}:{H - SPLIT_Y}:flags=lanczos,fps={fps},setsar=1,{grade}[b{k}]")
             vf.append(f"[t{k}][b{k}]vstack=inputs=2[v{k}]")
             next_input += 1

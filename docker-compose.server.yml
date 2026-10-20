@@ -6,7 +6,10 @@ services:
     image: ${AI_RENDER_RUNTIME_IMAGE:-ai-render-runtime:latest}
     environment:
       LMAPI_API_KEY_FILE: /run/secrets/lmapi_key
+      MOTION_API_KEY_FILE: /run/secrets/motion_key
+      MOTION_ENABLED: 'true'
     volumes:
+      - ./.motion_key:/run/secrets/motion_key:ro
       - /opt/rafieigroup/editor-storage/tmp/app:/tmp
       - /opt/rafieigroup/editor-storage/cache/app:/root/.cache
       - type: bind
@@ -40,7 +43,10 @@ services:
     image: ${AI_RENDER_RUNTIME_IMAGE:-ai-render-runtime:latest}
     environment:
       LMAPI_API_KEY_FILE: /run/secrets/lmapi_key
+      MOTION_API_KEY_FILE: /run/secrets/motion_key
+      MOTION_ENABLED: 'true'
     volumes:
+      - ./.motion_key:/run/secrets/motion_key:ro
       - /opt/rafieigroup/editor-storage/tmp/worker:/tmp
       - /opt/rafieigroup/editor-storage/cache/worker:/root/.cache
       - type: bind

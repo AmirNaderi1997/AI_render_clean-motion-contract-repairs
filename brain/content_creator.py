@@ -133,6 +133,10 @@ def create_content(
         json.dumps(storyboard.to_dict(), indent=2, ensure_ascii=False)
     )
 
+    if (creative_brief or {}).get('motion_engine')=='motion_so':
+        for scene in storyboard.scenes:
+            scene.motion_engine='motion_so'
+        (job.dir/'storyboard.json').write_text(json.dumps(storyboard.to_dict(),ensure_ascii=False,indent=2))
     gen_status = {
         "state": "pending",
         "scenes_done": 0,
@@ -224,6 +228,9 @@ def _approve_and_generate(job, provider_name: Optional[str] = None, *, retry_con
         return
     if gs.get('state') == 'failed' and not retry_confirmed:
         raise ValueError('تلاش مجدد تولید مدیا هزینه دارد و نیازمند تأیید صریح شماست.')
+    if any(s.get('motion_engine')=='motion_so' for s in json.loads((job.dir/'storyboard.json').read_text()).get('scenes',[])):
+        from .motion_so import configured
+        if not configured():raise ValueError('Motion is disabled or its API key is missing')
 
     provider_name = provider_name or gs.get("provider") or "local_fixture"
     try:
@@ -269,7 +276,7 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
     gen_dir.mkdir(exist_ok=True)
 
     try:
-        if provider_name != 'local_fixture':
+        if provider_name != 'local_fixture' or any(s.get('motion_engine')=='motion_so' for s in json.loads(sb_path.read_text()).get('scenes',[])):
             import re
             status=json.loads(gs_path.read_text())
             if not authorization_id or not re.fullmatch('[a-f0-9]{32}',authorization_id) or status.get('authorization_id') != authorization_id:
@@ -302,7 +309,14 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                 if scene.index in cached_media:
                     record = cached_media[scene.index]
                 else:
-                    if scene.media_method == "upload":
+                    if scene.motion_engine=='motion_so':
+                        if preset['is_static']:raise ValueError('Motion video scenes are not supported in static posts')
+                        from .motion_so import generate_scene
+                        def motion_status(value):
+                            current=json.loads(gs_path.read_text());current['motion_so']=value
+                            _save_checkpoint(gs_path,current)
+                        result=generate_scene(scene,job.dir,preset['aspect'],on_status=motion_status)
+                    elif scene.media_method == "upload":
                         source = (job.dir / scene.source_asset).resolve()
                         if not source.is_relative_to(job.dir.resolve()) or not source.is_file():
                             raise ValueError(f"Scene {scene.index + 1} source image is missing")
@@ -504,7 +518,7 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         plan_data["generation_meta"]["warnings"] = warnings
         plan_data["generation_meta"]["voice_provider"] = voice_provider if narration_segments else None
         plan_data["generation_meta"]["music_source"] = music_source
-        if not preset["is_static"] and all(scene.media_method == "upload" for scene in storyboard.scenes):
+        if not preset["is_static"] and all(scene.media_method == "upload" and scene.motion_engine=='default' for scene in storyboard.scenes):
             from engine.remotion_renderer import scene_config
             plan_data["generation_meta"]["renderer"] = "remotion"
             plan_data["generation_meta"]["remotion"] = scene_config(

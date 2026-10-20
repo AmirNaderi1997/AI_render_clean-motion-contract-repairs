@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -707,9 +708,27 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
                  "hook": load(job_dir).get("hook2") or decisions["hook"]}
     render_settings = state.get("render_settings") or DEFAULTS["render_settings"]
     decisions = _apply_timeline_choices(decisions, style, render_settings)
+    motion_panels={}
+    panel_manifest=job_dir/'generated'/'motion_so'/'talking_panels.json'
+    if style=='talking_2' and panel_manifest.is_file():
+        for row in json.loads(panel_manifest.read_text()).get('panels',[]):
+            key=str(row.get('clip',''))
+            if not re.fullmatch('[a-f0-9]{24}',key):continue
+            clip=panel_manifest.parent/(key+'.mp4')
+            index=int(row['sentence'])
+            if clip.is_file() and 0<=index<len(transcript['sentences']):motion_panels[index]=str(clip)
     hyperframes = style == "talking_2" and settings.TALKING_HYPERFRAMES_ENABLED
+    if motion_panels:
+        # Explicitly chosen Motion panels use the native split renderer. They do
+        # not trigger HyperFrames, image generation, or media regeneration.
+        hyperframes=False
+        decisions={**decisions,'broll':[{'i':i,'label':'Motion'} for i in sorted(motion_panels)],
+                   'chips':[c for c in decisions.get('chips',[]) if int(c['i']) not in motion_panels]}
     _stage(job_dir, "planning visual beats" if hyperframes else "finding pictures", progress=25)
-    if hyperframes:
+    if motion_panels:
+        pictures=motion_panels
+        slots=[{'i':i,'source':'motion_so','status':'ready'} for i in sorted(motion_panels)]
+    elif hyperframes:
         # A neutral placeholder makes the proven style-2 renderer place the
         # speaker in the lower half. HyperFrames paints over the upper card,
         # so motion graphics never cover the speaker's face.
