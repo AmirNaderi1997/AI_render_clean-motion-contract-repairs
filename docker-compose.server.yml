@@ -1,11 +1,14 @@
 # Arvan VPS overlay. Public TLS/static delivery is owned by the host's Caddy;
 # only loopback API ports are published from this Compose project.
+name: ai-render
 services:
   app:
     image: ${AI_RENDER_RUNTIME_IMAGE:-ai-render-runtime:latest}
     environment:
       LMAPI_API_KEY_FILE: /run/secrets/lmapi_key
     volumes:
+      - /opt/rafieigroup/editor-storage/tmp/app:/tmp
+      - /opt/rafieigroup/editor-storage/cache/app:/root/.cache
       - type: bind
         source: ./.lmapi_key
         target: /run/secrets/lmapi_key
@@ -38,6 +41,8 @@ services:
     environment:
       LMAPI_API_KEY_FILE: /run/secrets/lmapi_key
     volumes:
+      - /opt/rafieigroup/editor-storage/tmp/worker:/tmp
+      - /opt/rafieigroup/editor-storage/cache/worker:/root/.cache
       - type: bind
         source: ./.lmapi_key
         target: /run/secrets/lmapi_key
@@ -53,12 +58,17 @@ services:
     cpus: 2.0
 
   celery-beat:
+    volumes:
+      - /opt/rafieigroup/editor-storage/tmp/beat:/tmp
     build: !reset null
     image: ${AI_RENDER_RUNTIME_IMAGE:-ai-render-runtime:latest}
     mem_limit: 256m
     cpus: 0.25
 
   hermes:
+    volumes:
+      - /opt/rafieigroup/editor-storage/tmp/hermes:/tmp
+      - /opt/rafieigroup/editor-storage/cache/hermes:/root/.cache
     build: !reset null
     image: ${AI_RENDER_RUNTIME_IMAGE:-ai-render-runtime:latest}
     ports: !override
