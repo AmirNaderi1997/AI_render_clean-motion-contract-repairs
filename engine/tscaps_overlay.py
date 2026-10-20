@@ -119,7 +119,7 @@ def build_spec(cues: list[Cue], width: int, height: int, kinds: dict[str, dict] 
         if cue.y is None:
             out_kinds.setdefault(cue.kind, roles[cue.kind])
             return cue.kind
-        name = f"{cue.kind}@{cue.y:.2f}"        # the same look at another height (e.g. above a split-screen seam)
+        name = f"{cue.kind}_y{int(round(cue.y * 100))}"   # the same look at another height; plain identifier (engine selectors)
         out_kinds.setdefault(name, {**roles[cue.kind], "alignment": {**roles[cue.kind]["alignment"], "verticalOffset": cue.y}})
         return name
 
@@ -161,6 +161,14 @@ def without(plan, **fields):
     for name, value in fields.items():
         setattr(clone, name, value)
     return clone
+
+
+def without_hook(plan, **fields):
+    """`plan` minus the hook, with captions still held back until the hook window ends (the ASS renderer reads
+    that window from the hook itself, so removing it alone would let captions show underneath the Tscaps hook)."""
+    end = float(plan.hook["end"]) if getattr(plan, "hook", None) else 0.0
+    captions = [{**c, "start": max(float(c["start"]), end)} for c in plan.captions if float(c["end"]) > end]
+    return without(plan, hook=None, captions=captions, **fields)
 
 
 def _tidy(cues: list[Cue]) -> list[Cue]:
