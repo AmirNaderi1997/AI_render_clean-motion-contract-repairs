@@ -78,7 +78,7 @@ export const STAGE_LABELS: Record<string, string> = {
   "planning visual beats": "Planning visual beats", "finding pictures": "Finding supporting images",
   "building motion graphics": "Building motion graphics", "reviewing motion graphics": "Reviewing motion graphics",
   "improving motion graphics": "Improving motion graphics", queued: "Waiting to start", pending: "Planning the edit",
-  "directing the edit": "Exploring creative directions", "reviewing motion graphics": "Reviewing the motion design",
+  "directing the edit": "Exploring creative directions"
 };
 const RENDER_STAGE_LABELS: Record<string, string> = {
   rendering: "Rendering your video", "rendering rough cut": "Rendering the rough cut",
