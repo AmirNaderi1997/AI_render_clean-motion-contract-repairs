@@ -8,7 +8,7 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse, FileResponse
 from pydantic import BaseModel, Field, ConfigDict
 from app.config import settings
 from app.job_access import is_local_auth_bypass
@@ -171,6 +171,14 @@ def logs(model: str="", status: str="", user_id: str="", route: str="", id: str=
          since: datetime|None=None, until: datetime|None=None,
          page: int=Query(1,ge=1), size: int=Query(50,ge=1,le=200)):
     return store.logs(filters(model,status,user_id,route,id,since,until),page,size)
+
+
+@router.get('/media/{media_id}')
+def audit_media(media_id: str):
+    from brain.media_archive import resolve
+    try:path=resolve(media_id)
+    except (ValueError,FileNotFoundError):raise HTTPException(404,'Media not found')
+    return FileResponse(path,headers={'Cache-Control':'private, no-store'})
 
 
 @router.get("/logs.csv")

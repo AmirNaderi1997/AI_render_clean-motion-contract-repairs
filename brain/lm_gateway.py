@@ -197,7 +197,13 @@ def _record(route, endpoint, requested, started, attempts, response=None, hdr=No
     actual = response.get("model")
     if not actual or actual in {"auto","fusion"} or str(actual).startswith("auto:"):
         actual = routed.partition("/")[2] or None
-    return {"id": str(uuid.uuid4()), "timestamp": datetime.now(timezone.utc).isoformat(),
+    media=[]
+    if endpoint=='image' and not error:
+        try:
+            from .media_archive import images
+            media=images(response)
+        except Exception: log.exception('Could not archive media response')
+    return {"id": str(uuid.uuid4()), "media":media, "timestamp": datetime.now(timezone.utc).isoformat(),
         "user_id": user_context.get(), "job_id": job_context.get(), "route": route,
         "conversation_id": conversation_context.get(), "task_id":route,
         "endpoint": adapters.PATHS[endpoint], "requested_model": requested, "actual_model": actual,
@@ -429,7 +435,14 @@ def speech(route, text, voice):
                 raise GatewayError(f'LM speech HTTP {response.status_code}: {safe(response.text,200)}',response.status_code)
             if not response.headers.get('content-type','').startswith('audio/') or not 100 < len(response.content) < 30*1024*1024:
                 raise GatewayError('Gateway returned invalid audio content')
-            _audit(_record(route,'speech',candidates[0],started,attempts,{},dict(response.headers),request=body))
+            record=_record(route,'speech',candidates[0],started,attempts,
+                {'content_type':response.headers.get('content-type'),'size_bytes':len(response.content)},dict(response.headers),request=body)
+            try:
+                from .media_archive import save
+                artifact=save(response.content,response.headers.get('content-type','').split(';')[0])
+                if artifact:record['media']=[artifact]
+            except Exception:log.exception('Could not archive audio response; original result retained')
+            _audit(record)
             return response.content
         except Exception as exc:
             _audit(_record(route,'speech',candidates[0],started,attempts,error=exc,request={'model':mid,'input':text}))

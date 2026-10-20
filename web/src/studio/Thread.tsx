@@ -47,7 +47,7 @@ export function Thread({ items, conversation, projects, localFiles, thinking, co
               {item.content ? <RichText text={item.content}/> : null}
               {item.failed ? <div className="msg-failed"><Icon name="alert" size={14}/>Not sent <button className="link-btn" onClick={onRetryMessage}>Retry</button></div> : null}
             </div>
-          : <div className="assistant"><span className="assistant-mark" aria-hidden="true"><Icon name="spark" size={13}/></span><div className="assistant-body"><RichText text={item.content}/></div></div>}
+          : <div className="assistant"><span className="assistant-mark" aria-hidden="true"><Icon name="spark" size={13}/></span><div className="assistant-body"><RichText text={item.content}/><Attachments conversationId={conversation?.id} ids={item.attachments}/></div></div>}
       </li>;
       if (item.kind === "activity") return <li key={item.id} className="thread-aux"><ActivityBlock steps={item.steps} live={item.live} retryHref={retryHref}/></li>;
       if (item.kind === "render") {

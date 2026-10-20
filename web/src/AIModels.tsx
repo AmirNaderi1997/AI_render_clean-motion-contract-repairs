@@ -1,4 +1,5 @@
 import React from "react";
+import { AuthenticatedMedia } from './AuthenticatedMedia';
 import { aiAdminRequest as request, aiAdminCsv } from "./api";
 import "./ai-models.css";
 import DirectFallbacks from "./AIDirectFallbacks";
@@ -12,6 +13,16 @@ type Config = {enabled:boolean; capture_messages:boolean; log_char_limit:number;
 const options = ["chat","vision","reasoning","image","video","speech","transcription","embeddings","structured","tools","streaming"];
 const json = (body:unknown, method="POST"):RequestInit => ({method,headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
 const display = (value:unknown) => value === null || value === undefined ? "—" : String(value);
+
+function LogMedia({value}:{value:unknown}) {
+  if (!Array.isArray(value)) return null;
+  return <>{value.map((item:any)=> {
+    if (!item || typeof item.url!=='string' || !item.url.startsWith('/api/admin/ai/media/')) return null;
+    const kind=String(item.mime_type||'').split('/')[0];
+    if (!['image','audio','video'].includes(kind)) return null;
+    return <AuthenticatedMedia key={item.id} as={kind==='image'?'img':kind as 'audio'|'video'} src={item.url} alt="Generated media" controls={kind!=='image'} style={{maxWidth:'100%',maxHeight:420}}/>;
+  })}</>;
+}
 
 function Pager({page,total,size,onChange}:{page:number;total:number;size:number;onChange:(page:number)=>void}) {
   return <div className="ai-pager"><button disabled={page<=1} onClick={()=>onChange(page-1)}>Previous</button><span>{page} / {Math.max(1,Math.ceil(total/size))} · {total} records</span><button disabled={page*size>=total} onClick={()=>onChange(page+1)}>Next</button></div>;
@@ -113,7 +124,7 @@ function Logs({action}:{action:Actions["action"]}) {
   React.useEffect(()=>{const ctrl=new AbortController();request<{items:Log[];total:number}>(`/logs?${query}&page=${page}`,{signal:ctrl.signal}).then(r=>{setRows(r.items);setTotal(r.total);setError("");}).catch(e=>{if(!ctrl.signal.aborted)setError(String(e));});return()=>ctrl.abort();},[page,query,tick]);
   return <section><div className="ai-toolbar">{([['id','Request ID'],['model','Exact model ID'],['user_id','User ID'],['since','From (UTC)'],['until','Through (UTC)']] as const).map(([key,label])=><label key={key}>{label}<input type={key==="since"||key==="until"?"date":"text"} value={filters[key]} onChange={e=>{setPage(1);setFilters({...filters,[key]:e.target.value});}}/></label>)}<select aria-label="Request status" value={filters.status} onChange={e=>{setPage(1);setFilters({...filters,status:e.target.value});}}><option value="">All statuses</option><option value="success">Successful</option><option value="failed">Failed</option></select><label><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)}/>Auto refresh</label><button onClick={()=>void action(()=>aiAdminCsv(query),"CSV downloaded")}>Export CSV</button></div>
     {error&&<p role="alert">{error}</p>}<div className="ai-table-wrap"><table><thead><tr>{["Time","User / Route","Requested → Actual","Provider","Status","Latency","Input / Output tokens","Cost"].map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>{rows.map(r=><tr key={r.id}><td><button className="ai-text-button" onClick={()=>setDetail(r)}>{new Date(r.timestamp).toLocaleString()}</button><small>{r.id}</small></td><td>{r.user_id||"Background"}<small>{r.route}</small></td><td>{r.requested_model}<small>→ {r.actual_model||"Not reported"}</small></td><td>{r.provider||"Not reported"}</td><td>{r.status}</td><td>{r.latency_ms} ms</td><td>{display(r.input_tokens)} / {display(r.output_tokens)}</td><td>{display(r.cost)}</td></tr>)}</tbody></table></div><Pager page={page} total={total} size={50} onChange={setPage}/>
-    {detail&&<div className="ai-sheet-shade" onClick={()=>setDetail(null)}><section className="ai-sheet" role="dialog" aria-modal="true" aria-label="Request details" onClick={e=>e.stopPropagation()}><button className="ai-close" aria-label="Close request details" onClick={()=>setDetail(null)}>×</button><h2>Request details</h2>{Object.entries(detail).map(([key,value])=><div key={key} className="ai-log-detail"><b>{key.replace(/_/g," ")}</b><pre dir="auto">{typeof value==="object"&&value!==null?JSON.stringify(value,null,2):display(value)}</pre></div>)}</section></div>}
+    {detail&&<div className="ai-sheet-shade" onClick={()=>setDetail(null)}><section className="ai-sheet" role="dialog" aria-modal="true" aria-label="Request details" onClick={e=>e.stopPropagation()}><button className="ai-close" aria-label="Close request details" onClick={()=>setDetail(null)}>×</button><h2>Request details</h2><LogMedia value={detail.media}/><h3>Request</h3><pre dir="auto">{display(detail.request_message)||'Not retained'}</pre><h3>Response</h3><pre dir="auto">{display(detail.response_message)||'Not retained'}</pre>{Object.entries(detail).filter(([key])=>!['request_message','response_message','media'].includes(key)).map(([key,value])=><div key={key} className="ai-log-detail"><b>{key.replace(/_/g," ")}</b><pre dir="auto">{typeof value==="object"&&value!==null?JSON.stringify(value,null,2):display(value)}</pre></div>)}</section></div>}
   </section>;
 }
 
