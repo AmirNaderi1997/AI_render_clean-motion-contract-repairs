@@ -627,6 +627,35 @@ def prepare_render_source(video: Path, work_dir: Path) -> Path:
     return target
 
 
+def cached_shot(inputs: list[str], filters: list[str], index: int, duration: float, work_dir: Path) -> Path:
+    """Bound memory to one shot; high-quality intermediate is safe to reuse."""
+    import hashlib
+    stamps = []
+    for i, token in enumerate(inputs[:-1]):
+        if token == '-i':
+            p = Path(inputs[i+1]); stamps.append((str(p), p.stat().st_size, p.stat().st_mtime_ns))
+    key = hashlib.sha256(json.dumps([inputs, filters, duration, stamps, 'shot-v1']).encode()).hexdigest()[:20]
+    root = work_dir / 'shot_cache'; root.mkdir(parents=True, exist_ok=True)
+    out = root / f'{key}.mkv'
+    if out.is_file(): return out
+    temporary = root / f'{key}.partial.mkv'
+    graph = filters[:-1] + [filters[-1] + f';[a{index}]aresample=48000,apad,atrim=duration={duration:.9f}[audio]']
+    subprocess.run([ass_burner_ffmpeg(), '-hide_banner','-v','error','-y',
+        '-filter_complex_threads','1','-filter_threads','1',*inputs,'-filter_complex',';'.join(graph),
+        '-map',f'[v{index}]','-map','[audio]','-c:v','libx264','-threads','2',
+        '-preset','ultrafast','-crf','12','-pix_fmt','yuv420p','-c:a','pcm_s16le',
+        '-t',f'{duration:.9f}',str(temporary)],check=True,capture_output=True)
+    temporary.replace(out)
+    return out
+
+
+def shot_concat(clips: list[tuple[Path,float]], work_dir: Path) -> list[str]:
+    manifest = work_dir / 'shot_cache' / 'concat.txt'
+    manifest.write_text('ffconcat version 1.0\n' + ''.join(
+        "file '" + str(p.resolve()).replace("'", "'\\''") + f"'\nduration {duration:.9f}\n" for p,duration in clips))
+    return ['-threads','1','-f','concat','-safe','0','-i',str(manifest)]
+
+
 def eval_fps(fps: str) -> float:
     num, _, den = fps.partition("/")
     return float(num) / float(den or 1)
@@ -881,8 +910,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     # taken from late in the source; that produced no output/progress for many
     # minutes. Seeked inputs let concat emit the first shot immediately.
     inputs: list[str] = []
-    for shot in plan.shots:
-        inputs += ["-threads", "1", "-ss", f"{shot.src_in:.3f}", "-t", f"{shot.length:.3f}", "-i", str(video)]
+    clips = []
+    elapsed = 0.0
     vf: list[str] = []
     grade_settings = settings.get("grade") or {}
     brightness = 1 + float(grade_settings.get("brightness", 0)) / 100
@@ -897,6 +926,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     base_zoom = float(zoom_settings.get("base_scale", 100)) / 100 if zoom_settings.get("enabled", True) else 1.0
     close_zoom = float(zoom_settings.get("close_scale", 140)) / 100 if zoom_settings.get("enabled", True) else 1.0
     for k, shot in enumerate(plan.shots):
+        inputs = ['-threads','1','-ss',f'{shot.src_in:.3f}','-t',f'{shot.length:.3f}','-i',str(video)]
+        vf = []
         cw, ch, x, y = crop_for(
             shot, sw, sh, base_zoom=max(1.0, base_zoom), close_zoom=max(1.0, close_zoom)
         )
@@ -921,12 +952,17 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
             frame = f"fps={fps},{zoom}"
         else:
             frame = f"scale={W}:{H}:flags=lanczos,fps={fps}"
-        vf.append(f"[{k}:v]setpts=PTS-STARTPTS,"
+        vf.append(f"[0:v]setpts=PTS-STARTPTS,"
                   f"crop={cw}:{ch}:{x}:{y},{source_colour},{frame},setsar=1,{look}[v{k}]")
         fade = min(0.012, shot.length / 4)
-        vf.append(f"[{k}:a]asetpts=PTS-STARTPTS,"
+        vf.append(f"[0:a]asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
-    vf.append("".join(f"[v{k}][a{k}]" for k in range(n)) + f"concat=n={n}:v=1:a=1[cv][ca]")
+        length = max(1, round((elapsed+shot.length)*fps_value)-round(elapsed*fps_value))/fps_value
+        clips.append((cached_shot(inputs,vf,k,length,work_dir),length)); elapsed += shot.length
+        if on_progress: on_progress(min(60,round(elapsed/max(plan.duration,.001)*60)))
+    inputs = shot_concat(clips,work_dir)
+    vf = ['[0:v]setpts=PTS-STARTPTS[cv]','[0:a]asetpts=PTS-STARTPTS[ca]']
+    n = 1
     vignette_alpha = max(0.0, min(1.0, float(grade_settings.get("vignette", 50)) / 100))
     vf.append(f"[{n}:v]format=rgba,colorchannelmixer=aa={vignette_alpha:.3f}[vig]")
     content = "vmain" if outro else "vout"
@@ -983,7 +1019,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         for row in proc.stdout:
             log_tail = (log_tail + [row])[-80:]
             if row.startswith("out_time_us=") and on_progress and total > 0:
-                try: on_progress(min(99, int(int(row.split("=")[1]) / 1e6 / total * 100)))
+                try: on_progress(min(99, 60+int(int(row.split("=")[1]) / 1e6 / total * 39)))
                 except ValueError: pass
     except BaseException:
         proc.terminate(); proc.wait(timeout=5); out.unlink(missing_ok=True); raise

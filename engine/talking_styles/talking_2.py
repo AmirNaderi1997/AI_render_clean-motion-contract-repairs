@@ -452,8 +452,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     n = len(plan.shots)
     source_colour = base.source_colour_filter(video)
     inputs = []
-    for shot in plan.shots:
-        inputs += ['-threads','1','-ss',f'{shot.src_in:.3f}','-t',f'{shot.length:.3f}','-i',str(video)]
+    clips = []
+    elapsed = 0.0
     vf = []
     next_input = n
     zoom = settings.get("zoom") or {}
@@ -461,8 +461,11 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     base_zoom = float(zoom.get("base_scale", 100)) / 100 if zoom.get("enabled", True) else 1.0
     close_zoom = float(zoom.get("close_scale", 140)) / 100 if zoom.get("enabled", True) else 1.0
     for k, shot in enumerate(plan.shots):
+        inputs = ['-threads','1','-ss',f'{shot.src_in:.3f}','-t',f'{shot.length:.3f}','-i',str(video)]
+        vf = []
+        next_input = 1
         cw, ch, x, y = speaker_crop(shot, sw, sh, base_zoom, close_zoom)
-        cut = f"[{k}:v]setpts=PTS-STARTPTS,crop={cw}:{ch}:{x}:{y}"
+        cut = f"[0:v]setpts=PTS-STARTPTS,crop={cw}:{ch}:{x}:{y}"
         if shot.split:
             frames = max(1, round(shot.length * fps_value))
             if shot.picture and Path(shot.picture).suffix.lower()=='.mp4':
@@ -482,9 +485,14 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         else:
             vf.append(f"{cut},{source_colour},scale={W}:{H}:flags=lanczos,fps={fps},setsar=1,{grade},format=yuv420p[v{k}]")
         fade = min(0.012, shot.length / 4)
-        vf.append(f"[{k}:a]asetpts=PTS-STARTPTS,"
+        vf.append(f"[0:a]asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
-    vf.append("".join(f"[v{k}][a{k}]" for k in range(n)) + f"concat=n={n}:v=1:a=1[cv][ca]")
+        length = max(1, round((elapsed+shot.length)*fps_value)-round(elapsed*fps_value))/fps_value
+        clips.append((base.cached_shot(inputs,vf,k,length,work_dir),length)); elapsed += shot.length
+        if on_progress: on_progress(min(60,round(elapsed/max(plan.duration,.001)*60)))
+    inputs = base.shot_concat(clips,work_dir)
+    vf = ['[0:v]setpts=PTS-STARTPTS[cv]','[0:a]asetpts=PTS-STARTPTS[ca]']
+    next_input = 1
     inputs += ["-loop", "1", "-framerate", fps, "-i", str(vignette_png(work_dir / "vignette.png"))]
     vignette_alpha = max(0.0, min(1.0, float(gs.get("vignette", 50)) / 100))
     vf.append(f"[{next_input}:v]format=rgba,colorchannelmixer=aa={vignette_alpha:.3f}[vig]")
@@ -529,7 +537,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         for row in proc.stdout:
             log_tail = (log_tail + [row])[-80:]
             if row.startswith("out_time_us=") and on_progress and total > 0:
-                try: on_progress(min(99, int(int(row.split("=")[1]) / 1e6 / total * 100)))
+                try: on_progress(min(99, 60+int(int(row.split("=")[1]) / 1e6 / total * 39)))
                 except ValueError: pass
     except BaseException:
         proc.terminate(); proc.wait(timeout=5); out.unlink(missing_ok=True); raise

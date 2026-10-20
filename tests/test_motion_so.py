@@ -103,3 +103,23 @@ def test_native_talking_two_panel_real_ffmpeg(monkeypatch,tmp_path,shot_count):
     image=Image.open(io.BytesIO(frame)).convert('RGB')
     top=image.getpixel((160,140));bottom=image.getpixel((160,420))
     assert top[1]>top[2] and bottom[2]>bottom[1]
+
+
+def test_native_talking_one_sequential_cache_and_audio(monkeypatch,tmp_path):
+    from engine.talking_styles import talking_1 as engine
+    from engine.render_ass import ass_burner_ffmpeg
+    from engine.probe import has_audio,probe_duration
+    if not ass_burner_ffmpeg():pytest.skip('libass ffmpeg unavailable')
+    monkeypatch.setattr(engine,'W',320);monkeypatch.setattr(engine,'H',568)
+    monkeypatch.setattr(engine,'render_outro',lambda *a,**k:(None,0))
+    source=tmp_path/'source.mp4'
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=c=blue:s=320x568:r=30',
+        '-f','lavfi','-i','sine=frequency=330','-t','1','-c:v','libx264','-c:a','aac',str(source)],check=True)
+    plan=engine.ReelPlan(shots=[engine.Shot(0,1),engine.Shot(0,1,push=True)],duration=2)
+    kwargs=dict(work_dir=tmp_path/'work',hook='',highlight=[],name='',title='',render_settings={'grade':{'vignette':0}})
+    engine.render_plain(source,plan,tmp_path/'first.mp4',**kwargs)
+    before={p.name:p.stat().st_mtime_ns for p in (tmp_path/'work'/'shot_cache').glob('*.mkv')}
+    engine.render_plain(source,plan,tmp_path/'second.mp4',**kwargs)
+    after={p.name:p.stat().st_mtime_ns for p in (tmp_path/'work'/'shot_cache').glob('*.mkv')}
+    assert len(before)==2 and before==after
+    assert has_audio(tmp_path/'second.mp4') and abs(probe_duration(tmp_path/'second.mp4')-2)<.1

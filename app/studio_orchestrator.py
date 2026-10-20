@@ -468,12 +468,28 @@ def resume_project(project_id: str, user_key: str, *, retry_confirmed: bool = Fa
         job = jobstore.get(project.get('external_ref'))
         if not job: raise ValueError('فایل‌های پروژه در دسترس نیستند.')
         state = talking_reel.load(job.dir)
+        if state.get('status') == 'paused':
+            talking_reel.resume(job.dir)
+            run(repo.update_project(project_id, user_key, status='running'))
+            return {'status':'running','project_id':project_id}
         if state.get('status') in {'running', 'analyzing'}: return {'status':'running','project_id':project_id}
         if not state.get('analysis_ready'):
             raise ValueError('تحلیل کامل نشده است؛ ابتدا تحلیل را در تدوینگر تکمیل کنید.')
         talking_reel.start(job.dir, job.dir / 'raw' / job.raw_name, regenerate=False, cached_only=True)
         run(repo.update_project(project_id, user_key, status='running', state={**project['state'], 'last_observed':{}, 'render_started':True}))
         return {'status':'running','project_id':project_id,'stage':'rendering'}
+    if project['engine'] == 'localize':
+        from app import localize
+        ref = project['external_ref']; state = localize.load(ref)
+        if state.get('status') == 'done': return {'status':'done','project_id':project_id}
+        if state.get('status') == 'paused': localize.resume(ref)
+        elif state.get('status') in {'analyzing','rendering'}: return {'status':'running','project_id':project_id}
+        else:
+            if not retry_confirmed: raise ValueError('ادامه ممکن است هزینهٔ API داشته باشد؛ ابتدا تأیید کنید.')
+            if state.get('lines'): localize.start_render(ref)
+            else: localize.start_analyze(ref)
+        run(repo.update_project(project_id, user_key, status='running', state={**project['state'],'last_observed':{},'render_started':bool(state.get('lines'))}))
+        return {'status':'running','project_id':project_id}
     if project['engine'] != 'motion':
         raise ValueError('ادامهٔ این مرحله نیاز به بررسی متن و صدا در تدوینگر دارد.')
     if not project['state'].get('confirmed'):
@@ -633,7 +649,7 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                         "message": failure_message}
             if observed != project["state"].get("last_observed"):
                 state = {**project["state"], "last_observed": observed}
-                new_status = ("done" if output else "error" if raw_status == "error" else
+                new_status = ("done" if output else "paused" if raw_status == "paused" else "error" if raw_status == "error" else
                               "awaiting_confirmation" if raw_status == "awaiting_confirmation" else "running")
                 await repo.update_project(project["id"], user_key, status=new_status, state=state)
                 event_type = "render.completed" if output else ("tool.failed" if raw_status == "error" else "tool.progress")
