@@ -1,0 +1,135 @@
+/* ───────────────────────────────────────────────────────────────
+   EditorGPT design tokens — the single source of truth.
+   Dark-first, neutral surfaces, no brand hue. Semantic colour is
+   reserved for success / warning / error states.
+   ─────────────────────────────────────────────────────────────── */
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg: #101010;
+  --sidebar: #171717;
+  --surface: #202020;
+  --elevated: #262626;
+  --hover: rgb(255 255 255 / .06);
+  --active: rgb(255 255 255 / .10);
+  --border: #343434;
+  --border-subtle: #2a2a2a;
+  --scrim: rgb(0 0 0 / .56);
+
+  /* Text */
+  --text: #f5f5f5;
+  --text-2: #a3a3a3;
+  --text-3: #8a8a8a;
+  --on-ink: #101010;
+
+  /* The only "accent" is ink: high-contrast neutral. */
+  --ink: #f5f5f5;
+  --ink-hover: #ffffff;
+  --ink-soft: rgb(255 255 255 / .08);
+
+  /* Semantic */
+  --success: #4ade80;
+  --success-soft: rgb(74 222 128 / .12);
+  --warning: #fbbf24;
+  --warning-soft: rgb(251 191 36 / .12);
+  --error: #f87171;
+  --error-soft: rgb(248 113 113 / .12);
+
+  /* Shape */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  /* Spacing (4px grid) */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px; --space-12: 48px;
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .3);
+  --shadow-md: 0 8px 24px rgb(0 0 0 / .35);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / .45);
+
+  /* Motion */
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 320ms;
+
+  /* Layout */
+  --sidebar-w: 268px;
+  --rail-w: 60px;
+  --content-w: 760px;
+  --app-h: 100dvh;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  /* Type */
+  --font: "Inter", "Vazirmatn", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-fa: "Vazirmatn", "Inter", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  /* ── Legacy aliases ─────────────────────────────────────────
+     Older editor screens still read these names. They resolve to
+     the neutral tokens above so no second palette exists.        */
+  --bg-deep: var(--bg);
+  --bg-elevated: var(--surface);
+  --surface-hover: var(--elevated);
+  --surface-active: #2e2e2e;
+  --border-strong: #454545;
+  --text-secondary: var(--text-2);
+  --text-tertiary: var(--text-3);
+  --text-inverse: var(--on-ink);
+  --muted: var(--text-2);
+  --accent: var(--ink);
+  --accent-hover: var(--ink-hover);
+  --accent-soft: var(--ink-soft);
+  --info: var(--text-2);
+  --danger: var(--error);
+  --gradient-brand: var(--ink);
+  --gradient-surface: none;
+  --shadow-glow: var(--shadow-md);
+  --duration-fast: var(--dur-fast);
+  --duration-normal: var(--dur);
+  --ease-out: var(--ease);
+  --eg-bg: var(--bg); --eg-sidebar: var(--sidebar); --eg-surface: var(--surface);
+  --eg-input: var(--elevated); --eg-border: var(--border); --eg-text: var(--text);
+  --eg-muted: var(--text-2); --eg-accent: var(--ink); --eg-good: var(--success);
+  --eg-warn: var(--warning); --eg-danger: var(--error);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --sidebar: #f9f9f9;
+  --surface: #f4f4f4;
+  --elevated: #ffffff;
+  --hover: rgb(0 0 0 / .05);
+  --active: rgb(0 0 0 / .08);
+  --border: #e3e3e3;
+  --border-subtle: #ececec;
+  --scrim: rgb(0 0 0 / .32);
+  --text: #0d0d0d;
+  --text-2: #5d5d5d;
+  --text-3: #6e6e6e;
+  --on-ink: #ffffff;
+  --ink: #0d0d0d;
+  --ink-hover: #000000;
+  --ink-soft: rgb(0 0 0 / .06);
+  --success: #15803d;
+  --success-soft: rgb(21 128 61 / .10);
+  --warning: #a16207;
+  --warning-soft: rgb(161 98 7 / .10);
+  --error: #dc2626;
+  --error-soft: rgb(220 38 38 / .08);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .08);
+  --shadow-md: 0 8px 24px rgb(0 0 0 / .10);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / .14);
+  --surface-active: #e8e8e8;
+  --border-strong: #cfcfcf;
+}

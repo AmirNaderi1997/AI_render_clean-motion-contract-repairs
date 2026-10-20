@@ -1,65 +1,53 @@
 import React, { useState } from "react";
-import { Link, useSearchParams, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "./api";
 import { friendlyError } from "./ui";
+import { AuthFrame } from "./auth/AuthPage";
+import { PasswordField } from "./auth/AuthForms";
 
 export default function ResetPassword() {
   const [params] = useSearchParams();
   const token = params.get("token") || "";
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState("");
+  const [errors, setErrors] = useState<{ password?: string; confirm?: string; form?: string }>({});
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    if (password.length < 8) { setError("Password must be at least 8 characters"); return; }
-    if (password !== confirm) { setError("Passwords don't match"); return; }
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const next: typeof errors = {};
+    if (password.length < 8) next.password = "Password must be at least 8 characters.";
+    if (password !== confirm) next.confirm = "Passwords don't match.";
+    setErrors(next);
+    if (Object.keys(next).length) return;
     setLoading(true);
     try {
       await api.resetPassword(token, password);
       setSuccess(true);
       setTimeout(() => navigate("/login"), 2000);
-    } catch (err: any) {
-      setError(friendlyError(err, "reset your password"));
+    } catch (err) {
+      setErrors({ form: friendlyError(err, "reset your password") });
     } finally {
       setLoading(false);
     }
   };
 
-  if (!token) {
-    return (
-      <div className="auth-page">
-        <div className="auth-card">
-          <div className="auth-error">Invalid reset link — no token provided.</div>
-          <div className="auth-links"><Link to="/forgot-password">Request a new reset link</Link></div>
-        </div>
-      </div>
-    );
-  }
+  if (!token) return <AuthFrame title="Link not valid" subtitle="This reset link has no token.">
+    <div className="auth-form"><Link className="btn btn-lg btn-block" to="/forgot-password">Request a new reset link</Link></div>
+  </AuthFrame>;
 
-  return (
-    <div className="auth-page">
-      <form className="auth-card" onSubmit={submit}>
-        <div className="auth-logo" aria-hidden="true">✦</div>
-        <h1>Set a new password</h1>
-        <p className="auth-subtitle">Choose a secure password for EditorGPT</p>
-        {success && <div className="ok">Password reset successfully! Redirecting to login...</div>}
-        {error && <div className="auth-error" role="alert">{error}</div>}
-        {!success && (
-          <>
-            <label htmlFor="reset-password">New password</label>
-            <input id="reset-password" type="password" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 8 characters" required autoFocus />
-            <label htmlFor="reset-confirm">Confirm password</label>
-            <input id="reset-confirm" type="password" autoComplete="new-password" value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Repeat password" required />
-            <button type="submit" disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}>{loading ? "Resetting..." : "Reset password"}</button>
-          </>
-        )}
-        <div className="auth-links"><Link to="/login">Back to login</Link></div>
-      </form>
-    </div>
-  );
+  return <AuthFrame title="Set a new password" subtitle="Choose a secure password for EditorGPT.">
+    <form className="auth-form" onSubmit={submit}>
+      {success ? <div className="notice" data-tone="success" role="status">Password reset. Redirecting to login…</div> : null}
+      {errors.form ? <div className="notice" data-tone="error" role="alert">{errors.form}</div> : null}
+      {!success ? <>
+        <PasswordField id="reset-password" label="New password" autoComplete="new-password" value={password} onChange={setPassword} error={errors.password} hint="At least 8 characters." autoFocus/>
+        <PasswordField id="reset-confirm" label="Confirm password" autoComplete="new-password" value={confirm} onChange={setConfirm} error={errors.confirm}/>
+        <button type="submit" className="btn btn-lg btn-block" disabled={loading}>{loading ? <><span className="spinner"/>Resetting…</> : "Reset password"}</button>
+      </> : null}
+      <p className="auth-switch"><Link to="/login">Back to login</Link></p>
+    </form>
+  </AuthFrame>;
 }
