@@ -39,3 +39,30 @@ def test_tts_uses_gateway_instead_of_direct_transport(monkeypatch,tmp_path):
     _generate_elevenlabs('سلام',str(output),voice_id='existing-voice')
     assert output.read_bytes()==b'tested-audio'
     assert calls==[('narration','سلام','existing-voice')]
+
+
+def test_resume_reuses_owned_job_and_rejects_other_users(monkeypatch,tmp_path):
+    import pytest
+    from types import SimpleNamespace
+    from app import studio_store, studio_orchestrator as o
+    from brain import content_creator
+    from app.studio_store import repo,run
+    monkeypatch.setattr(studio_store,'DB_AVAILABLE',False)
+    monkeypatch.setattr(studio_store,'ROOT',tmp_path)
+    monkeypatch.setattr(studio_store,'FALLBACK',tmp_path/'studio.json')
+    conversation=run(repo.create_conversation('owner'))
+    project=run(repo.create_project(conversation['id'],'owner','motion','Existing',{'confirmed':True},'same-job'))
+    job=SimpleNamespace(dir=tmp_path,render=SimpleNamespace(status='idle'))
+    monkeypatch.setattr(o.jobstore,'get',lambda ref: job if ref=='same-job' else None)
+    monkeypatch.setattr(o,'_provider',lambda:'lm_gateway')
+    generation={'state':'failed'};calls=[]
+    monkeypatch.setattr(content_creator,'get_storyboard_status',lambda _:generation)
+    def approve(existing,provider_name):
+        assert existing is job
+        calls.append(provider_name);generation['state']='generating'
+    monkeypatch.setattr(content_creator,'approve_and_generate',approve)
+    with pytest.raises(KeyError): o.resume_project(project['id'],'different-user')
+    assert o.resume_project(project['id'],'owner')['stage']=='generating assets'
+    assert o.resume_project(project['id'],'owner')['status']=='running'
+    assert calls==['lm_gateway']
+    assert run(repo.get_project(project['id'],'owner'))['external_ref']=='same-job'
