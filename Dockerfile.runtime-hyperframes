@@ -5,6 +5,7 @@ FROM ${RUNTIME_BASE}
 COPY npm/ /usr/local/lib/node_modules/npm/
 COPY hyperframes/ /opt/hyperframes/
 COPY engine/hyperframes/ /app/engine/hyperframes/
+COPY engine/sfx.py /app/engine/sfx.py
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && node --version && npm --version \

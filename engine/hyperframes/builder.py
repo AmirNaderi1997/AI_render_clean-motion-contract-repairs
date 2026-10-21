@@ -330,7 +330,7 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
         visual_library.append(value)
     metadata = {
         "id": "ai-render-talking-2", "name": "AI Render Talking 2",
-        "visual_library": visual_library,
+        "visual_library": visual_library, "duration": duration,
     }
     (project_dir / "meta.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
     cards = "\n".join(_beat_markup(beat) for beat in beats)

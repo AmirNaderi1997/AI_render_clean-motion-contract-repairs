@@ -25,3 +25,21 @@ def test_development_npx_is_pinned(monkeypatch, tmp_path):
     monkeypatch.setenv('HYPERFRAMES_CLI', str(tmp_path/'missing'))
     monkeypatch.setattr('engine.hyperframes.cli.shutil.which', lambda name: '/bin/npx' if name == 'npx' else None)
     assert cli_command() == ['/bin/npx', '--yes', 'hyperframes@0.8.161']
+
+
+def test_check_batches_cover_each_visual_and_ending(tmp_path):
+    import json
+    from engine.hyperframes.renderer import check_batches
+    (tmp_path/'meta.json').write_text(json.dumps({'duration': 120, 'visual_library': [
+        {'start': n, 'end': n+2} for n in (20, 25, 46, 91, 96)]}))
+    batches = check_batches(tmp_path)
+    times = [float(t) for batch in batches for t in batch[-1].split(',')]
+    assert times == [.5, 21, 26, 47, 92, 97, 119.75]
+    assert all('--range' not in batch and '--no-contrast' not in batch for batch in batches)
+
+
+def test_inline_scene_does_not_claim_unregistered_child_timeline():
+    from engine.hyperframes.scenes import scene_markup
+    html = scene_markup('beat-1', 2, 3, '<div>test</div>')
+    assert 'data-composition-id' not in html
+    assert 'class="custom-beat clip"' in html

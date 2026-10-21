@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import signal
 import subprocess
@@ -36,6 +37,27 @@ def summarize_failure(detail: str, limit: int = 420) -> str:
     return summary or detail.strip()[-limit:]
 
 
+def check_batches(project_dir: Path) -> list[list[str]]:
+    """Keep the CLI's per-session audit deadline bounded on CPU-only servers.
+
+    Audit every authored visual midpoint, plus the opening, ending and a global
+    midpoint. These are full checks (not --range, which skips motion checks).
+    No audit category is disabled; only the samples are distributed over sessions.
+    """
+    try:
+        meta = json.loads((project_dir / 'meta.json').read_text())
+        beats = meta.get('visual_library') or []
+        if not beats:
+            return [[]]
+        times = sorted({round((float(b['start']) + float(b['end'])) / 2, 3) for b in beats})
+        duration = float(meta.get('duration') or max(float(b['end']) for b in beats))
+        times = sorted({min(0.5, duration/2), *times, max(0, duration - 0.25)})
+        return [['--samples', '1', '--at', ','.join(str(t) for t in times[i:i+2])]
+                for i in range(0, len(times), 2)]
+    except (OSError, ValueError, KeyError, TypeError):
+        return [[]]
+
+
 def render_project(
     project_dir: Path,
     output: Path,
@@ -50,20 +72,18 @@ def render_project(
         on_progress(83)
     check = None
     detail = ""
-    for attempt in range(3):
-        check = subprocess.run(
-            [*cli_command(), "check", "."],
-            cwd=project_dir, env=env, text=True, capture_output=True, timeout=180,
-        )
-        detail = "\n".join(part for part in (check.stdout, check.stderr) if part)
-        if not check.returncode:
-            break
-        # Browser startup occasionally misses the CLI's 10s navigation
-        # window even though the identical project passes immediately after.
-        # Retry only that transient; structural/runtime errors still fail fast.
-        if "Navigation timeout" not in detail or attempt == 2:
-            raise HyperFramesError(f"HyperFrames check failed: {detail[-2400:]}")
-        time.sleep(1.5 * (attempt + 1))
+    for batch in check_batches(project_dir):
+        for attempt in range(3):
+            check = subprocess.run(
+                [*cli_command(), "check", ".", *batch],
+                cwd=project_dir, env=env, text=True, capture_output=True, timeout=180,
+            )
+            detail = "\n".join(part for part in (check.stdout, check.stderr) if part)
+            if not check.returncode:
+                break
+            if "Navigation timeout" not in detail or attempt == 2:
+                raise HyperFramesError(f"HyperFrames check failed: {detail[-2400:]}")
+            time.sleep(1.5 * (attempt + 1))
     if check is None or check.returncode:
         raise HyperFramesError(f"HyperFrames check failed: {detail[-2400:]}")
     if on_progress:

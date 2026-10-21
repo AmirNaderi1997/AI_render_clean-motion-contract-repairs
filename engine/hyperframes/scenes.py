@@ -129,7 +129,10 @@ def scene_backdrop(beat_id: str, start: float, duration: float, bg: str = "") ->
 
 
 def scene_markup(beat_id: str, start: float, duration: float, html: str) -> str:
-    return (f'<section id="{beat_id}" class="custom-beat clip" data-composition-id="{beat_id}-scene" data-start="{start:.3f}" data-duration="{duration:.3f}" '
+    # This is a clip driven by the parent's single timeline, not an independently
+    # registered composition. A composition-id here advertises a child timeline
+    # that does not exist and makes runtime discovery/validation misleading.
+    return (f'<section id="{beat_id}" class="custom-beat clip" data-start="{start:.3f}" data-duration="{duration:.3f}" '
             f'data-track-index="2" dir="rtl">{html}</section>')
 
 
