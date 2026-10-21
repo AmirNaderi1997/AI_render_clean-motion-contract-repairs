@@ -1,0 +1,11 @@
+# Minimal repair of the existing production image, using trusted dependency
+# folders prepared on the attached disk (not an application checkout/context).
+ARG RUNTIME_BASE=ai-render-runtime:studio-final
+FROM ${RUNTIME_BASE}
+COPY npm/ /usr/local/lib/node_modules/npm/
+COPY hyperframes/ /opt/hyperframes/
+COPY engine/hyperframes/ /app/engine/hyperframes/
+RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && node --version && npm --version \
+    && node /opt/hyperframes/node_modules/hyperframes/bin/hyperframes.mjs --version
