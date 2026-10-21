@@ -29,6 +29,24 @@ def test_plain_panel_reuse_does_not_invalidate_every_cached_shot(tmp_path):
         assert restored.size == (int(talking_2.W*1.12),int(talking_2.SPLIT_Y*1.12))
 
 
+def test_scene_js_is_parsed_not_just_pattern_matched():
+    from engine.hyperframes.scenes import validate_scene
+    errors=validate_scene('beat-0','<h2>سلام</h2>','#beat-0{color:white}',
+        'tl.to($("h2"),{opacity:1},T); t l;','full')
+    assert any('SyntaxError' in e for e in errors)
+
+
+def test_check_error_summary_keeps_real_blocker_not_warning_tail(tmp_path):
+    import json
+    from engine.hyperframes.renderer import check_failure_summary
+    folder=tmp_path/'.hyperframes/artifacts/checks';folder.mkdir(parents=True)
+    (folder/'report.json').write_text(json.dumps({'lint':{'findings':[
+        {'severity':'error','code':'invalid_inline_script_syntax','message':'Unexpected token'},
+        {'severity':'warning','code':'nested_structure_needs_subcomposition','message':'Use subcomposition'}]}}))
+    summary=check_failure_summary(tmp_path,'warnings only')
+    assert 'Unexpected token' in summary and 'Use subcomposition' not in summary
+
+
 def transcript(count=11):
     sentences = [{'start': i*3., 'end': i*3.+2.8, 'text': f'مفهوم شماره {i} برای سلامتی'} for i in range(count)]
     words = [{'start': i*3., 'end': i*3.+2.8, 'w': 'سلامتی'} for i in range(count)]

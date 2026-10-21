@@ -782,10 +782,16 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
     if music in (None, DEFAULT_MUSIC) and state.get("music") is not None:
         music = default_music
     rough = job_dir / "talking_reel_work" / "hyperframes_base.mp4" if hyperframes else out
-    media.render(video, plan, rough, work_dir=job_dir / "talking_reel_work",
-                 music=resolve_music(music), cta=state.get("cta") or "", render_settings=render_settings,
-                 logo_path=custom_logo(job_dir),
-                 on_progress=progress)
+    render_options=dict(work_dir=job_dir / "talking_reel_work",music=resolve_music(music),
+        cta=state.get("cta") or "",render_settings=render_settings,logo_path=custom_logo(job_dir),on_progress=progress)
+    if hyperframes:
+        from engine.native_checkpoint import render_cached
+        reused=render_cached(media.render,video,plan,rough,options=render_options,
+            implementations=[Path(media.__file__),Path(media.base.__file__)])
+        if reused:
+            _stage(job_dir,'reusing prepared cut',progress=75)
+    else:
+        media.render(video,plan,rough,**render_options)
     if hyperframes:
         from engine.hyperframes import build_project, build_visual_beats, render_project
 

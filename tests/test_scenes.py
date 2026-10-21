@@ -69,7 +69,8 @@ def test_builder_emits_scoped_scene_speaker_stage_and_local_assets(tmp_path, mon
     html = (project / "index.html").read_text()
     assert 'src="./assets/gsap.min.js"' in html and "cdn.jsdelivr" not in html            # no network at render time
     assert '<div id="speaker-stage"' in html and 'id="rough-cut"' in html                  # speaker is wrapped, never animated directly
-    assert '<section id="beat-1-0" class="custom-beat clip" data-composition-id="beat-1-0-scene" data-start="4.000" data-duration="2.200"' in html
+    assert '<section id="beat-1-0" class="custom-beat clip" data-start="4.000" data-duration="2.200"' in html
+    assert 'data-composition-id="beat-1-0-scene"' not in html
     assert "#beat-1-0 .stage{" in html and "@font-face{font-family:Ray;font-weight:900" in html
     assert '"scale": 0.46' in html and 'tl.to("#speaker-stage"' in html                      # pip enter + return
     assert (project / "assets" / "fonts" / "ray-black.ttf").is_file() and (project / "assets" / "gsap.min.js").is_file()

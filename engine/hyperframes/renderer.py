@@ -38,6 +38,24 @@ def summarize_failure(detail: str, limit: int = 420) -> str:
     return summary or detail.strip()[-limit:]
 
 
+def check_failure_summary(project: Path, detail: str, *, since: float = 0) -> str:
+    """Keep the blocking finding, not the tail of unrelated lint warnings."""
+    reports=sorted((project/'.hyperframes/artifacts/checks').glob('*.json'),
+                   key=lambda p:p.stat().st_mtime,reverse=True)
+    if reports and reports[0].stat().st_mtime >= since-1:
+        try:
+            report=json.loads(reports[0].read_text())
+            errors=[]
+            for section in ('lint','runtime','layout','motion','contrast'):
+                for finding in (report.get(section) or {}).get('findings',[]):
+                    if finding.get('severity')=='error':
+                        errors.append(str(finding.get('code','check failed'))+': '+str(finding.get('message','')))
+            if errors:return ' | '.join(errors)[:1200]
+        except (OSError,ValueError,TypeError):
+            pass
+    return summarize_failure(detail,1200)
+
+
 def check_batches(project_dir: Path) -> list[list[str]]:
     """Keep the CLI's per-session audit deadline bounded on CPU-only servers.
 
@@ -101,6 +119,7 @@ def render_project(
         batches = []
     for batch_index, batch in enumerate(batches):
         for attempt in range(3):
+            check_started=time.time()
             check = subprocess.run(
                 [*cli_command(), "check", ".", *batch],
                 cwd=project_dir, env=env, text=True, capture_output=True, timeout=180,
@@ -109,7 +128,7 @@ def render_project(
             if not check.returncode:
                 break
             if "Navigation timeout" not in detail or attempt == 2:
-                raise HyperFramesError(f"HyperFrames check failed: {detail[-2400:]}")
+                raise HyperFramesError('HyperFrames check failed: '+check_failure_summary(project_dir,detail,since=check_started))
             time.sleep(1.5 * (attempt + 1))
         if on_progress and check is not None and not check.returncode:
             on_progress(83 + int(3 * (batch_index + 1) / len(batches)))

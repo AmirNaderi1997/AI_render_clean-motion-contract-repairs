@@ -7,6 +7,8 @@ speaker video is moved by the builder (not by the scene) so it always returns to
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from html.parser import HTMLParser
 
 MAX_HTML, MAX_CSS, MAX_JS = 24_000, 16_000, 12_000
@@ -127,6 +129,20 @@ def validate_scene(beat_id: str, html: str, css: str, js: str, speaker: str) -> 
         problems.append("use tl.fromTo instead of tl.from (immediateRender breaks seeking)")
     if re.search(r"letter-spacing\s*:\s*-", css + html):
         problems.append("negative letter-spacing breaks Persian letter joins; use 0 for Persian text")
+    if not problems:
+        node = shutil.which('node')
+        if not node:
+            problems.append('Node.js is required to validate motion JavaScript syntax')
+        else:
+            try:
+                parsed = subprocess.run([node, '--check'],
+                    input='function scene(tl,root,$,T,D){\n'+js+'\n}',
+                    text=True,capture_output=True,timeout=10)
+                if parsed.returncode:
+                    detail=next((line.strip() for line in parsed.stderr.splitlines() if 'SyntaxError:' in line), 'invalid JavaScript')
+                    problems.append(detail[:220])
+            except (OSError,subprocess.TimeoutExpired):
+                problems.append('Motion JavaScript syntax could not be verified')
     return problems
 
 
