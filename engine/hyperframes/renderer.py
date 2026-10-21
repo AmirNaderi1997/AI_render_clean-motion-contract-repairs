@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import json
+import hashlib
 import re
 import signal
 import subprocess
@@ -83,6 +84,14 @@ def render_project(
     check = None
     detail = ""
     batches = check_batches(project_dir)
+    receipt = project_dir/'.hyperframes/editor-checkpoint.json'
+    key = audit_key(project_dir)
+    try:
+        cached = json.loads(receipt.read_text()).get('key') == key
+    except (OSError, ValueError):
+        cached = False
+    if cached:
+        batches = []
     for batch_index, batch in enumerate(batches):
         for attempt in range(3):
             check = subprocess.run(
@@ -97,10 +106,46 @@ def render_project(
             time.sleep(1.5 * (attempt + 1))
         if on_progress and check is not None and not check.returncode:
             on_progress(83 + int(3 * (batch_index + 1) / len(batches)))
-    if check is None or check.returncode:
+    if not cached and (check is None or check.returncode):
         raise HyperFramesError(f"HyperFrames check failed: {detail[-2400:]}")
+    if not cached:
+        receipt.parent.mkdir(parents=True,exist_ok=True)
+        receipt.write_text(json.dumps({'key': key, 'scope':'motion windows, opening and ending; post-render QC required'}))
     if on_progress:
         on_progress(86)
+    from .sparse import render_sparse
+    result = render_sparse(project_dir, output,
+        lambda p,o: _render_cli(p,o,timeout=timeout,should_cancel=should_cancel),
+        on_progress=on_progress,should_cancel=should_cancel)
+    if result is not None:
+        if on_progress:
+            on_progress(99)
+        return result
+    return _render_cli(project_dir,output,timeout=timeout,on_progress=on_progress,should_cancel=should_cancel)
+
+
+def audit_key(project_dir: Path) -> str:
+    """Invalidate quality receipts when owned code/media/check windows change."""
+    value = hashlib.sha256(json.dumps([HYPERFRAMES_VERSION,check_batches(project_dir)]).encode())
+    files = [project_dir/name for name in ('index.html','meta.json','hyperframes.json')]
+    files += list(project_dir.glob('*.motion.json'))
+    for folder in ('assets','compositions'):
+        if (project_dir/folder).is_dir():
+            files += [p for p in (project_dir/folder).rglob('*') if p.is_file()]
+    for path in sorted(files):
+        if not path.is_file():
+            continue
+        info=path.stat()
+        value.update(str(path.relative_to(project_dir)).encode())
+        if path.suffix in {'.html','.js','.css','.json'}:
+            value.update(path.read_bytes())
+        else:
+            value.update(repr((info.st_size,info.st_mtime_ns)).encode())
+    return value.hexdigest()
+
+
+def _render_cli(project_dir: Path, output: Path, *, timeout=1800, on_progress=None, should_cancel=None) -> Path:
+    env = {**os.environ, 'NO_COLOR':'1'}
     command = (
         [*cli_command(), "render", ".",
          "--output", str(output.resolve()), "--quality", "standard", "--workers", "1", "--sdr"]
@@ -128,8 +173,8 @@ def render_project(
                 os.killpg(process.pid, signal.SIGTERM)
                 stdout, stderr = process.communicate(timeout=15)
                 raise HyperFramesError(f"HyperFrames render timed out after {timeout} seconds")
-            if on_progress:
-                on_progress(min(98, 87 + int(elapsed / 20)))
+            # No elapsed-time percentage: the CLI does not expose frame progress
+            # here. Keep the last real milestone until encoding completes.
     if process.returncode or not output.is_file():
         detail = (stderr or stdout or "unknown render failure")[-2400:]
         if "HDR pre-extraction" in detail:
