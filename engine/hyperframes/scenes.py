@@ -179,8 +179,17 @@ def scene_markup(beat_id: str, start: float, duration: float, html: str) -> str:
 def scene_script(beat_id: str, start: float, end: float, js: str, speaker: str) -> str:
     """The scene's JS runs inside a closure that provides: tl, root, $ (scoped query), T (start seconds), D (duration)."""
     duration = end - start
-    lines = [f'(function(){{ const root = document.getElementById("{beat_id}"); const $ = (s) => Array.from(root.querySelectorAll(s)); '
-             f'const T = {start:.3f}, D = {duration:.3f};', js, '})();']
+    # GSAP's default immediateRender eagerly applies later fromTo start states.
+    # Those states can overwrite earlier explicit sets when the renderer seeks
+    # directly into a scene. Enforce the seek-safe contract at the adapter, not
+    # by rewriting model-authored JavaScript or asking the model to regenerate.
+    lines = ['(function(parent){ const tl = new Proxy(parent, {get(target, key){ '
+             'const value = Reflect.get(target, key, target); '
+             'if (typeof value !== "function") return value; '
+             'return (...args) => { if (key === "fromTo") args[2] = {...args[2], immediateRender:false}; '
+             'const result = value.apply(target, args); return result === target ? tl : result; }; }}); '
+             f'const root = document.getElementById("{beat_id}"); const $ = (s) => Array.from(root.querySelectorAll(s)); '
+             f'const T = {start:.3f}, D = {duration:.3f};', js, '})(tl);']
     tweens = SPEAKER_TWEENS.get(speaker)
     if tweens:
         enter = {**tweens["to"], "duration": .5, "ease": "power3.inOut", "overwrite": "auto"}
