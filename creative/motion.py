@@ -205,12 +205,13 @@ def design_system(brief_text: str, concept_text: str, used: list[str] | None = N
 
 def author_scene(spec: SceneSpec, design: DesignSystem, *, used: list[str] | None = None, repairs: int = 2) -> AuthoredScene:
     """One validated scene. Repairs feed the validator's messages back to the model."""
-    from engine.hyperframes.scenes import validate_scene
+    from engine.hyperframes.scenes import validate_scene, scope_owned_selectors
     prompt = build_prompt(spec, design)
     last: list[str] = []
     for attempt in range(repairs + 1):
         user = prompt if not last else prompt + "\n\nYour previous answer was rejected for these reasons. Fix every one and return the full JSON again:\n- " + "\n- ".join(last[:8])
         scene = llm.ask(AuthoredScene, "You output a single JSON object and nothing else.", user, route=MOTION_ROUTE, tokens=9000, attempts=2, used=used)
+        scene.css = scope_owned_selectors(spec.id, scene.html, scene.css)
         last = validate_scene(spec.id, scene.html, scene.css, scene.js, scene.speaker)
         if not last:
             return scene

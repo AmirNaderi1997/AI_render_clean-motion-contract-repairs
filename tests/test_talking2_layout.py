@@ -5,6 +5,17 @@ from engine.hyperframes.builder import build_visual_beats, _timeline_script
 from creative.motion import SceneSpec, DesignSystem, build_prompt
 
 
+def test_owned_css_repair_keeps_strict_scope_validation():
+    from engine.hyperframes.scenes import scope_owned_selectors, validate_scene
+    body='<h2 id="beat-0-title">سلام</h2>'
+    css=scope_owned_selectors('beat-0',body,'#beat-0-title{color:white} .outside{color:red}')
+    assert '#beat-0 #beat-0-title{' in css
+    errors=validate_scene('beat-0',body,css,'tl.set($("h2"),{opacity:1},T);','full')
+    assert any('.outside' in p for p in errors)
+    assert not any('beat-0-title' in p for p in errors)
+    assert scope_owned_selectors('beat-0',body,'#beat-0-unknown{color:red}').startswith('#beat-0-unknown{')
+
+
 def transcript(count=11):
     sentences = [{'start': i*3., 'end': i*3.+2.8, 'text': f'مفهوم شماره {i} برای سلامتی'} for i in range(count)]
     words = [{'start': i*3., 'end': i*3.+2.8, 'w': 'سلامتی'} for i in range(count)]

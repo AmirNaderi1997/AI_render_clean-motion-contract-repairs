@@ -64,6 +64,30 @@ def _css_rules(css: str) -> list[tuple[str, str]]:
     return [(m.group(1).strip(), m.group(2)) for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css)]
 
 
+def scope_owned_selectors(beat_id: str, html: str, css: str) -> str:
+    """Qualify a scene's own child IDs without accepting global CSS.
+
+    Models often use #scene-id-child instead of #scene-id #scene-id-child.
+    This is a deterministic namespace repair, not a reason for another model
+    request. Unknown IDs, unscoped classes and at-rules still fail validation.
+    """
+    scan = _Scan()
+    scan.feed(html)
+    owned = {i for i in scan.ids if i.startswith(beat_id + '-')}
+
+    def rule(match):
+        selectors = []
+        for raw in match.group(1).split(','):
+            selector = raw.strip()
+            head = re.match(r'^#([A-Za-z0-9_-]+)(?=[\s.:\[>+~#]|$)', selector)
+            if head and head[1] in owned:
+                selector = f'#{beat_id} ' + selector
+            selectors.append(selector)
+        return ','.join(selectors) + '{' + match.group(2) + '}'
+
+    return re.sub(r'([^{}]+)\{([^{}]*)\}', rule, css)
+
+
 def validate_scene(beat_id: str, html: str, css: str, js: str, speaker: str) -> list[str]:
     """Problems that make a scene unsafe or undeterministic. Empty list = acceptable."""
     problems: list[str] = []
