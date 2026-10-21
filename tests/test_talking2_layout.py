@@ -16,6 +16,19 @@ def test_owned_css_repair_keeps_strict_scope_validation():
     assert scope_owned_selectors('beat-0',body,'#beat-0-unknown{color:red}').startswith('#beat-0-unknown{')
 
 
+def test_plain_panel_reuse_does_not_invalidate_every_cached_shot(tmp_path):
+    import os
+    from PIL import Image
+    path=talking_2.plain_panel(tmp_path/'plain.png')
+    os.utime(path,ns=(1_000_000_000,1_000_000_000))
+    talking_2.plain_panel(path)
+    assert path.stat().st_mtime_ns == 1_000_000_000
+    Image.new('RGB',(8,8),'red').save(path)
+    talking_2.plain_panel(path)
+    with Image.open(path) as restored:
+        assert restored.size == (int(talking_2.W*1.12),int(talking_2.SPLIT_Y*1.12))
+
+
 def transcript(count=11):
     sentences = [{'start': i*3., 'end': i*3.+2.8, 'text': f'مفهوم شماره {i} برای سلامتی'} for i in range(count)]
     words = [{'start': i*3., 'end': i*3.+2.8, 'w': 'سلامتی'} for i in range(count)]

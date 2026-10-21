@@ -273,7 +273,18 @@ def picture_panel(picture: Path, out: Path) -> Path:
 def plain_panel(out: Path) -> Path:
     from PIL import Image
 
-    Image.new("RGB", (int(W * 1.12), int(SPLIT_Y * 1.12)), BG_COLOUR).save(out)
+    size = (int(W * 1.12), int(SPLIT_Y * 1.12))
+    expected = Image.new('RGB', (1, 1), BG_COLOUR).getpixel((0, 0))
+    if out.is_file():
+        try:
+            with Image.open(out) as existing:
+                if existing.size == size and existing.convert('RGB').getextrema() == tuple((v, v) for v in expected):
+                    # cached_shot includes source mtimes: rewriting this same
+                    # PNG invalidates every split shot on every continuation.
+                    return out
+        except OSError:
+            pass
+    Image.new("RGB", size, BG_COLOUR).save(out)
     return out
 
 
