@@ -92,7 +92,8 @@ def render_sparse(project: Path, output: Path, render_clip, *, on_progress=None,
     facts = probe(source)
     if not any(s.get('codec_type') == 'audio' for s in facts['streams']):
         return None
-    key = hashlib.sha256((project/'index.html').read_bytes() +
+    from .renderer import audit_key
+    key = hashlib.sha256(audit_key(project).encode() +
         repr((str(source),source.stat().st_size,source.stat().st_mtime_ns,windows,'sparse-v1')).encode()).hexdigest()[:20]
     root = project.parent/'hyperframes_sparse'/key
     root.mkdir(parents=True, exist_ok=True)

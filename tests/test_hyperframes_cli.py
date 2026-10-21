@@ -44,3 +44,18 @@ def test_inline_scene_does_not_claim_unregistered_child_timeline():
     html = scene_markup('beat-1', 2, 3, '<div>test</div>')
     assert 'data-composition-id' not in html
     assert 'class="custom-beat clip"' in html
+
+
+def test_quality_receipt_invalidates_when_composition_or_asset_changes(tmp_path):
+    from engine.hyperframes.renderer import audit_key
+    (tmp_path/'index.html').write_text('first')
+    (tmp_path/'assets').mkdir()
+    image=tmp_path/'assets/image.png'
+    image.write_bytes(b'first image')
+    initial=audit_key(tmp_path)
+    assert audit_key(tmp_path)==initial
+    image.write_bytes(b'a different image')
+    changed=audit_key(tmp_path)
+    assert changed!=initial
+    (tmp_path/'index.html').write_text('second')
+    assert audit_key(tmp_path)!=changed
