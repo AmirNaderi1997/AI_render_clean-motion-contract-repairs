@@ -24,6 +24,8 @@ class VisualBeat(BaseModel):
     narrative_role: str = "evidence"
     motion_style: str = "slide"
     why: str = ""
+    sentence_indices: list[int] = Field(default_factory=list)
+    spoken: str = ""
     # Authored scene from creative/motion.py: {"html","css","js","speaker"}; None = built-in template.
     custom: dict | None = None
 

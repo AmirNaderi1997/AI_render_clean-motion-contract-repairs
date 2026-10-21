@@ -48,6 +48,10 @@ def _intent(text: str, attachments: list[dict], current: dict | None) -> str:
 
 
 def _resolved_intent(text, attachments, current, on_title=None):
+    # Reference screenshots on an existing edit are not replacement footage.
+    # Resolve revisions before style selection, which otherwise starts a fresh job.
+    if current and current.get('external_ref') and not any(a.get('kind') == 'video' for a in attachments):
+        return 'modify'
     explicit_style = _style(text)
     if explicit_style and any(a.get('kind') == 'video' for a in attachments):
         if on_title: on_title(f'تدوین صحبتی {explicit_style[-1]} برای اینستاگرام')

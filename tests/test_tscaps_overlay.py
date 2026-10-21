@@ -132,7 +132,7 @@ def _styled_plan():
     return plan
 
 
-@pytest.mark.parametrize("module_name", ["talking_2", "talking_3"])
+@pytest.mark.parametrize("module_name", ["talking_3"])
 def test_split_styles_draw_only_hook_and_titles_with_the_overlay(module_name, tmp_path, monkeypatch):
     import importlib
     module = importlib.import_module(f"engine.talking_styles.{module_name}")

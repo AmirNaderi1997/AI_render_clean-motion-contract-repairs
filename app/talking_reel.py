@@ -801,8 +801,10 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
                 creative_motion.compose(beats, creative_motion.plan_from_public(load(job_dir).get("creative_plan")), transcript["sentences"],
                                         cache=job_dir / "talking_reel_work" / "authored_scenes.json",
                                         cached_only=bool(load(job_dir).get('cached_render_only')))
+                if any(b.layout == 'top_panel' and not b.custom for b in beats):
+                    raise RuntimeError('طراحی پنل‌های توضیحی کامل نشده؛ خروجی قالبی جایگزین نشد.')
             except Exception as exc:
-                if load(job_dir).get('cached_render_only'):
+                if any(b.layout == 'top_panel' for b in beats) or load(job_dir).get('cached_render_only'):
                     raise
                 log.warning("motion designer failed for %s: %s", job_dir.name, str(exc)[:200])
                 for beat in beats:
@@ -810,7 +812,9 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         _stage(job_dir, "building motion graphics", progress=78,
                visual_beats=[{**beat.model_dump(exclude={"custom"}), "authored": bool(beat.custom)} for beat in beats])
         project = job_dir / "talking_reel_work" / "hyperframes"
-        build_project(project, rough, beats, duration=plan.duration)
+        from engine.probe import probe
+        render_duration=float(probe(rough)['format']['duration'])
+        build_project(project, rough, beats, duration=render_duration)
         _stage(job_dir, "rendering motion graphics", progress=82)
         try:
             render_project(
@@ -818,28 +822,24 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
                 on_progress=lambda pct: _stage(job_dir, "rendering motion graphics", progress=pct),
             )
         except Exception as exc:
+            if any(b.layout == 'top_panel' for b in beats):
+                raise  # Never silently downgrade persistent explanation panels.
             if not any(beat.custom for beat in beats):
                 raise
             log.warning("authored motion failed to render for %s (%s); using templates", job_dir.name, str(exc)[:200])
             for beat in beats:
                 beat.custom = None
-            build_project(project, rough, beats, duration=plan.duration)
+            build_project(project, rough, beats, duration=render_duration)
             render_project(
                 project, out,
                 on_progress=lambda pct: _stage(job_dir, "rendering motion graphics", progress=pct),
             )
-        from engine.hyperframes.quality import improve_beats, review_render
+        from engine.hyperframes.quality import review_render
         review = review_render(out, beats, job_dir / "talking_reel_work")
         _stage(job_dir, "reviewing motion graphics", progress=99, visual_qc=review)
         if not review["passed"]:
-            beats = improve_beats(beats)
-            _stage(job_dir, "improving motion graphics", progress=82,
-                   visual_beats=[beat.model_dump() for beat in beats])
-            build_project(project, rough, beats, duration=plan.duration)
-            render_project(project, out,
-                           on_progress=lambda pct: _stage(job_dir, "improving motion graphics", progress=pct))
-            review = review_render(out, beats, job_dir / "talking_reel_work")
-            _stage(job_dir, "reviewing improved render", progress=99, visual_qc=review)
+            raise ValueError('بازبینی موشن نیازمند اصلاح است؛ رندر تکراری خودکار انجام نشد: '+
+                '; '.join(review['problems']))
     state = load(job_dir)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",
                  duration=round(plan.duration, 2), shots=len(plan.shots))

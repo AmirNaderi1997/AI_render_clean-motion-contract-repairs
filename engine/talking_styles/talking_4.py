@@ -23,7 +23,7 @@ probe_video = base.probe_video
 def plan_reel(transcript: dict, decisions: dict, faces: list[tuple[float, float, float]], duration: float,
               pictures: Optional[dict[int, str]] = None) -> base.ReelPlan:
     clean = {**decisions, "broll": [], "chips": [], "titles": []}
-    plan = base.plan_reel(transcript, clean, faces, duration, pictures={})
+    plan = base.plan_reel(transcript, clean, faces, duration, pictures={}, continuous_split=False)
     plan.theme = "minimal"
     return plan
 

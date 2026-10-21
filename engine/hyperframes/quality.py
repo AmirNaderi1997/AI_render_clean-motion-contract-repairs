@@ -8,15 +8,18 @@ from PIL import Image, ImageChops, ImageStat
 
 def review_render(video: Path, beats: list, work_dir: Path) -> dict:
     problems: list[str] = []
-    if len(beats) < 4:
+    continuous = bool(beats) and all(b.layout == 'top_panel' for b in beats)
+    if len(beats) < 4 and not continuous:
         problems.append("fewer than four visual worlds")
-    if any(beat.end - beat.start > 2.5 for beat in beats):
+    if not continuous and any(beat.end - beat.start > 2.5 for beat in beats):
         problems.append("a visual remains on screen too long")
-    if any(beat.layout != "full_frame" for beat in beats):
+    if any(beat.layout not in {'full_frame', 'top_panel'} for beat in beats):
         problems.append("a visual overlay can cover the speaker's face")
-    if any(a.visual_type == b.visual_type for a, b in zip(beats, beats[1:])):
+    if not continuous and any(a.visual_type == b.visual_type for a, b in zip(beats, beats[1:])):
         problems.append("consecutive scenes repeat the same visual grammar")
     primaries = [beat.registry_refs[0] for beat in beats if beat.registry_refs]
+    if continuous and any(abs(a.end-b.start) > .04 for a,b in zip(beats,beats[1:])):
+        problems.append('explanatory motion has uncovered gaps')
     if len(primaries) != len(set(primaries)):
         problems.append("catalog templates repeat")
 
@@ -25,17 +28,22 @@ def review_render(video: Path, beats: list, work_dir: Path) -> dict:
     images = []
     for index, beat in enumerate(beats):
         target = sample_dir / f"beat-{index:02d}.jpg"
-        subprocess.run([
+        if target.exists():
+            target.unlink()  # A failed extraction must not reuse a prior render's frame.
+        extracted=subprocess.run([
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss",
             f"{(beat.start + beat.end) / 2:.3f}", "-i", str(video), "-frames:v", "1",
             "-vf", "scale=96:170", str(target),
         ], check=False, timeout=40)
-        if target.is_file():
-            images.append(Image.open(target).convert("RGB"))
+        if extracted.returncode==0 and target.is_file():
+            with Image.open(target) as source:
+                images.append(source.convert("RGB"))
+        else:
+            problems.append(f"could not inspect actual scene {beat.id}")
     differences = []
     for left, right in zip(images, images[1:]):
         differences.append(sum(ImageStat.Stat(ImageChops.difference(left, right)).mean) / 3)
-    if differences and sum(value > 7.0 for value in differences) < max(2, len(differences) // 2):
+    if differences and sum(value > 7.0 for value in differences) < min(len(differences), max(2, len(differences) // 2)):
         problems.append("sampled scenes do not change enough")
     return {"passed": not problems, "problems": problems, "samples": len(images),
             "mean_scene_change": round(sum(differences) / len(differences), 2) if differences else 0}

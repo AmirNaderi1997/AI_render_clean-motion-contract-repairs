@@ -48,6 +48,8 @@ def build_visual_beats(plan, decisions: dict, transcript: dict | None = None) ->
     enormous card.  Every catalog item is scored for every beat; selected
     references are unique until the suitable pool is exhausted.
     """
+    if getattr(plan, 'continuous_split', False):
+        return _continuous_beats(plan, decisions, transcript or {})
     chips = {int(item["i"]): list(item.get("items") or []) for item in decisions.get("chips") or []}
     storyboard = list(decisions.get("storyboard") or [])
     if not storyboard:
@@ -157,6 +159,49 @@ def build_visual_beats(plan, decisions: dict, transcript: dict | None = None) ->
     return [beat for beat in beats if beat.end - beat.start >= 1.2]
 
 
+def _continuous_beats(plan, decisions: dict, transcript: dict) -> list[VisualBeat]:
+    """Cover the kept speech with contiguous, transcript-grounded 4–5-sentence groups.
+
+    Sentence indices remain source references; timing is mapped through the
+    actual cuts, rather than spreading a handful of decorative flashes.
+    """
+    sentences = transcript.get('sentences') or []
+    dropped = set(decisions.get('drop') or [])
+    kept = [i for i, s in enumerate(sentences) if i not in dropped and
+            any(float(shot.src_in) < float(s['end']) and float(shot.src_out) > float(s['start']) for shot in plan.shots)]
+    groups = [kept[i:i+5] for i in range(0, len(kept), 5)]
+    if len(groups) > 1 and len(groups[-1]) == 1:
+        groups[-1].insert(0, groups[-2].pop())
+    board = decisions.get('storyboard') or decisions.get('broll') or []
+    result = []
+    for n, indices in enumerate(groups):
+        evidence = ' '.join(str(sentences[i].get('text') or '') for i in indices)
+        idea = next((b for b in board if int(b.get('i', -1)) in indices), {})
+        title = ' '.join(str(idea.get('title') or idea.get('label') or evidence).split()[:9])[:80]
+        if not title:
+            continue
+        start = 0.0 if not result else result[-1].end
+        next_index = groups[n+1][0] if n+1 < len(groups) else None
+        if next_index is None:
+            end = float(plan.duration)
+        else:
+            boundary = float(sentences[next_index]['start'])
+            # A source pause may have been removed: take the first kept shot
+            # that reaches the next sentence, then map its actual boundary.
+            shot = next((s for s in plan.shots if float(s.src_out) > boundary and
+                         float(s.out_start) >= float(getattr(plan, 'cold_open', 0))), None)
+            end = float(shot.out_start) + max(0, boundary-float(shot.src_in)) if shot else float(plan.duration)
+        if end-start < .65:
+            continue
+        result.append(VisualBeat(id=f'beat-{indices[0]}-group-{n}', start=start, end=end,
+            title=title, items=[str(x)[:35] for x in idea.get('items', [])][:4],
+            visual_type=_visual_type(title, idea.get('items') or [], str(idea.get('visual_type') or '')),
+            layout='top_panel', narrative_role=str(idea.get('narrative_role') or 'explanation'),
+            why=str(idea.get('visual') or evidence), spoken=evidence, sentence_indices=indices,
+            motion_style=str(idea.get('motion_style') or 'assemble')))
+    return result
+
+
 def _beat_markup(beat: VisualBeat) -> str:
     if beat.custom:
         from .scenes import scene_markup
@@ -238,7 +283,8 @@ def _timeline_script(beats: list[VisualBeat]) -> str:
         duration = beat.end - beat.start
         if beat.custom:
             from .scenes import scene_script
-            lines.append(scene_script(beat.id, beat.start, beat.end, beat.custom["js"], beat.custom.get("speaker", "full")))
+            lines.append(scene_script(beat.id, beat.start, beat.end, beat.custom["js"],
+                                      'full' if beat.layout == 'top_panel' else beat.custom.get("speaker", "full")))
             continue
         selector = f"#{beat.id} .beat-inner"
         entrances = {
@@ -293,7 +339,7 @@ def _timeline_script(beats: list[VisualBeat]) -> str:
 
 
 def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], *, duration: float,
-                  enable_registry: bool = True) -> Path:
+                  enable_registry: bool = True, motion_only: bool = False) -> Path:
     """Write a self-contained 1080x1920 HyperFrames composition."""
     project_dir.mkdir(parents=True, exist_ok=True)
     assets = project_dir / "assets"
@@ -323,31 +369,36 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
     }, indent=2))
     if enable_registry:
         from .registry_runtime import wire_registry
-        wire_registry(project_dir, beats)
+        wire_registry(project_dir, [b for b in beats if b.layout != 'top_panel'])
     visual_library = []
     for beat in beats:
         value = beat.model_dump()
         visual_library.append(value)
     metadata = {
-        "id": "ai-render-talking-2", "name": "AI Render Talking 2",
+        "id": "ai-render-talking-2-panel" if motion_only else "ai-render-talking-2", "name": "AI Render Talking 2",
         "visual_library": visual_library, "duration": duration,
     }
     (project_dir / "meta.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
     cards = "\n".join(_beat_markup(beat) for beat in beats)
     backdrops = ""
     sfx_markup = ""
-    if any(beat.custom for beat in beats):
+    if any(beat.custom for beat in beats) and not motion_only:
         from engine import sfx
         cues = sfx.cues_for(beats)
         files = sfx.ensure(assets / "sfx", {name for _, name in cues})
         sfx_markup = sfx.markup(cues, duration, files)
         from .scenes import scene_backdrop
-        backdrops = "\n".join(scene_backdrop(b.id, b.start, b.end - b.start, b.custom.get("bg", "")) for b in beats if b.custom)
+        backdrops = "\n".join(scene_backdrop(b.id, b.start, b.end - b.start, b.custom.get("bg", "")) for b in beats if b.custom and b.layout != 'top_panel')
+    panel_ids = ','.join('#'+b.id for b in beats if b.layout == 'top_panel')
+    panel_css = (panel_ids + '{position:absolute!important;left:0!important;right:0!important;top:0!important;'
+                 'bottom:auto!important;width:1080px!important;height:888px!important;'
+                 'border-radius:0!important;overflow:hidden!important;}') if panel_ids else ''
     document = f'''<!doctype html>
 <html lang="fa"><head><meta charset="UTF-8"><meta name="viewport" content="width=1080,height=1920">
 <script src="./assets/gsap.min.js"></script>
 <style>
 {custom_css}
+{panel_css}
 @font-face{{font-family:Ray;src:url('./assets/ray-extrabold.ttf')}}
 *{{box-sizing:border-box}}html,body{{margin:0;width:1080px;height:1920px;overflow:hidden;background:#080b0c}}
 #root{{position:relative;width:100%;height:100%;overflow:hidden;font-family:Ray,sans-serif}}
@@ -381,6 +432,13 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
 <div id="speaker-stage" style="position:absolute;inset:0;overflow:hidden;transform-origin:50% 50%"><video id="rough-cut" class="base clip" src="./assets/base.mp4" data-start="0" data-duration="{duration:.3f}" data-track-index="0" data-has-audio="true"></video></div>
 {cards}
 {sfx_markup}</main><script>{_timeline_script(beats)}</script></body></html>'''
+    if motion_only:
+        # Browser draws only the actual graphics panel. The native speaker,
+        # captions and original audio are composited later without Chromium.
+        document = document.replace('width=1080,height=1920', 'width=1080,height=888')
+        document = document.replace('height:1920px', 'height:888px')
+        document = document.replace('data-height="1920"', 'data-height="888"')
+        document = re.sub(r'<div id="speaker-stage".*?</video></div>', '', document, flags=re.S)
     entry = project_dir / "index.html"
     entry.write_text(document)
     return entry

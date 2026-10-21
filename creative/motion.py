@@ -79,6 +79,7 @@ class SceneSpec(BaseModel):
     motion_idea: str = ""
     archetype: str = ""         # a compositional direction to keep neighbouring scenes different
     prior_scenes: list[str] = Field(default_factory=list)
+    layout: str = 'full_frame'
 
     @property
     def duration(self) -> float:
@@ -176,10 +177,20 @@ def _speaker_areas() -> str:
 
 def build_prompt(spec: SceneSpec, design: DesignSystem) -> str:
     prior = ("Scenes already designed for this video (do NOT repeat their layout or motion): " + "; ".join(spec.prior_scenes)) if spec.prior_scenes else ""
-    return (AUTHOR_PROMPT.replace("{ID}", spec.id).replace("{SPEAKER_AREAS}", _speaker_areas()).replace("{DESIGN}", design.tokens())
-            .replace("{ROLE}", spec.role or "evidence").replace("{D}", f"{spec.duration:g}").replace("{SPOKEN}", spec.spoken[:400])
+    prompt = (AUTHOR_PROMPT.replace("{ID}", spec.id).replace("{SPEAKER_AREAS}", _speaker_areas()).replace("{DESIGN}", design.tokens())
+            .replace("{ROLE}", spec.role or "evidence").replace("{D}", f"{spec.duration:g}").replace("{SPOKEN}", spec.spoken[:3000])
             .replace("{TITLE}", spec.title).replace("{ITEMS}", " | ".join(spec.items) or "(none)").replace("{VISUAL}", spec.visual_idea or "(your call)")
             .replace("{MOTION}", spec.motion_idea or "(your call)").replace("{ARCHETYPE}", spec.archetype or ARCHETYPES[0]).replace("{PRIOR}", prior))
+    if spec.layout == 'top_panel':
+        prompt = prompt.replace('1080x1920', '1080x888')
+        prompt += ('\nOVERRIDING TALKING 2 CONTRACT: your entire scene is a 1080x888 TOP PANEL. '
+                   'The separate full-width speaker and caption rail below are owned by the renderer. '
+                   'Return speaker="full"; never move or hide the speaker. Fill this panel with an opaque '
+                   'design-system background. Explain ALL supplied sentences as a coherent evolving visual, '
+                   'with meaningful intermediate states throughout D, not a 2-second entrance then empty space. '
+                   'Keep every label within x=32..1048, y=24..856. Headlines 64–100px; body 38px+. '
+                   'Do not use emoji or unsupported symbol glyphs; draw icons with inline SVG.')
+    return prompt
 
 
 def design_system(brief_text: str, concept_text: str, used: list[str] | None = None) -> DesignSystem:
@@ -226,8 +237,12 @@ def enabled() -> bool:
     return director.enabled() and os.environ.get("CREATIVE_MOTION", "1").strip().lower() not in {"0", "false", "off", "no"}
 
 
-def _fingerprint(beat) -> str:
-    return f"{beat.start:.1f}"
+def _fingerprint(beat, plan=None) -> str:
+    from .reuse import fingerprint
+    chosen=getattr(plan,'chosen',None)
+    context={k:getattr(chosen,k,'') for k in ('name','angle','visual_language','pacing')}
+    context['beats']=[b.model_dump() for b in getattr(chosen,'beats',[])]
+    return fingerprint({'version':2,'beat':beat.model_dump(exclude={'custom'}),'direction':context})
 
 
 def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 4, used: list[str] | None = None,
@@ -249,7 +264,9 @@ def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 4, u
         # redesign missing scenes or silently replace them with other visuals.
         for beat in beats:
             hit = stored['scenes'].get(beat.id)
-            if not hit or hit.get('fp') != _fingerprint(beat):
+            match=hit and (hit.get('fp') == _fingerprint(beat,plan) or
+                hit.get('fp') == f'{beat.start:.1f}')  # read-only legacy continuation; never pay to migrate
+            if not match:
                 raise ValueError('صحنهٔ موشن آماده نیست؛ ادامه نیازمند تأیید تولید صحنه است.')
             beat.custom = {k:v for k,v in hit.items() if k != 'fp'}
             beat.custom['bg'] = (stored.get('design') or {}).get('bg', '#0B0D0C')
@@ -268,10 +285,10 @@ def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 4, u
             sentence = -1
         idea = by_sentence.get(sentence) or (concept.beats[index] if index < len(concept.beats) else None)
         specs.append(SceneSpec(id=beat.id, start=beat.start, end=beat.end,
-                               spoken=sentences[sentence]["text"] if 0 <= sentence < len(sentences) else "",
+                               spoken=beat.spoken or (sentences[sentence]["text"] if 0 <= sentence < len(sentences) else ""),
                                title=beat.title, items=beat.items, role=beat.narrative_role,
                                visual_idea=(idea.visual if idea else beat.why), motion_idea=(idea.motion if idea else ""),
-                               archetype=ARCHETYPES[(index * 3 + len(beat.title)) % len(ARCHETYPES)]))
+                               archetype=ARCHETYPES[(index * 3 + len(beat.title)) % len(ARCHETYPES)], layout=beat.layout))
     results: dict[str, AuthoredScene] = {}
 
     def work(spec: SceneSpec):
@@ -284,7 +301,7 @@ def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 4, u
     fresh = []
     for spec, beat in zip(specs, beats):
         hit = stored["scenes"].get(spec.id)
-        if hit and hit.get("fp") == _fingerprint(beat):
+        if hit and hit.get("fp") == _fingerprint(beat,plan):
             results[spec.id] = AuthoredScene(**{k: v for k, v in hit.items() if k != "fp"})
         else:
             fresh.append(spec)
@@ -295,7 +312,7 @@ def compose(beats: list, plan, sentences: list[dict], *, max_workers: int = 4, u
     if cache:
         by_id = {beat.id: beat for beat in beats}
         stored["design"] = design.model_dump()
-        stored["scenes"] = {**stored["scenes"], **{bid: {**sc.model_dump(), "fp": _fingerprint(by_id[bid])} for bid, sc in results.items()}}
+        stored["scenes"] = {**stored["scenes"], **{bid: {**sc.model_dump(), "fp": _fingerprint(by_id[bid],plan)} for bid, sc in results.items()}}
         try:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(stored, ensure_ascii=False))

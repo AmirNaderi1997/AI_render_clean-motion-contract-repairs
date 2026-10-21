@@ -79,6 +79,7 @@ class ReelPlan:
     duration: float = 0.0
     cold_open: float = 0.0
     theme: str = "editorial"
+    continuous_split: bool = True
 
 
 # --- planning -------------------------------------------------------------------
@@ -125,7 +126,7 @@ def _chunks(text: str) -> list[tuple[str, str]]:
 
 
 def plan_reel(transcript: dict, decisions: dict, faces: list[tuple[float, float, float]], duration: float,
-              pictures: Optional[dict[int, str]] = None) -> ReelPlan:
+              pictures: Optional[dict[int, str]] = None, *, continuous_split: bool = True) -> ReelPlan:
     """Shots, captions, chips and cards on the output timeline.
 
     ``pictures`` maps a B-roll sentence index to its image; slots without one
@@ -150,7 +151,7 @@ def plan_reel(transcript: dict, decisions: dict, faces: list[tuple[float, float,
     close = False
     for a, b in _pieces(ranges, words):
         k = _sentence_at(sentences, (a + b) / 2)
-        split = k is not None and (k in broll or k in chip_lists)
+        split = continuous_split or (k is not None and (k in broll or k in chip_lists))
         close = not close if not split else close
         shots.append(Shot(a, b, split=split, close=close and not split, face=_face(faces, a, b),
                           slot=k if split else None,
@@ -159,7 +160,7 @@ def plan_reel(transcript: dict, decisions: dict, faces: list[tuple[float, float,
     cold = cold_open_span(decisions.get("cold_open"), sentences, words)
     if cold:
         a, b, _ = cold
-        shots.insert(0, Shot(a, b, split=False, close=True, face=_face(faces, a, b)))
+        shots.insert(0, Shot(a, b, split=continuous_split, close=not continuous_split, face=_face(faces, a, b)))
     t = 0.0
     for shot in shots:
         shot.out_start = t
@@ -205,7 +206,7 @@ def plan_reel(transcript: dict, decisions: dict, faces: list[tuple[float, float,
     if decisions.get("hook"):
         hook = {"start": 0.0, "end": min(3.0, total), "text": persian_digits(decisions["hook"])}
     return ReelPlan(shots=shots, captions=captions, chips=chips, cards=cards, hook=hook, duration=total,
-                    cold_open=shots[0].length if cold else 0.0)
+                    cold_open=shots[0].length if cold else 0.0, continuous_split=continuous_split)
 
 
 def _groups(shots: list[Shot]) -> list[list[Shot]]:
@@ -281,6 +282,9 @@ def plain_panel(out: Path) -> Path:
 def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
     events: list[str] = []
     seam = SPLIT_Y
+    if plan.continuous_split and plan.theme != 'minimal':
+        # A separate, full-width caption rail; never part of a scaled speaker PiP.
+        events.append(_rounded_rect(1, 0, plan.duration, 0, seam - 72, W, seam + 72, '#101010', 0))
     split_spans = [(s.out_start, s.out_start + s.length) for s in plan.shots if s.split]
 
     def on_split(t: float) -> bool:
@@ -294,7 +298,7 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
         if c["end"] <= hook_end:
             continue
         start = max(c["start"], hook_end)
-        y = seam - H * 0.004 if on_split(start) else H * (0.76 if minimal else 0.68)
+        y = seam if plan.continuous_split else (seam - H * 0.004 if on_split(start) else H * (0.76 if minimal else 0.68))
         pop = "\\fad(70,70)" if minimal else "\\fscx108\\fscy108\\t(0,120,\\fscx100\\fscy100)"
         if minimal:
             phrase = " ".join(part for part in (c["lead"], c["key"]) if part)
@@ -553,13 +557,9 @@ render_plain = render
 
 
 def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, **kwargs) -> Path:  # noqa: F811
-    """The opening hook is drawn by the Tscaps engine; captions, chips and cards stay with the built-in renderer."""
-    if kwargs.get("overlay") is not None:
-        return render_plain(video, plan, out, work_dir=work_dir, **kwargs)
-    from engine import tscaps_overlay as tso
-    split_spans = [(s.out_start, s.out_start + s.length) for s in plan.shots if s.split]
-    seam = SPLIT_Y / H
-    fps = int(round(eval_fps(probe_fps(video)) or 30))
-    cues = tso.hook_cue(plan.hook, y_for=lambda t: seam if any(a <= t < b for a, b in split_spans) else None)
-    return tso.render_with_overlay(render_plain, video, plan, out, work_dir=work_dir, cues=cues,
-                                   strip=lambda p: tso.without_hook(p), fps=fps, duration=plan.duration, **kwargs)
+    """Talking 2 uses the native Persian ASS path, including its opening hook.
+
+    Other styles retain their own Tscaps integration. Do not rasterize and
+    shrink these captions together with the speaker window.
+    """
+    return render_plain(video, plan, out, work_dir=work_dir, **kwargs)

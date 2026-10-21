@@ -78,6 +78,13 @@ def render_project(
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
+    meta_path = project_dir / 'meta.json'
+    if meta_path.is_file():
+        meta = json.loads(meta_path.read_text())
+        rows = meta.get('visual_library') or []
+        if meta.get('id') == 'ai-render-talking-2' and rows and all(b.get('layout') == 'top_panel' for b in rows):
+            return _render_split_panel(project_dir, output, meta, timeout=timeout,
+                                       on_progress=on_progress, should_cancel=should_cancel)
     env = {**os.environ, "NO_COLOR": "1"}
     if on_progress:
         on_progress(83)
@@ -122,6 +129,53 @@ def render_project(
             on_progress(99)
         return result
     return _render_cli(project_dir,output,timeout=timeout,on_progress=on_progress,should_cancel=should_cancel)
+
+
+def _render_split_panel(project: Path, output: Path, meta: dict, *, timeout, on_progress, should_cancel) -> Path:
+    """Keep expensive browser painting out of the native speaker/caption layer."""
+    from .builder import build_project
+    from .schema import VisualBeat
+    from .sparse import restore_continuous_audio
+    beats = [VisualBeat.model_validate(b) for b in meta['visual_library']]
+    source = (project/'assets/base.mp4').resolve()
+    panel = project.parent/'hyperframes_panel'
+    build_project(panel, source, beats, duration=max(b.end for b in beats),
+                  enable_registry=False, motion_only=True)
+    panel_output = panel/'panel.mp4'
+    receipt = panel/'render-receipt.json'
+    key = audit_key(panel)
+    try:
+        cached = panel_output.is_file() and json.loads(receipt.read_text()).get('key') == key
+    except (OSError, ValueError):
+        cached = False
+    if not cached:
+        render_project(panel, panel_output, timeout=timeout, on_progress=on_progress, should_cancel=should_cancel)
+        receipt.write_text(json.dumps({'key':key}))
+    if should_cancel and should_cancel():
+        raise HyperFramesError('HyperFrames render canceled')
+    temporary = output.with_name(output.stem+'.split-partial.mp4')
+    process = subprocess.Popen(['ffmpeg','-hide_banner','-v','error','-y','-threads','1','-i',str(source),
+        '-threads','1','-i',str(panel_output),'-filter_complex_threads','1','-filter_complex',
+        '[0:v][1:v]overlay=0:0:eof_action=pass:repeatlast=0,format=yuv420p[v]',
+        '-map','[v]','-map','0:a:0','-c:v','libx264','-threads','2','-preset','veryfast','-crf','17',
+        '-c:a','copy','-movflags','+faststart',str(temporary)], stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    started = time.monotonic()
+    while True:
+        try:
+            _, error = process.communicate(timeout=1)
+            break
+        except subprocess.TimeoutExpired:
+            if (should_cancel and should_cancel()) or time.monotonic()-started > timeout:
+                process.terminate()
+                try: process.communicate(timeout=10)
+                except subprocess.TimeoutExpired: process.kill(); process.communicate()
+                raise HyperFramesError('Split composition canceled or timed out; source files preserved')
+    if process.returncode:
+        raise HyperFramesError('Split composition failed: '+error.decode('utf-8','replace')[-1500:])
+    temporary.replace(output)
+    restore_continuous_audio(output, source, beats, project, float(meta['duration']))
+    if on_progress: on_progress(99)
+    return output
 
 
 def audit_key(project_dir: Path) -> str:
