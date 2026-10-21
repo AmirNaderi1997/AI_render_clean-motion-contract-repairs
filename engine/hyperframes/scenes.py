@@ -186,7 +186,11 @@ def scene_script(beat_id: str, start: float, end: float, js: str, speaker: str) 
     lines = ['(function(parent){ const tl = new Proxy(parent, {get(target, key){ '
              'const value = Reflect.get(target, key, target); '
              'if (typeof value !== "function") return value; '
-             'return (...args) => { if (key === "fromTo") args[2] = {...args[2], immediateRender:false}; '
+             'return (...args) => { '
+             'for (const index of (key === "fromTo" ? [1,2] : (["to","set"].includes(key) ? [1] : []))) { '
+             'if (args[index] && args[index].svgOrigin === null) { '
+             'const {svgOrigin, ...vars} = args[index]; args[index] = vars; }} '
+             'if (key === "fromTo") args[2] = {...args[2], immediateRender:false}; '
              'const result = value.apply(target, args); return result === target ? tl : result; }; }}); '
              f'const root = document.getElementById("{beat_id}"); const $ = (s) => Array.from(root.querySelectorAll(s)); '
              f'const T = {start:.3f}, D = {duration:.3f};', js, '})(tl);']
