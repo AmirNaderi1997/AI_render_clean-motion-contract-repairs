@@ -40,20 +40,30 @@ def summarize_failure(detail: str, limit: int = 420) -> str:
 def check_batches(project_dir: Path) -> list[list[str]]:
     """Keep the CLI's per-session audit deadline bounded on CPU-only servers.
 
-    Audit every authored visual midpoint, plus the opening, ending and a global
-    midpoint. These are full checks (not --range, which skips motion checks).
-    No audit category is disabled; only the samples are distributed over sessions.
+    The CLI always performs up to 600 dense overlap seeks, independently of
+    --samples. Check every authored motion window plus opening/ending instead.
+    Static lint remains project-wide and runtime/layout/contrast remain enabled.
+    Range mode skips the CLI's global frozen-sweep/sidecar assertions; the caller
+    must retain its post-render visual QC. Never label this a full-timeline pass.
     """
     try:
         meta = json.loads((project_dir / 'meta.json').read_text())
         beats = meta.get('visual_library') or []
         if not beats:
             return [[]]
-        times = sorted({round((float(b['start']) + float(b['end'])) / 2, 3) for b in beats})
         duration = float(meta.get('duration') or max(float(b['end']) for b in beats))
-        times = sorted({min(0.5, duration/2), *times, max(0, duration - 0.25)})
-        return [['--samples', '1', '--at', ','.join(str(t) for t in times[i:i+2])]
-                for i in range(0, len(times), 2)]
+        windows = [(0.0, min(1.0, duration)), (max(0.0, duration-1), duration)]
+        windows += [(max(0.0, float(b['start'])-.15), min(duration, float(b['end'])+.15)) for b in beats]
+        # Cap each session to four seconds, retaining overlapping boundary frames.
+        ranges = []
+        for start, end in sorted(windows):
+            while end > start:
+                stop = min(end, start+4)
+                ranges.append(['--range', f'{start:.3f},{stop:.3f}', '--samples', '3'])
+                if stop == end:
+                    break
+                start = stop-.05
+        return ranges
     except (OSError, ValueError, KeyError, TypeError):
         return [[]]
 
@@ -72,7 +82,8 @@ def render_project(
         on_progress(83)
     check = None
     detail = ""
-    for batch in check_batches(project_dir):
+    batches = check_batches(project_dir)
+    for batch_index, batch in enumerate(batches):
         for attempt in range(3):
             check = subprocess.run(
                 [*cli_command(), "check", ".", *batch],
@@ -84,6 +95,8 @@ def render_project(
             if "Navigation timeout" not in detail or attempt == 2:
                 raise HyperFramesError(f"HyperFrames check failed: {detail[-2400:]}")
             time.sleep(1.5 * (attempt + 1))
+        if on_progress and check is not None and not check.returncode:
+            on_progress(83 + int(3 * (batch_index + 1) / len(batches)))
     if check is None or check.returncode:
         raise HyperFramesError(f"HyperFrames check failed: {detail[-2400:]}")
     if on_progress:

@@ -33,9 +33,10 @@ def test_check_batches_cover_each_visual_and_ending(tmp_path):
     (tmp_path/'meta.json').write_text(json.dumps({'duration': 120, 'visual_library': [
         {'start': n, 'end': n+2} for n in (20, 25, 46, 91, 96)]}))
     batches = check_batches(tmp_path)
-    times = [float(t) for batch in batches for t in batch[-1].split(',')]
-    assert times == [.5, 21, 26, 47, 92, 97, 119.75]
-    assert all('--range' not in batch and '--no-contrast' not in batch for batch in batches)
+    windows = [tuple(float(t) for t in batch[1].split(',')) for batch in batches]
+    assert all(any(start <= t <= end for start, end in windows) for t in [.5,21,26,47,92,97,119.75])
+    assert all(0 < end-start <= 4 for start, end in windows)
+    assert all('--no-contrast' not in batch for batch in batches)
 
 
 def test_inline_scene_does_not_claim_unregistered_child_timeline():
