@@ -54,10 +54,18 @@ def cues_for(beats: list) -> list[tuple[float, str]]:
 def markup(cues: list[tuple[float, str]], duration: float, files: dict[str, Path], track: int = 5) -> str:
     """<audio> clips for the HyperFrames root; HyperFrames mixes them with the speaker's audio."""
     parts = []
-    for index, (time, name) in enumerate(cues):
+    lane_ends: list[float] = []
+    for index, (time, name) in enumerate(sorted(cues)):
         if name not in files or time >= duration - 0.1:
             continue
         length = min(DURATION[name], duration - time)
+        # Overlapping sound design is intentional, but each simultaneous clip
+        # needs its own lane. Reuse lanes only after their preceding clip ends.
+        lane = next((i for i, end in enumerate(lane_ends) if end <= time), len(lane_ends))
+        if lane == len(lane_ends):
+            lane_ends.append(time + length)
+        else:
+            lane_ends[lane] = time + length
         parts.append(f'<audio id="sfx-{index}" src="./assets/sfx/{name}.wav" data-start="{time:.3f}" data-duration="{length:.3f}" '
-                     f'data-track-index="{track}" data-volume="{GAIN[name]}"></audio>')
+                     f'data-track-index="{track + lane}" data-volume="{GAIN[name]}"></audio>')
     return "\n".join(parts)
