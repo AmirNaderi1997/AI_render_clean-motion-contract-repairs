@@ -33,7 +33,7 @@ def review_render(video: Path, beats: list, work_dir: Path) -> dict:
         extracted=subprocess.run([
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss",
             f"{(beat.start + beat.end) / 2:.3f}", "-i", str(video), "-frames:v", "1",
-            "-vf", "scale=96:170", str(target),
+            "-vf", "crop=iw:888:0:0,scale=96:79" if continuous else "scale=96:170", str(target),
         ], check=False, timeout=40)
         if extracted.returncode==0 and target.is_file():
             with Image.open(target) as source:
