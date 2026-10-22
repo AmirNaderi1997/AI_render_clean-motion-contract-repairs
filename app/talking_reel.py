@@ -261,8 +261,12 @@ def resolve_music(music: Optional[str]) -> Optional[Path]:
     return path
 
 
-def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None, request: str = "") -> dict:
-    """Transcribe and prepare editable AI decisions without starting a render."""
+def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None, request: str = "",
+            concept: Optional[dict] = None) -> dict:
+    """Transcribe and prepare editable AI decisions without starting a render.
+
+    ``concept`` is a concept the user picked from the plan: the director is skipped and only the
+    style's own decision step runs with that concept as guidance."""
     key = str(job_dir)
     with _lock:
         if key in _running:
@@ -275,7 +279,7 @@ def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None, requ
 
     def run() -> None:
         try:
-            _analyze(job_dir, raw_video, style=style, request=request)
+            _analyze(job_dir, raw_video, style=style, request=request, concept=concept)
         except TaskCanceled:
             current = load(job_dir); current.update(status="canceled", stage="", message="Canceled by user"); save(job_dir, current)
         except Exception as exc:
@@ -292,7 +296,30 @@ def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None, requ
     return state
 
 
-def _analyze(job_dir: Path, video: Path, *, style: Optional[str], request: str = "") -> None:
+def _concept_plan(previous: Optional[dict], concept: dict, style: Optional[str]) -> dict:
+    """The stored creative plan with the user's chosen concept promoted; the old winner becomes an alternative."""
+    previous = dict(previous or {})
+    old = previous.get("chosen") or {}
+    others = [c for c in previous.get("alternatives") or [] if c.get("id") != concept.get("id")]
+    if old and old.get("id") != concept.get("id"):
+        others.insert(0, {k: old.get(k) for k in ("id", "name", "angle", "hook", "style_hint", "visual_language",
+                                                  "pacing", "why_it_works")})
+    previous.update(chosen={**concept, "beats": concept.get("beats") or []}, alternatives=others,
+                    style=style, verdict="ایدهٔ انتخاب‌شده توسط شما.")
+    return previous
+
+
+def _concept_notes(concept: dict) -> str:
+    parts = [f"Chosen concept: {concept.get('name', '')}. {concept.get('angle', '')}",
+             f"Hook (first seconds): {concept.get('hook', '')}"]
+    for key in ("visual_language", "pacing"):
+        if concept.get(key):
+            parts.append(f"{key.replace('_', ' ').title()}: {concept[key]}")
+    return "\n".join(parts)
+
+
+def _analyze(job_dir: Path, video: Path, *, style: Optional[str], request: str = "",
+             concept: Optional[dict] = None) -> None:
     from dotenv import load_dotenv
     from importlib import import_module
     from brain import talking_reel as base_brain
@@ -307,7 +334,11 @@ def _analyze(job_dir: Path, video: Path, *, style: Optional[str], request: str =
     plan = None
     guidance = ""
     creative_error = ""
-    if creative.enabled():
+    picked = None
+    if concept:
+        picked = _concept_plan(load(job_dir).get("creative_plan"), concept, style)
+        guidance = _concept_notes(concept)
+    elif creative.enabled():
         _stage(job_dir, "directing the edit", progress=12)
         try:
             plan = creative.direct_talk(transcript["sentences"], request, style=style)
@@ -345,7 +376,7 @@ def _analyze(job_dir: Path, video: Path, *, style: Optional[str], request: str =
         )
         state[decisions_key] = decisions
         state["hook2"] = decisions["hook"]
-    state["creative_plan"] = plan.public() if plan else None
+    state["creative_plan"] = picked if picked is not None else (plan.public() if plan else None)
     state["creative_error"] = creative_error
     state.update(
         status="ready", stage="", message="", progress=100, style=selected,
@@ -377,7 +408,9 @@ def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False, cached_on
 
     def run() -> None:
         try:
+            started = time.time()
             _run(job_dir, raw_video, regenerate=regenerate)
+            _record_render_time(job_dir, raw_video, time.time() - started)
         except TaskCanceled:
             current = load(job_dir); current.update(status="canceled", stage="", message="Canceled by user"); save(job_dir, current)
         except Exception as exc:
@@ -392,6 +425,20 @@ def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False, cached_on
 
     threading.Thread(target=run, daemon=True).start()
     return state
+
+
+def _record_render_time(job_dir: Path, raw_video: Path, seconds: float) -> None:
+    """Feed the plan's time estimate with a real measurement; never affects the render."""
+    try:
+        from app import render_stats
+        from engine.probe import probe
+        state = load(job_dir)
+        if state.get("status") != "done" or state.get("cached_render_only"):
+            return
+        duration = float(probe(raw_video).get("format", {}).get("duration") or 0)
+        render_stats.record(f"talking:{state.get('style')}", duration, seconds)
+    except Exception as exc:
+        log.warning("render timing not recorded: %s", type(exc).__name__)
 
 
 def _stage(job_dir: Path, stage: str, **extra) -> None:

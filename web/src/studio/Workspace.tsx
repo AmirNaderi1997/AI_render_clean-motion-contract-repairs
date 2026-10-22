@@ -6,9 +6,16 @@ import { Icon } from "../components/Icon";
 import { displayTitle } from "../format";
 import { renderView } from "./model";
 import {MotionScenes} from './MotionScenes';
+import { PlanReview } from "./PlanReview";
+import { planPhase } from "./plan";
 import { ProgressNotice, useProgressAge } from './ProgressNotice';
 
 export type WorkspaceTab = "preview" | "edit";
+
+/** Talking projects carry a Creative Plan, shown at the top of the Edit tab as soon as one is being built. */
+export function hasPlan(project?: StudioProject): boolean {
+  return project?.engine === "talking" && planPhase(project) !== "none";
+}
 
 export function statusMeta(project?: StudioProject): { label: string; tone: "success" | "error" | "warning" | "working" | "neutral" } {
   const status = project?.status || "";
@@ -113,7 +120,8 @@ function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () =
   if (!project) return <Empty icon="advanced" title="Nothing to edit yet" text="Once EditorGPT creates a project, the controls that apply to it appear here."/>;
   const advanced = advancedEditorUrl(project);
   return <div className="ws-edit">
-    <header><h2>Refine this video</h2><p>Ask for caption, pacing, colour or audio changes in the chat. Controls appear here when the current engine supports them.</p></header>
+    {hasPlan(project) ? <PlanReview project={project} onChanged={onSaved}/>
+      : <header><h2>Refine this video</h2><p>Ask for caption, pacing, colour or audio changes in the chat. Controls appear here when the current engine supports them.</p></header>}
     {project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}
     {project.external_ref && project.engine!=='localize' ? <MotionScenes jobId={project.external_ref} onSaved={onSaved}/> : null}
     {advanced

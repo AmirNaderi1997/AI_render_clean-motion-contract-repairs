@@ -181,6 +181,8 @@ class CreativePlan(_Model):
             "brief": {"topic": self.brief.topic, "core_message": self.brief.core_message,
                       "audience": self.brief.audience, "goal": self.brief.goal, "tone": self.brief.tone},
             "chosen": self.chosen.model_dump(),
-            "alternatives": [{"id": c.id, "name": c.name, "angle": c.angle} for c in self.concepts if c.id != self.chosen.id],
+            "alternatives": [{"id": c.id, "name": c.name, "angle": c.angle, "hook": c.hook, "style_hint": c.style_hint,
+                              "visual_language": c.visual_language, "pacing": c.pacing, "why_it_works": c.why_it_works}
+                             for c in self.concepts if c.id != self.chosen.id],
             "verdict": self.critique.verdict, "director_notes": self.director_notes,
         }
