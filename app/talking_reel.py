@@ -36,6 +36,7 @@ DEFAULTS = {
         "title_color": "#F5B800",
         "outro_logo": {"enabled": True, "motion": "pop"},
         "disabled_moments": [],
+        "dropped_sentences": [], "bottom_shade": 0, "source_cuts": [],
     },
 }
 EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions", "storyboard", "render_settings",
@@ -190,6 +191,18 @@ def _clean_render_settings(value: object) -> dict:
     if outro.get("motion") in {"pop", "fade", "slide", "none"}:
         current["outro_logo"]["motion"] = outro["motion"]
     current["disabled_moments"] = [str(v)[:80] for v in (value.get("disabled_moments") or [])][:30]
+    drops = value.get('dropped_sentences') or []
+    current['dropped_sentences'] = sorted({v for v in drops if type(v) is int and 0 <= v < 10000})[:500] if isinstance(drops, list) else []
+    try: current['bottom_shade'] = max(0, min(60, int(value.get('bottom_shade', 0))))
+    except (TypeError, ValueError): pass
+    cuts=value.get('source_cuts') or []
+    current['source_cuts']=[]
+    if isinstance(cuts,list):
+        for cut in cuts[:100]:
+            try:
+                a,b=float(cut['start']),float(cut['end'])
+                if 0<=a<b<=86400: current['source_cuts'].append({'start':a,'end':b})
+            except (TypeError,ValueError,KeyError): pass
     return current
 
 
@@ -742,6 +755,12 @@ SPLIT_STYLES = {   # style -> (brain module, decisions key, default music)
 def _apply_timeline_choices(decisions: dict, style: str, settings: dict) -> dict:
     """Apply review choices to AI decisions before a render plan is built."""
     result = dict(decisions)
+    result['source_cuts'] = settings.get('source_cuts') or []
+    dropped = set(result.get('drop') or []) | set(settings.get('dropped_sentences') or [])
+    result['drop'] = sorted(dropped)
+    result['notes'] = [n for n in result.get('notes', []) if n.get('i') not in dropped]
+    result['bw'] = [i for i in result.get('bw', []) if i not in dropped]
+    if (result.get('cold_open') or {}).get('i') in dropped: result['cold_open'] = None
     if not settings.get("first_key_moment_enabled", True):
         result["cold_open"] = None
     elif settings.get("first_key_moment_sentence") is not None:
@@ -826,6 +845,8 @@ def _plan_talking_1(job_dir: Path, video: Path, *, prepare_media: bool) -> Plann
     decisions = {**state["decisions"], "captions": {int(k): v for k, v in state["decisions"]["captions"].items()}}
     settings = state.get("render_settings") or DEFAULTS["render_settings"]
     decisions = _apply_timeline_choices(decisions, "talking_1", settings)
+    from engine.revision_timing import prepare_transcript
+    transcript, decisions = prepare_transcript(transcript, decisions)
     if prepare_media:
         _stage(job_dir, "tracking the face", progress=35)
     faces = _faces(job_dir, video, media) if prepare_media else _cached_faces(job_dir)

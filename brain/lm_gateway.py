@@ -269,8 +269,11 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
             retries = 0 if is_media or probe or mid.startswith("auto") or mid == "fusion" else cfg["max_retries"]
             for attempt in range(retries+1):
                 if time.monotonic()-started > min(300, cfg["timeout"]*2): break
+                request_extra = dict(extra or {})
+                if validate_response is not None and "structured" in capabilities(item):
+                    request_extra.setdefault("response_format", {"type": "json_object"})
                 body = adapters.payload(endpoint, mid, messages, tokens=min(tokens or cfg["max_tokens"], cfg["max_tokens"]),
-                    temperature=cfg["temperature"], extra=extra)
+                    temperature=cfg["temperature"], extra=request_extra)
                 tick = time.monotonic()
                 try:
                     remaining = min(300, cfg["timeout"]*2) - (time.monotonic()-started)
@@ -313,7 +316,8 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
             error.retryable = False
         raise error or GatewayError("No enabled, capability-verified model for this route; configure AI Models & Logs", 422)
     except Exception as exc:
-        _audit(_record(route, endpoint, candidates[0] if candidates else "", started, attempts, error=exc, request=messages))
+        _audit(_record(route, endpoint, candidates[0] if candidates else "", started, attempts,
+                       response=response, hdr=hdr, error=exc, request=messages))
         raise
     finally:
         _slots.release()

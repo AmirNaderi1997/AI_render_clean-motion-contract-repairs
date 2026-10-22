@@ -356,6 +356,7 @@ export interface TalkingReelState {
 }
 
 export interface TalkingRenderSettings {
+  bottom_shade?: number;
   grade: { brightness: number; contrast: number; saturation: number; temperature: number; vignette: number };
   zoom: { enabled: boolean; amount: number; base_scale: number; close_scale: number };
   key_moments_enabled: boolean;

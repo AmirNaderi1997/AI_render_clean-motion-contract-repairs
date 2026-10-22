@@ -103,6 +103,8 @@ def review_export(video: Path, direction: dict, work: Path, *, duration: float,
     except Exception as exc:
         # Never turn provider/decoder/schema failure into an empty "pass".
         result['summary']='بازبینی خلاقانه کامل نشد؛ خروجی هنوز برای انتشار تأیید نشده است.'
+        if getattr(exc, 'status', None) in {429, 500, 502, 503, 504}:
+            result['summary']='ویدیو رندر شده، اما سرویس بررسی کیفیت موقتاً پاسخ قابل‌استفاده نداد. این خطا به معنی ایراد بصری ویدیو نیست؛ فایل را در Preview ببینید. برای این خطا رندر دوباره لازم نیست.'
         result['error_type']=type(exc).__name__
     temporary=receipt.with_suffix('.tmp')
     temporary.write_text(json.dumps(result,ensure_ascii=False,indent=2))

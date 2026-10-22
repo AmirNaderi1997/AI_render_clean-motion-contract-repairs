@@ -10,6 +10,8 @@ from app.studio_orchestrator import process_message, sync_conversation, _answer_
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
+    from app import jobs
+    monkeypatch.setattr(jobs, 'JOBS_ROOT', tmp_path)
     monkeypatch.setattr(studio_store, 'DB_AVAILABLE', False)
     monkeypatch.setattr(studio_store, 'ROOT', tmp_path)
     monkeypatch.setattr(studio_store, 'FALLBACK', tmp_path / 'studio.json')
@@ -17,6 +19,30 @@ def store(tmp_path, monkeypatch):
 
 
 def run(coro): return asyncio.run(coro)
+
+
+def test_ready_job_applies_attachment_preferences_outside_async_loop(store, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from app import studio_orchestrator as o, talking_reel
+    c=run(store.create_conversation('u'))
+    p=run(store.create_project(c['id'],'u','talking','test',
+        {'manual_answers':{'name':'Mahtab'}, 'auto_render':True},'job'))
+    monkeypatch.setattr(o.jobstore,'get',lambda _:SimpleNamespace(dir=tmp_path,raw_name='source.mp4'))
+    monkeypatch.setattr(talking_reel,'load',lambda _:{'status':'ready','stage':'','progress':100})
+    monkeypatch.setattr(talking_reel,'public',lambda s:s)
+    # The real attachment adapter resolves ownership using repo.run().
+    monkeypatch.setattr(manual,'apply_talking_preferences',lambda *args:run(asyncio.sleep(0)))
+    starts=[]
+    monkeypatch.setattr(talking_reel,'start',lambda *args,**kw:starts.append(args))
+    refreshed=[]
+    async def refresh_plan(cid,user,project,job,**kwargs):
+        refreshed.append(project['state'].get('manual_preferences_applied'))
+        return await store.update_project(project['id'],user,status='awaiting_confirmation',state=project['state']),True
+    monkeypatch.setattr(o,'_refresh_plan',refresh_plan)
+    run(o.sync_conversation(c['id'],'u'))
+    assert starts==[]  # New versioned approval gate must not auto-render.
+    assert refreshed==[True]
+    assert run(store.get_project(p['id'],'u'))['state']['manual_preferences_applied'] is True
 
 
 def test_phase_narration_is_deduplicated_and_never_restarts_render(store, monkeypatch, tmp_path):

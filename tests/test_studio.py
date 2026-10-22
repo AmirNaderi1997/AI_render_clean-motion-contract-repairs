@@ -156,7 +156,7 @@ def test_fallback_store_persists_conversation_project_version_and_event(tmp_path
 
 
 def test_talking_video_without_a_style_is_analyzed_directly_not_questioned(tmp_path, monkeypatch):
-    """The director chooses the style; the user is not asked, and the request text reaches the analysis."""
+    """With brand details already answered, the director chooses the style without asking again."""
     from app import studio_orchestrator as orchestrator
     from app.studio_store import repo, run
     monkeypatch.setattr(studio_store, "DB_AVAILABLE", False)
@@ -171,6 +171,7 @@ def test_talking_video_without_a_style_is_analyzed_directly_not_questioned(tmp_p
     message = run(repo.add_message(conversation["id"], "u", "user", text))
     calls = []
     monkeypatch.setattr(orchestrator, "_resolved_intent", lambda *args, **kwargs: "talking")
+    monkeypatch.setattr(orchestrator, "_known_brand_keys", lambda _: {'name','tagline','logo','logo_asset','cta'})
     monkeypatch.setattr(orchestrator, "execute", lambda name, payload: calls.append((name, payload)) or {"external_ref": "job-1"})
     orchestrator.process_message(conversation["id"], "u", message["id"], text, [attachment["id"]])
     assert calls and calls[0][0] == "analyze_talking_reel"

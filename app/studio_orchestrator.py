@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import re
 import threading
@@ -518,20 +519,34 @@ def _revise_talking(conversation_id: str, user_key: str, project: dict, job, tex
         "style": state.get("style"), "hook": state.get("hook2") if split else state.get("hook"),
         "hook_highlight": state.get("hook_highlight"), "captions": public["captions"],
         "storyboard": [{"i": b.get("i"), "title": b.get("title"), "visual_type": b.get("visual_type")} for b in public["storyboard"]],
-        "render_settings": {"grade": settings.get("grade"), "zoom": settings.get("zoom"), "title_color": settings.get("title_color"),
-                            "outro_logo": settings.get("outro_logo"), "key_moments_enabled": settings.get("key_moments_enabled")},
+        "render_settings": settings,
         "direction": ((state.get("creative_plan") or {}).get("chosen") or {}).get("angle"),
-        "quality_review": state.get("creative_review"),
-        "last_failure": state.get("message"),
-        "speaker_name": state.get("name"), "speaker_title": state.get("title"),
+        "quality_review": state.get('creative_review'),
+        "last_failure": state.get('message'),
+        "speaker_name": state.get('name'), "speaker_title": state.get('title'),
         "sentences": [{"i": k, "start": round(x["start"], 1), "end": round(x["end"], 1), "text": x["text"]} for k, x in enumerate(sentences)],
     }
+    output_plan = None
+    if not split and state.get('decisions'):
+        from engine.talking_styles.talking_1 import plan_reel
+        from engine.revision_timing import sentence_ranges, prepare_transcript
+        transcript = talking_reel.transcript_for(job.dir, video)
+        faces_file = job.dir/'talking_reel_faces.json'
+        faces = [tuple(f) for f in json.loads(faces_file.read_text())] if faces_file.is_file() else []
+        decisions = talking_reel._apply_timeline_choices(state['decisions'], 'talking_1', settings)
+        transcript, decisions = prepare_transcript(transcript, decisions)
+        plan = plan_reel(transcript, decisions, faces, float(transcript.get('duration') or 0))
+        output_plan = plan
+        context['output_sentence_ranges'] = sentence_ranges(plan, sentences)
+        context['output_words'] = [{'start':round(sh.out_start+w['start']-sh.src_in,3),
+            'end':round(sh.out_start+min(w['end'],sh.src_out)-sh.src_in,3),'text':w.get('w','')}
+            for sh in plan.shots for w in transcript['words'] if sh.src_in<=w['start']<sh.src_out][:3000]
     try:
         revision = revise.interpret(text, context)
     except creative.CreativeUnavailable as exc:
         log.warning("revision interpreter unavailable: %s", exc)
         return False
-    change = revise.apply_to_talking(public, revision.ops, len(sentences))
+    change = revise.apply_to_talking(public, revision.ops, len(sentences), output_plan=output_plan)
     notes = ""
     if change.applied:
         notes += "\n\nتغییرات:\n" + "\n".join(f"• {item}" for item in change.applied)
@@ -1082,15 +1097,16 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                 if not job: raise KeyError(ref)
                 status = talking_reel.public(talking_reel.load(job.dir)); raw_status = status.get("status", "")
                 stage, progress = status.get("stage", ""), status.get("progress")
+                await _announce_creative(conversation_id, user_key, project, status)
                 needs_plan = raw_status == "ready" and (creative_plan.current(project["state"]) is None
                                                         or project["state"].get("plan_pending"))
                 if needs_plan:
                     if project['state'].get('manual_answers') and not project['state'].get('manual_preferences_applied'):
                         from app.studio_manual import apply_talking_preferences
-                        apply_talking_preferences(conversation_id, user_key, project, job, status)
+                        await asyncio.to_thread(apply_talking_preferences, conversation_id, user_key, project, job, status)
                         project['state'] = {**project['state'], 'manual_preferences_applied': True}
                     if not project['state'].get('brand_applied'):
-                        _apply_brand_defaults(user_key, job)
+                        await asyncio.to_thread(_apply_brand_defaults, user_key, job)
                         project['state'] = {**project['state'], 'brand_applied': True}
                     await _refresh_plan(conversation_id, user_key, project, job, source="agent", after_analysis=True)
                     continue
