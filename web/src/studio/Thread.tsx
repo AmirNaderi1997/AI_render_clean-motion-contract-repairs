@@ -33,10 +33,10 @@ function Attachments({ conversationId, ids, local }: { conversationId?: string; 
   return <div className="msg-files">{ids.map((id, index) => <RemoteAttachment key={id} conversationId={conversationId} id={id} index={index}/>)}</div>;
 }
 
-export function Thread({ items, conversation, projects, localFiles, thinking, compactRender, retryHref, onOpenPreview, onEditAgain, onChoice, onRetryMessage, sourceUrl }: {
+export function Thread({ items, conversation, projects, localFiles, thinking, compactRender, retryHref, onOpenPreview, onEditAgain, onChoice, onRetryMessage, sourceUrl, linkTitles = {} }: {
   items: TimelineItem[]; conversation: StudioConversation | null; projects: StudioProject[]; localFiles?: LocalFileInfo[];
   thinking?: string; compactRender?: boolean; retryHref?: string; onOpenPreview: (projectId: string) => void; onEditAgain: (projectId: string) => void;
-  onChoice: (choice: string) => void; onRetryMessage: () => void; sourceUrl?: string;
+  onChoice: (choice: string) => void; onRetryMessage: () => void; sourceUrl?: string; linkTitles?: Record<string, string>;
 }) {
   return <ol className="thread" aria-label="Conversation">
     {items.map(item => {
@@ -44,10 +44,10 @@ export function Thread({ items, conversation, projects, localFiles, thinking, co
         {item.role === "user"
           ? <div className="bubble">
               <Attachments conversationId={conversation?.id} ids={item.attachments} local={item.pending || item.failed ? localFiles : undefined}/>
-              {item.content ? <RichText text={item.content}/> : null}
+              {item.content ? <RichText text={item.content} linkTitles={linkTitles}/> : null}
               {item.failed ? <div className="msg-failed"><Icon name="alert" size={14}/>Not sent <button className="link-btn" onClick={onRetryMessage}>Retry</button></div> : null}
             </div>
-          : <div className="assistant"><span className="assistant-mark" aria-hidden="true"><Icon name="spark" size={13}/></span><div className="assistant-body"><RichText text={item.content}/><Attachments conversationId={conversation?.id} ids={item.attachments}/></div></div>}
+          : <div className="assistant"><span className="assistant-mark" aria-hidden="true"><Icon name="spark" size={13}/></span><div className="assistant-body"><RichText text={item.content} linkTitles={linkTitles}/><Attachments conversationId={conversation?.id} ids={item.attachments}/></div></div>}
       </li>;
       if (item.kind === "activity") return <li key={item.id} className="thread-aux"><ActivityBlock steps={item.steps} live={item.live} retryHref={retryHref}/></li>;
       if (item.kind === "render") {

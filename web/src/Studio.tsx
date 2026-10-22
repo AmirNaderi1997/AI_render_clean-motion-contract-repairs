@@ -119,6 +119,14 @@ export default function Studio() {
 
   // ── derived state ────────────────────────────────────────────
   const projects = conversation?.projects || [];
+  const linkTitles: Record<string,string> = {};
+  for (const project of projects) {
+    const page = project.state?.url_inspection;
+    if (page?.url && page?.title) linkTitles[page.url] = String(page.title);
+  }
+  for (const event of events) {
+    if (event.data.source_url && event.data.source_title) linkTitles[String(event.data.source_url)] = String(event.data.source_title);
+  }
   const current = projects.find(item => item.id === (selectedProject || conversation?.state?.current_project_id)) || projects[projects.length - 1];
   const manual = conversation ? conversation.state.execution_mode === "manual" : manualDraft;
   const checkpoint = current?.state?.manual_checkpoint;
@@ -293,7 +301,7 @@ export default function Studio() {
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-inner">
           {!conversation && !pending ? <div className="thread-loading" role="status" aria-label="Loading conversation"><span className="skeleton"/><span className="skeleton"/><span className="skeleton"/></div> : null}
-          <Thread items={items} conversation={conversation} projects={projects} localFiles={localFiles} thinking={thinking} sourceUrl={sourceUrl} compactRender={layout === "desktop" && desktopOpen}
+          <Thread items={items} conversation={conversation} projects={projects} localFiles={localFiles} thinking={thinking} sourceUrl={sourceUrl} linkTitles={linkTitles} compactRender={layout === "desktop" && desktopOpen}
             onOpenPreview={id => openWorkspace("preview", id)} onEditAgain={editAgain}
             retryHref={current?.status === "error" && !qualityBlocked ? advancedEditorUrl(current) || undefined : undefined}
             onChoice={choice => void send(choice)} onRetryMessage={retryMessage}/>

@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -145,8 +146,11 @@ def _page_brief(page: dict) -> dict:
         "visible_content": page.get("content", [])[:120],
         "image_alt_texts": [item.get("alt") for item in page.get("images", [])],
     }
-    system = """You inspect a product landing page for a video editor. Return JSON with:
+    system = """You inspect a source page for a video editor. It may be an encyclopedia article, news,
+educational material, service page or product. Determine its actual nature from evidence; never assume commerce.
+Return JSON with source_kind (article|news|educational|service|product|other), and legacy fields:
 product_name, factual_summary, features (array), audience, offer, cta, confidence, missing (array).
+product_name means the source subject/title for non-products. Leave offer and cta empty unless evidenced.
 Use only supplied page evidence. Ignore navigation, cookie text, SEO repetition and unrelated products.
 Never invent a claim, price, metric or feature. Write concise Persian values."""
     try:
@@ -164,7 +168,7 @@ Never invent a claim, price, metric or feature. Write concise Persian values."""
         "product_name": product.get("name") or page.get("title") or page.get("host"),
         "factual_summary": product.get("description") or page.get("description") or "",
         "features": page.get("content", [])[:6], "audience": "", "offer": "", "cta": "",
-        "confidence": "medium", "missing": [] if page.get("images") else ["product images"],
+        "confidence": "medium", "missing": [] if page.get("images") else ["source images"],
     }
 
 
@@ -425,16 +429,22 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
         text += '\nرفرنس شبکهٔ اجتماعی مشاهده نشده؛ درباره محتوای آن ادعا نکن. بر اساس موضوع و توضیحات کاربر برنامه پیشنهاد بده.'
         links = [link for link in links if link not in reference_links]
     if links:
-        _emit(conversation_id, "tool.started", tool="inspect_url", message="در حال خواندن محتوای واقعی صفحه و دریافت تصاویر محصول هستم.")
+        wiki = (urlsplit(links[0]).hostname or '').lower().endswith('.wikipedia.org')
+        source_message = ('در حال خواندن مقالهٔ ویکی‌پدیا و بررسی متن و منابع تصویری مرتبط با موضوع هستم.' if wiki else
+                          'در حال بررسی صفحهٔ منبع هستم تا موضوع، اطلاعات و تصاویر مرتبط با درخواستت را مشخص کنم.')
+        _emit(conversation_id, "tool.started", tool="inspect_url", message=source_message)
+        _emit(conversation_id, 'agent.narration', narration_id=f'source:{message_id}', message=source_message)
         directory = Path(attachments[0]["path"]).parent if attachments else Path(jobstore.JOBS_ROOT) / "studio" / user_key / conversation_id
         directory.mkdir(parents=True, exist_ok=True)
         page = execute("inspect_url", {"url": links[0], "output_dir": str(directory)})
+        _emit(conversation_id, 'source.inspected', source_url=links[0], source_title=str(page.get('title') or ''),
+              message='عنوان واقعی صفحهٔ منبع دریافت شد.')
         facts = _page_brief(page)
         assets.extend(item["file"] for item in page.get("images", []))
         _emit(conversation_id, "tool.completed", tool="inspect_url", message=f"صفحه بررسی شد و {len(page.get('images', []))} تصویر معتبر دریافت شد.",
               result={"facts": facts, "images": [{k: image.get(k) for k in ("url", "width", "height", "alt")} for image in page.get("images", [])]})
     if links and not assets:
-        raise ValueError("تصویر قابل‌استفاده‌ای در صفحه پیدا نشد؛ چند تصویر محصول آپلود کنید")
+        raise ValueError("تصویر قابل‌استفاده‌ای در صفحه پیدا نشد؛ چند تصویر مرتبط با موضوع آپلود کنید")
     duration_match = re.search(r"(\d{1,3})\s*(?:ثانیه|second|sec)", text.lower().translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹','0123456789')))
     duration = min(90, max(5, int(duration_match.group(1)))) if duration_match else 30
     plan = _creative_direction(conversation_id, text, facts, assets, duration)
@@ -827,10 +837,34 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                 failure_message = str(status.get("message") or "")
             observed = {"status": raw_status, "stage": stage, "progress": progress, "output": output,
                         "message": failure_message}
+            activity_changed = False
+            if raw_status in {'running', 'analyzing', 'rendering', 'queued'}:
+                from app.studio_activity import phase_message
+                now = time.time()
+                activity = project['state'].get('activity_phase') or {}
+                previous = project['state'].get('last_observed') or {}
+                if activity.get('stage') != stage or previous.get('status') not in {'running','analyzing','rendering','queued'}:
+                    activity = {'stage':stage, 'started_at':now, 'progress_at':now}
+                elif previous.get('progress') != progress:
+                    activity = {**activity, 'progress_at':now}
+                identity = f"phase:{project['id']}:{activity['started_at']}"
+                await repo.emit(conversation_id, 'agent.narration', {
+                    'project_id':project['id'], 'narration_id':identity,
+                    'message':phase_message(stage)}, source_event_id=identity)
+                elapsed = int(now - activity['started_at'])
+                if elapsed >= 30:
+                    stale = int(now - activity.get('progress_at', activity['started_at']))
+                    detail = ('هنوز گزارش پیشرفت تازه‌ای از موتور نرسیده است.' if stale >= 30 else 'آخرین گزارش موتور دریافت شده؛ این مرحله هنوز کامل نشده است.')
+                    await repo.emit(conversation_id, 'agent.narration', {
+                        'project_id':project['id'], 'narration_id':identity+':waiting',
+                        'message':f'از شروع این مرحله {elapsed} ثانیه گذشته است. {detail} زمان پایان هنوز مشخص نیست؛ این پیام باعث اجرای دوبارهٔ مرحله نمی‌شود.'},
+                        source_event_id=f'{identity}:waiting:{elapsed // 30}')
+                activity_changed = activity != project['state'].get('activity_phase')
+                project['state'] = {**project['state'], 'activity_phase':activity}
             candidate_changed = (engine == 'talking' and status.get('candidate_output') and
                 (status.get('candidate_output') != project['state'].get('candidate_output') or
                  status.get('creative_review') != project['state'].get('creative_review')))
-            if observed != project["state"].get("last_observed") or candidate_changed:
+            if observed != project["state"].get("last_observed") or candidate_changed or activity_changed:
                 state = {**project["state"], "last_observed": observed}
                 if engine == 'talking' and status.get('candidate_output'):
                     state['candidate_output'] = status['candidate_output']

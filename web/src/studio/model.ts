@@ -25,7 +25,7 @@ export interface ActivityStep {
   notes: string[];
 }
 export type TimelineItem =
-  | { kind: "message"; id: string; role: "user" | "assistant"; content: string; attachments: string[]; createdAt: number; pending?: boolean; failed?: boolean }
+  | { kind: "message"; id: string; role: "user" | "assistant"; content: string; attachments: string[]; createdAt: number; pending?: boolean; failed?: boolean; narration?: boolean }
   | { kind: "activity"; id: string; steps: ActivityStep[]; live: boolean }
   | { kind: "render"; id: string; projectId: string; startedAt: number }
   | { kind: "question"; id: string; question: string; choices: QuestionChoice[]; seq: number; style: boolean };
@@ -188,6 +188,18 @@ export function buildTimeline({ messages, events, projects, pending, processing 
       continue;
     }
     const event = entry.event!;
+    if (event.type === 'agent.narration') {
+      const id = `narration:${event.data.narration_id || event.seq}`;
+      const content = String(event.data.message || '').trim();
+      if (!content) continue;
+      const previous = items.find(item => item.kind === 'message' && item.id === id);
+      if (previous?.kind === 'message') previous.content = content;
+      else {
+        flush();
+        items.push({kind:'message', id, role:'assistant', content, attachments:[], createdAt:entry.t, narration:true});
+      }
+      continue;
+    }
     const projectId = String(event.data.project_id || "");
     if (event.type === "question.required") {
       flush();
@@ -240,7 +252,7 @@ export function buildTimeline({ messages, events, projects, pending, processing 
     const item = items[i];
     if (item.kind !== "activity") continue;
     // A later render card or message takes over as the live indicator.
-    const isLast = i === lastActivityIndex && processing && items.slice(i + 1).every(next => next.kind === "question");
+    const isLast = i === lastActivityIndex && processing && items.slice(i + 1).every(next => next.kind === "question" || (next.kind === 'message' && next.narration));
     item.steps.forEach((step, index) => {
       if (step.status === "active" && !(isLast && index === item.steps.length - 1)) step.status = "done";
     });

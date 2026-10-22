@@ -5,6 +5,7 @@ import { Icon } from "../components/Icon";
 import { formatDuration } from "../format";
 import { Link } from "react-router-dom";
 import { friendlyFailure, renderView } from "./model";
+import { ProgressNotice, useProgressAge } from './ProgressNotice';
 
 function useElapsed(startedAt: number, running: boolean) {
   const [now, setNow] = React.useState(() => Date.now());
@@ -32,6 +33,8 @@ export function RenderCard({ project, sourceUrl, startedAt, compact, onOpenPrevi
   const elapsed = useElapsed(startedAt, busy);
   const version = String(view.output || "").match(/\/v(\d+)(?:_preview)?\.mp4(?:$|\?)/)?.[1] || project.current_version;
   const percent = view.progress;
+  const age = useProgressAge(busy, percent, view.stageLabel);
+  const shownPercent = age >= 30 ? undefined : percent;
   const title = view.phase === "done" ? "Your video is ready" : view.phase === "failed" ? "Rendering didn’t finish" : view.phase === "finalizing" ? "Finalizing your video" : "Rendering your video";
 
   return <article className="render-card" data-phase={view.phase} data-compact={compact || undefined} aria-label={title}>
@@ -47,14 +50,15 @@ export function RenderCard({ project, sourceUrl, startedAt, compact, onOpenPrevi
           {view.phase === "failed" ? <Icon name="alert" size={28}/> : <span className="spinner rc-spinner" aria-hidden="true"/>}
           {view.phase !== "rendering" ? <strong>{view.stageLabel}</strong> : null}
           {view.phase === "failed" ? <p dir="auto" className="bidi wrap-safe">{friendlyFailure(view.message)}</p> : null}
-          {busy && typeof percent === "number" ? <span className="rc-pct" aria-hidden="true">{percent}%</span> : null}
+          {busy && typeof shownPercent === "number" ? <span className="rc-pct" aria-hidden="true">{shownPercent}%</span> : null}
         </div>
       </>}
     </div>}
 
     {busy ? <div className="rc-progress">
-      <div className="meter" data-indeterminate={typeof percent === "number" ? undefined : ""} style={{ ["--value" as string]: `${percent ?? 0}%` }} role="progressbar" aria-label="Render progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><span/></div>
-      <div className="rc-meta"><span>{view.stageLabel === title ? "" : view.stageLabel}</span>{typeof percent === "number" ? <span>{percent}%</span> : null}</div>
+      <div className="meter" data-indeterminate={typeof shownPercent === "number" ? undefined : ""} style={{ ["--value" as string]: `${shownPercent ?? 0}%` }} role="progressbar" aria-label="Render progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={shownPercent}><span/></div>
+      <div className="rc-meta"><span>{view.stageLabel === title ? "" : view.stageLabel}</span>{typeof percent === "number" ? <span>{age >= 30 ? 'آخرین گزارش: ' : ''}{percent}%</span> : null}</div>
+      <ProgressNotice seconds={age}/>
     </div> : null}
 
     {view.phase === "done" && output ? <div className="rc-actions">

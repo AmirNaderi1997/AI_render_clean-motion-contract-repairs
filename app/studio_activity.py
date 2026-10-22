@@ -8,6 +8,8 @@ from contextlib import contextmanager
 
 description = contextvars.ContextVar('studio_activity_description', default=None)
 LABELS = {
+    'audio_generation': ('narration', 'در حال ساخت صدای گویندگی از متن تأییدشده هستم.'),
+    'transcription': ('transcription', 'در حال دریافت متن گفتار و زمان‌بندی کلمه‌ها هستم.'),
     'intent_classification': ('understanding_request', 'در حال تشخیص نوع تدوین و بررسی درخواست شما هستم.'),
     'creative_director': ('creative_direction', 'در حال طراحی مسیر خلاقانه ویدیو هستم.'),
     'creative_critic': ('creative_review', 'دارم ایده‌ها را از نظر ارتباط، ریتم و کیفیت مقایسه می‌کنم.'),
@@ -20,6 +22,22 @@ LABELS = {
     'hyperframes_design': ('motion_generation', 'در حال طراحی موشن‌گرافیک هستم.'),
     'remotion_design': ('motion_generation', 'در حال طراحی صحنه‌های موشن هستم.'),
 }
+
+
+def phase_message(stage):
+    """Describe observed engine state, never invent internal work or completion."""
+    stage = str(stage or '').lower()
+    for tokens, message in [
+        (('render', 'encoding'), 'مرحلهٔ رندر شروع شده؛ موتور در حال ترکیب تصویر، صدا و نوشته‌ها در فایل ویدیو است.'),
+        (('voice', 'speech', 'narration', 'tts'), 'متن گویندگی برای ساخت صدا آماده شده؛ منتظر تکمیل مرحلهٔ صدا هستم.'),
+        (('transcrib', 'transcript'), 'گفتار ویدیو در حال تبدیل به متن زمان‌بندی‌شده است.'),
+        (('motion', 'design'), 'در حال آماده‌سازی طراحی و موشن صحنه‌ها برای تدوین هستم.'),
+        (('review', 'quality', 'qc'), 'فایل خروجی به مرحلهٔ بررسی کیفیت رسیده؛ نتیجهٔ واقعی بررسی را گزارش می‌کنم.'),
+        (('caption', 'text', 'hook'), 'در حال آماده‌سازی متن‌ها، هوک و زیرنویس‌های ویدیو هستم.'),
+        (('asset', 'generat'), 'پروژه در مرحلهٔ آماده‌سازی دارایی‌هاست؛ فایل‌های آماده برای ادامه استفاده می‌شوند.'),
+    ]:
+        if any(token in stage for token in tokens): return message
+    return 'پردازش این بخش از پروژه شروع شده؛ نتیجهٔ مرحله را همین‌جا گزارش می‌کنم.'
 
 
 @contextmanager
@@ -54,11 +72,15 @@ def observe_request(function):
         activity_id = uuid.uuid4().hex
         data = dict(tool=stage, stage=stage, activity_id=activity_id, message=message, thinking=True)
         report(cid, 'tool.started', **data)
+        report(cid, 'agent.narration', narration_id=activity_id, message=message)
         def waiting():
             while not stopped.wait(15):
                 elapsed = int(time.monotonic() - started)
                 report(cid, 'tool.progress', **{**data, 'elapsed_seconds': elapsed,
                        'message': f'{message} هنوز منتظر پاسخ سرویس هوش مصنوعی هستم؛ {elapsed} ثانیه گذشته است.'})
+                if elapsed >= 30 and elapsed // 15 % 2 == 0:
+                    report(cid, 'agent.narration', narration_id=activity_id + ':waiting',
+                           message=f'{message} از شروع این درخواست {elapsed} ثانیه گذشته و هنوز پاسخ کامل سرویس نرسیده است؛ درخواست تازه‌ای برای این گزارش ارسال نمی‌کنم.')
         worker = threading.Thread(target=waiting, daemon=True, name='studio-ai-status')
         worker.start()
         try:

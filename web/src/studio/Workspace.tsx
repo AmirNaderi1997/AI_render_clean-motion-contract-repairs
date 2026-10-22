@@ -6,6 +6,7 @@ import { Icon } from "../components/Icon";
 import { displayTitle } from "../format";
 import { renderView } from "./model";
 import {MotionScenes} from './MotionScenes';
+import { ProgressNotice, useProgressAge } from './ProgressNotice';
 
 export type WorkspaceTab = "preview" | "edit";
 
@@ -29,6 +30,9 @@ function Empty({ icon, title, text }: { icon: "spark" | "advanced"; title: strin
 }
 
 function PreviewPane({ project, conversation, sourceAttachment, onCancel }: { project?: StudioProject; conversation: StudioConversation | null; sourceAttachment?: string; onCancel: () => void }) {
+  const phase = renderView(project);
+  const rendering = ['queued','rendering','finalizing'].includes(phase.phase);
+  const progressAge = useProgressAge(rendering, phase.progress, phase.stageLabel);
   const [versions, setVersions] = React.useState<{file: string; version: number}[]>([]);
   const [selected, setSelected] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -54,8 +58,9 @@ function PreviewPane({ project, conversation, sourceAttachment, onCancel }: { pr
         : <div className="ws-placeholder"><span className="spinner"/><span>{view.stageLabel || "Preparing preview"}</span></div>}
     </div>
     {busy ? <div className="rc-progress">
-      <div className="meter" data-indeterminate={typeof view.progress === "number" ? undefined : ""} style={{ ["--value" as string]: `${view.progress ?? 0}%` }} role="progressbar" aria-label="Render progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={view.progress}><span/></div>
-      <div className="rc-meta"><span>{view.stageLabel}</span>{typeof view.progress === "number" ? <span>{view.progress}%</span> : null}</div>
+      <ProgressNotice seconds={progressAge}/>
+      <div className="meter" data-indeterminate={typeof view.progress === "number" && progressAge < 30 ? undefined : ""} style={{ ["--value" as string]: `${view.progress ?? 0}%` }} role="progressbar" aria-label="Render progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressAge < 30 ? view.progress : undefined}><span/></div>
+      <div className="rc-meta"><span>{view.stageLabel}</span>{typeof view.progress === "number" ? <span>{progressAge >= 30 ? 'آخرین گزارش: ' : ''}{view.progress}%</span> : null}</div>
     </div> : null}
     <div className="ws-meta">
       <span>Version {versions.find(item => item.file === selectedFile)?.version || version}</span>

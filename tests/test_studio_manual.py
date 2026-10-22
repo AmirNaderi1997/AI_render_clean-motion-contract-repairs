@@ -19,6 +19,29 @@ def store(tmp_path, monkeypatch):
 def run(coro): return asyncio.run(coro)
 
 
+def test_phase_narration_is_deduplicated_and_never_restarts_render(store, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from app import studio_orchestrator as o, talking_reel
+    c=run(store.create_conversation('u'))
+    p=run(store.create_project(c['id'],'u','talking','test',{},'job'))
+    status={'status':'running','stage':'rendering','progress':40}
+    monkeypatch.setattr(o.jobstore,'get',lambda _:SimpleNamespace(dir=tmp_path))
+    monkeypatch.setattr(talking_reel,'load',lambda _:status)
+    monkeypatch.setattr(talking_reel,'public',lambda s:s)
+    monkeypatch.setattr(talking_reel,'start',lambda *a,**k:pytest.fail('must not restart renderer'))
+    now=[1000.]
+    monkeypatch.setattr(o.time,'time',lambda:now[0])
+    run(o.sync_conversation(c['id'],'u'))
+    now[0]=1035.
+    run(o.sync_conversation(c['id'],'u'))
+    run(o.sync_conversation(c['id'],'u'))
+    events=run(store.events(c['id'],'u',0))
+    notes=[e for e in events if e['type']=='agent.narration']
+    assert len(notes)==2
+    assert '35' in notes[-1]['data']['message']
+    assert run(store.get_project(p['id'],'u'))['state']['activity_phase']['started_at']==1000.
+
+
 def test_automatic_mode_collects_identity_and_explicit_opt_out(store):
     conv = run(store.create_conversation('u'))
     session = manual.begin(conv['id'], 'u', 'talking', 'edit', [], essentials=True)

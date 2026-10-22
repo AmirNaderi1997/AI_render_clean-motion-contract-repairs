@@ -8,6 +8,19 @@ const msg = (id, role, s, content = "x") => ({ id, role, content, attachments: [
 const ev = (seq, type, s, data = {}) => ({ id: seq, seq, type, data, created_at: at(s) });
 const project = (state = {}, status = "running") => ({ id: "p1", conversation_id: "c", engine: "motion", title: "T", status, current_version: 1, state, created_at: at(0), updated_at: at(0) });
 
+test('agent narration is persistent conversational text and waiting updates replace one message', () => {
+  const events = [ev(1,'tool.started',1,{tool:'creative_motion'}),
+    ev(2,'agent.narration',2,{narration_id:'stage',message:'Designing'}),
+    ev(3,'agent.narration',30,{narration_id:'wait',message:'Waiting 30s'}),
+    ev(4,'agent.narration',60,{narration_id:'wait',message:'Waiting 60s'})];
+  const items=buildTimeline({messages:[msg(1,'user',0)],events,projects:[],processing:true});
+  const notes=items.filter(i=>i.kind==='message' && i.narration);
+  assert.equal(notes.length,2);
+  assert.equal(notes[1].content,'Waiting 60s');
+  assert.equal(items.find(i=>i.kind==='activity').steps[0].status,'active');
+  assert.deepEqual(items,buildTimeline({messages:[msg(1,'user',0)],events,projects:[],processing:true}));
+});
+
 test("repeated progress events fold into one step but keep every event", () => {
   const events = [ev(1, "tool.progress", 2, { project_id: "p1", stage: "generating assets", progress: 10 }), ev(2, "tool.progress", 3, { project_id: "p1", stage: "generating assets", progress: 40 }), ev(3, "tool.progress", 4, { project_id: "p1", stage: "generating assets", progress: 70 })];
   const items = buildTimeline({ messages: [msg(1, "user", 0)], events, projects: [project()], processing: true });
