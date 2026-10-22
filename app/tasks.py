@@ -159,12 +159,12 @@ if CELERY_AVAILABLE:
 
     @celery.task(bind=True, name="airender.studio_message", max_retries=1, default_retry_delay=15)
     def task_studio_message(self, conversation_id: str, user_key: str, message_id: int | str,
-                            text: str, attachment_ids: list[str]) -> None:
+                            text: str, attachment_ids: list[str], manual_question_id: str | None = None) -> None:
         from app.studio_orchestrator import process_message
 
         # The orchestrator persists its own user-facing failure event.  A
         # retry is reserved for worker/transport loss, not validation errors.
         headers = getattr(self.request,"headers",None) or {}
         token = request_id_var.set(headers.get("request_id"))
-        try: process_message(conversation_id, user_key, message_id, text, attachment_ids)
+        try: process_message(conversation_id, user_key, message_id, text, attachment_ids, manual_question_id)
         finally: request_id_var.reset(token)

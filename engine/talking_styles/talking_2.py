@@ -442,6 +442,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     fonts = fonts_bundle(work_dir)
     ass = work_dir / "reel2.ass"
     ass_text = build_ass(plan, fonts)
+    from engine.caption_preferences import caption_font
+    ass_text = caption_font(ass_text, settings)
     title_color = str(settings.get("title_color") or YELLOW)
     if re.fullmatch(r"#[0-9A-Fa-f]{6}", title_color):
         old, new = _colour(YELLOW), _colour(title_color)

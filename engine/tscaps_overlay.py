@@ -257,6 +257,10 @@ def render_with_overlay(render, video, plan, out, *, work_dir: Path, cues: list[
 
     `render` is the style's plain renderer (it accepts `overlay=`), `strip(plan)` returns the plan without what the layer draws."""
     cues = _tidy(cues)
+    if (kwargs.get('render_settings') or {}).get('caption_font') == 'Vazirmatn':
+        # The native path honors the selected installed Persian font. Do not
+        # place a Ray Tscaps layer over a user-selected Vazirmatn caption.
+        return render(video, plan, out, work_dir=work_dir, **kwargs)
     overlay = None
     if cues and enabled():
         try:

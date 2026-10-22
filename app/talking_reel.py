@@ -144,6 +144,8 @@ def _clean_render_settings(value: object) -> dict:
     current = json.loads(json.dumps(DEFAULTS["render_settings"]))
     if not isinstance(value, dict):
         return current
+    if value.get('caption_font') in {'default', 'Vazirmatn'}:
+        current['caption_font'] = value['caption_font']
     grade = value.get("grade") if isinstance(value.get("grade"), dict) else {}
     limits = {"brightness": (-30, 30), "contrast": (50, 160), "saturation": (0, 180),
               "temperature": (-50, 50), "vignette": (0, 100)}

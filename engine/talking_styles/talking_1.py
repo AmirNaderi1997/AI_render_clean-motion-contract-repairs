@@ -397,7 +397,8 @@ def hook_line(hook: str, highlight: list[str]) -> str:
 
 
 def build_ass(plan: ReelPlan, hook: str, highlight: list[str], name: str, title: str,
-              fonts_dir: Optional[Path], *, moments: bool = True) -> str:
+              fonts_dir: Optional[Path], *, moments: bool = True, caption_font: str | None = None) -> str:
+    CAPTION_FONT = caption_font or globals()['CAPTION_FONT']
     end = max(0.05, plan.duration - 0.02)
     hook_size = int(H * 0.041)
     # Wrap a long hook to two lines at the space nearest the middle.
@@ -889,7 +890,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     fonts = fonts_bundle(work_dir)
     ass = work_dir / "reel.ass"
     settings = render_settings or {}
-    ass_text = build_ass(plan, hook, highlight, name, title, fonts, moments=overlay is None)
+    ass_text = build_ass(plan, hook, highlight, name, title, fonts, moments=overlay is None,
+                         caption_font='Vazirmatn' if settings.get('caption_font') == 'Vazirmatn' else None)
     title_color = str(settings.get("title_color") or YELLOW)
     if re.fullmatch(r"#[0-9A-Fa-f]{6}", title_color):
         old, new = _colour(YELLOW), _colour(title_color)

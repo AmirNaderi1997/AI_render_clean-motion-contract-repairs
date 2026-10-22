@@ -6,6 +6,7 @@ import copy
 import json
 import re
 import shutil
+from typing import Literal
 from pathlib import Path
 
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
@@ -57,6 +58,9 @@ def _public_project(project: dict) -> dict:
 def _public_conversation(conversation: dict) -> dict:
     result = copy.deepcopy(conversation)
     result["projects"] = [_public_project(item) for item in result.get("projects") or []]
+    from app.studio_manual import question
+    session = result.get('state', {}).get('manual_session')
+    result['state']['manual_question'] = question(session) if session and session.get('question_id') else None
     return result
 
 
@@ -83,11 +87,14 @@ class ConversationCreate(BaseModel):
 class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=255)
     status_voice_enabled: bool | None = None
+    execution_mode: Literal["auto", "manual"] | None = None
 
 
 class MessageCreate(BaseModel):
     content: str = Field(min_length=1, max_length=12_000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=20)
+    execution_mode: Literal["auto", "manual"] | None = None
+    manual_question_id: str | None = Field(default=None, max_length=64)
 
 
 class StoryboardUpdate(BaseModel):
@@ -153,7 +160,13 @@ async def get_conversation(request: Request, conversation_id: str):
 @router.patch("/conversations/{conversation_id}")
 async def update_conversation(request: Request, conversation_id: str, body: ConversationUpdate):
     try:
-        return await repo.set_conversation(conversation_id, _user(request), **body.model_dump(exclude_unset=True))
+        changes = body.model_dump(exclude_unset=True)
+        mode = changes.pop("execution_mode", None)
+        if mode:
+            old = await repo.get_conversation(conversation_id, _user(request))
+            changes["state"] = {**old.get("state", {}), "execution_mode": mode}
+            if mode == 'auto': changes['state']['manual_session'] = None
+        return await repo.set_conversation(conversation_id, _user(request), **changes)
     except KeyError:
         raise HTTPException(404, "conversation not found")
 
@@ -230,11 +243,21 @@ async def get_attachment(request: Request, conversation_id: str, attachment_id: 
 async def send_message(request: Request, conversation_id: str, body: MessageCreate):
     user_key = _user(request)
     try:
+        conversation = await repo.get_conversation(conversation_id, user_key)
+        if body.execution_mode:
+            await repo.set_conversation(conversation_id, user_key, state={**conversation.get("state", {}), "execution_mode": body.execution_mode})
         await repo.get_attachments(body.attachment_ids, conversation_id, user_key)
-        message = await repo.add_message(conversation_id, user_key, "user", body.content.strip(), body.attachment_ids)
+        display = body.content.strip()
+        session = conversation.get('state', {}).get('manual_session')
+        if session and session.get('question_id') == body.manual_question_id:
+            from app.studio_manual import question
+            spec = question(session)
+            selected = next((c for c in spec['choices'] if c['value'] == display), None)
+            if selected: display = spec['title'] + ': ' + selected['label']
+        message = await repo.add_message(conversation_id, user_key, "user", display, body.attachment_ids)
     except KeyError:
         raise HTTPException(404, "conversation or attachment not found")
-    dispatch_message(conversation_id, user_key, message["id"], message["content"], body.attachment_ids)
+    dispatch_message(conversation_id, user_key, message["id"], body.content.strip(), body.attachment_ids, body.manual_question_id)
     return message
 
 

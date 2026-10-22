@@ -18,6 +18,7 @@ interface ComposerProps {
   hasSpeech: boolean; listening: boolean; onListen: () => void;
   autoFocus?: boolean; placeholder?: string; variant?: "home" | "dock";
   textareaRef?: React.RefObject<HTMLTextAreaElement>;
+  manual?: boolean; onManualChange?: () => void;
 }
 
 export function Composer(props: ComposerProps) {
@@ -68,6 +69,8 @@ export function Composer(props: ComposerProps) {
         <input ref={fileInput} type="file" multiple hidden accept="video/*,image/*,audio/*" onChange={event => { const picked = Array.from(event.target.files || []); event.target.value = ""; if (picked.length) void onFiles(picked); }}/>
         <span className="grow"/>
         {hasSpeech ? <button type="button" className="icon-btn" aria-pressed={listening} onClick={onListen} aria-label={listening ? "Stop voice input" : "Use voice input"} data-tip="Voice input" data-tip-pos="top"><Icon name="mic" size={19}/></button> : null}
+        {props.onManualChange ? <button type="button" className="icon-btn composer-manual" aria-label="Manual mode" aria-pressed={Boolean(props.manual)} disabled={processing}
+          onClick={props.onManualChange} data-tip={props.manual ? "Manual · تأیید مرحله‌به‌مرحله" : "Auto · فعال‌کردن حالت دستی"} data-tip-pos="top"><Icon name="hand" size={18}/></button> : null}
         {processing
           ? onStop
             ? <button type="button" className="icon-btn icon-btn-solid icon-btn-lg composer-send" onClick={onStop} aria-label="Stop" data-tip="Stop" data-tip-pos="top"><Icon name="stop" size={18}/></button>

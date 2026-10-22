@@ -78,6 +78,45 @@ def _project(row: StudioProject) -> dict:
 
 
 class Repository:
+    async def claim_manual_checkpoint(self, project_id: str, user_key: str, question_id: str) -> bool:
+        """Single-use render approval, locked across API/worker processes."""
+        if DB_AVAILABLE:
+            async with AsyncSessionLocal() as db:
+                row = (await db.execute(select(StudioProject).where(StudioProject.id == project_id,
+                    StudioProject.user_key == user_key).with_for_update())).scalar_one_or_none()
+                if row is None: raise KeyError(project_id)
+                state = copy.deepcopy(row.state or {})
+                checkpoint = state.get('manual_checkpoint') or {}
+                if checkpoint.get('id') != question_id or checkpoint.get('claimed'): return False
+                checkpoint['claimed'] = True
+                row.state = {**state, 'manual_checkpoint': checkpoint}
+                await db.commit()
+                return True
+        with _lock:
+            data = _read(); row = data['projects'].get(project_id)
+            if row is None or row['user_key'] != user_key: raise KeyError(project_id)
+            checkpoint = row['state'].get('manual_checkpoint') or {}
+            if checkpoint.get('id') != question_id or checkpoint.get('claimed'): return False
+            checkpoint['claimed'] = True; _write(data)
+            return True
+
+    async def claim_manual_question(self, conversation_id: str, user_key: str, question_id: str) -> bool:
+        if DB_AVAILABLE:
+            async with AsyncSessionLocal() as db:
+                row = (await db.execute(select(StudioConversation).where(StudioConversation.id == conversation_id,
+                    StudioConversation.user_key == user_key).with_for_update())).scalar_one_or_none()
+                if row is None: raise KeyError(conversation_id)
+                state = copy.deepcopy(row.state or {}); session = state.get('manual_session') or {}
+                if session.get('question_id') != question_id or session.get('claimed'): return False
+                session['claimed'] = True; row.state = {**state, 'manual_session': session}
+                await db.commit(); return True
+        with _lock:
+            data = _read(); row = data['conversations'].get(conversation_id)
+            if row is None or row['user_key'] != user_key: raise KeyError(conversation_id)
+            session = row['state'].get('manual_session') or {}
+            if session.get('question_id') != question_id or session.get('claimed'): return False
+            session['claimed'] = True; _write(data); return True
+
     async def voice_enabled(self, conversation_id: str) -> bool:
         if DB_AVAILABLE:
             assert AsyncSessionLocal is not None
@@ -236,7 +275,9 @@ class Repository:
                 data = _read(); data["projects"][pid] = value
                 data["versions"][pid] = [{"version": 1, "source": "agent", "snapshot": state, "created_at": iso(created)}]
                 _write(data)
-        await self.set_conversation(conversation_id, user_key, state={"current_project_id": pid})
+        conversation = await self.get_conversation(conversation_id, user_key)
+        await self.set_conversation(conversation_id, user_key,
+                                    state={**conversation.get("state", {}), "current_project_id": pid})
         return value
 
     async def get_project(self, project_id: str, user_key: str) -> dict:

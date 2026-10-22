@@ -1015,15 +1015,15 @@ export const api = {
   async getStudioConversation(id: string): Promise<StudioConversation> {
     return j(await authFetch(`${BASE}/studio/conversations/${id}`));
   },
-  async updateStudioConversation(id: string, patch: { title?: string; status_voice_enabled?: boolean }): Promise<StudioConversation> {
+  async updateStudioConversation(id: string, patch: { title?: string; status_voice_enabled?: boolean; execution_mode?: "auto" | "manual" }): Promise<StudioConversation> {
     return j(await authFetch(`${BASE}/studio/conversations/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }));
   },
   async uploadStudioAttachment(id: string, file: File, onProgress?: (value: number) => void): Promise<StudioAttachment> {
     const form = new FormData(); form.append("file", file);
     return uploadWithProgress(`${BASE}/studio/conversations/${id}/attachments`, form, onProgress);
   },
-  async sendStudioMessage(id: string, content: string, attachment_ids: string[]): Promise<StudioMessage> {
-    return j(await authFetch(`${BASE}/studio/conversations/${id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, attachment_ids }) }));
+  async sendStudioMessage(id: string, content: string, attachment_ids: string[], options: { execution_mode?: "auto" | "manual"; manual_question_id?: string } = {}): Promise<StudioMessage> {
+    return j(await authFetch(`${BASE}/studio/conversations/${id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, attachment_ids, ...options }) }));
   },
   async confirmStudioAction(id: string): Promise<StudioAction> {
     return j(await authFetch(`${BASE}/studio/actions/${id}/confirm`, { method: "POST" }));

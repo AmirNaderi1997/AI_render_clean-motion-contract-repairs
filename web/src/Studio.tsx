@@ -8,6 +8,7 @@ import { useTopbarTitle } from "./components/ShellContext";
 import { displayTitle, parseTime, relativeTime } from "./format";
 import { friendlyError } from "./ui";
 import { Composer, PendingFile } from "./studio/Composer";
+import { ManualQuestion } from "./studio/ManualQuestion";
 import { Thread, LocalFileInfo } from "./studio/Thread";
 import { Workspace, WorkspaceTab, advancedEditorUrl } from "./studio/Workspace";
 import { PendingMessage, activeStep, buildTimeline, isProcessing, renderView, thinkingLabel } from "./studio/model";
@@ -34,6 +35,8 @@ export default function Studio() {
   const [pending, setPending] = React.useState<PendingMessage | null>(null);
   const [localFiles, setLocalFiles] = React.useState<LocalFileInfo[]>([]);
   const [listening, setListening] = React.useState(false);
+  const [manualDraft, setManualDraft] = React.useState(false);
+  const [modeSaving, setModeSaving] = React.useState(false);
   const [wsTab, setWsTab] = React.useState<WorkspaceTab>("preview");
   const [desktopOpen, setDesktopOpen] = React.useState(() => lsGet("editorgpt.workspace", "open") !== "closed");
   const [overlayOpen, setOverlayOpen] = React.useState(false);
@@ -116,6 +119,17 @@ export default function Studio() {
   // ── derived state ────────────────────────────────────────────
   const projects = conversation?.projects || [];
   const current = projects.find(item => item.id === (selectedProject || conversation?.state?.current_project_id)) || projects[projects.length - 1];
+  const manual = conversation ? conversation.state.execution_mode === "manual" : manualDraft;
+  const manualQuestion = current?.state?.manual_checkpoint || (manual ? conversation?.state?.manual_question : null);
+  const toggleManual = async () => {
+    if (modeSaving) return;
+    if (!authenticated) { openAuth("login"); return; }
+    if (!conversation) { setManualDraft(!manualDraft); return; }
+    setModeSaving(true);
+    try { await api.updateStudioConversation(conversation.id, { execution_mode: manual ? "auto" : "manual" }); await refresh(); }
+    catch (e) { setError(friendlyError(e, "change execution mode")); }
+    finally { setModeSaving(false); }
+  };
   const pendingAction = (conversation?.actions || []).find(item => item.project_id === current?.id && item.status === "pending");
   const [resuming, setResuming] = React.useState(false);
   const resume = async () => {
@@ -196,7 +210,7 @@ export default function Studio() {
     lastSendRef.current = { text: finalText, ids };
     try {
       const id = await ensureConversation(finalText.slice(0, 70));
-      await api.sendStudioMessage(id, finalText, ids);
+      await api.sendStudioMessage(id, finalText, ids, { execution_mode: conversation || !activeId ? (manual ? "manual" : "auto") : undefined, manual_question_id: manualQuestion?.id });
       await refresh(id);
       setPending(null); setLocalFiles(list => { list.forEach(file => URL.revokeObjectURL(file.url)); return []; });
     } catch (e) {
@@ -241,6 +255,7 @@ export default function Studio() {
   const mobileTab = layout === "mobile" ? (mobileView === "chat" ? "chat" : wsTab) : null;
 
   const composer = (variant: "home" | "dock") => <Composer variant={variant} text={text} setText={setText} files={files} onRemoveFile={removeFile} onFiles={addFiles}
+    manual={manual} onManualChange={modeSaving ? undefined : () => void toggleManual()}
     processing={processing} onStop={canStop ? stop : undefined} onSend={() => void send()} error={error} onDismissError={() => setError("")}
     hasSpeech={hasSpeech} listening={listening} onListen={startVoiceInput} textareaRef={textareaRef} autoFocus={variant === "home" && layout !== "mobile"}/>;
 
@@ -275,6 +290,7 @@ export default function Studio() {
             if (window.confirm('هنوز پروژه‌ای ساخته نشده است. درخواست اصلی با همان فایل‌ها دوباره بررسی شود؟ این کار ممکن است هزینهٔ API داشته باشد؛ تولید نهایی همچنان نیازمند تأیید برنامه است.')) void send(undefined, { text: lastUserMessage.content, ids: lastUserMessage.attachments || [] });
           }}><Icon name="play" size={14}/>تلاش مجدد درخواست</button> : null}
           {styles.length > 0 && current?.status === "awaiting_input" ? <div className="action-card"><h3>Choose a style</h3><p>How should this video feel?</p><div className="style-options">{styles.map((style: any) => <button key={style.id || style.key} onClick={() => void send(`سبک ${style.id || style.key}`)}><b className="bidi" dir="auto">{style.label || style.title || style.name}</b><small className="bidi" dir="auto">{style.description || "Talking Reel style"}</small></button>)}</div></div> : null}
+          {manualQuestion ? <ManualQuestion key={manualQuestion.id} question={manualQuestion} busy={processing || sending} onAnswer={value => void send(value)}/> : null}
           {pendingAction ? <div className="action-card"><h3>Approve this plan?</h3><p>EditorGPT will create the media, voice-over and final render using the plan above.</p>{pendingAction.estimated_cost_usd != null ? <small className="muted-text">Recorded estimate: ${pendingAction.estimated_cost_usd.toFixed(4)}</small> : null}
             <div className="action-buttons"><button className="btn" onClick={() => void api.confirmStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "approve the plan")))}>Approve and continue</button><button className="btn btn-secondary" onClick={() => void api.cancelStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "cancel the plan")))}>Cancel</button></div></div> : null}
         </div>

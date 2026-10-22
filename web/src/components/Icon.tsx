@@ -1,6 +1,7 @@
 import React from "react";
 
 const paths = {
+  hand: <><path d="M8 12V5a1.5 1.5 0 0 1 3 0v6-7a1.5 1.5 0 0 1 3 0v7-5a1.5 1.5 0 0 1 3 0v6-3a1.5 1.5 0 0 1 3 0v6c0 5-3 7-6 7h-1c-2 0-3-1-4-2l-5-6a1.5 1.5 0 0 1 2-2l2 2Z"/></>,
   storyboard: <><rect x="3" y="5" width="7" height="14" rx="2"/><rect x="14" y="5" width="7" height="14" rx="2"/><path d="M5.5 14h2M16.5 14h2M5.5 10h2M16.5 10h2"/></>,
   motion: <><path d="M3 7h7M3 12h5M3 17h7"/><path d="m13 6 8 6-8 6Z"/></>,
   thinking: <><circle cx="6" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18" cy="12" r="1"/></>,
