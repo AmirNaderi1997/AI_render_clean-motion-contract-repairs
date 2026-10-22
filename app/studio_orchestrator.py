@@ -503,20 +503,34 @@ def _revise_talking(conversation_id: str, user_key: str, project: dict, job, tex
         "style": state.get("style"), "hook": state.get("hook2") if split else state.get("hook"),
         "hook_highlight": state.get("hook_highlight"), "captions": public["captions"],
         "storyboard": [{"i": b.get("i"), "title": b.get("title"), "visual_type": b.get("visual_type")} for b in public["storyboard"]],
-        "render_settings": {"grade": settings.get("grade"), "zoom": settings.get("zoom"), "title_color": settings.get("title_color"),
-                            "outro_logo": settings.get("outro_logo"), "key_moments_enabled": settings.get("key_moments_enabled")},
+        "render_settings": settings,
         "direction": ((state.get("creative_plan") or {}).get("chosen") or {}).get("angle"),
-        "quality_review": state.get("creative_review"),
-        "last_failure": state.get("message"),
-        "speaker_name": state.get("name"), "speaker_title": state.get("title"),
+        "quality_review": state.get('creative_review'),
+        "last_failure": state.get('message'),
+        "speaker_name": state.get('name'), "speaker_title": state.get('title'),
         "sentences": [{"i": k, "start": round(x["start"], 1), "end": round(x["end"], 1), "text": x["text"]} for k, x in enumerate(sentences)],
     }
+    output_plan = None
+    if not split and state.get('decisions'):
+        from engine.talking_styles.talking_1 import plan_reel
+        from engine.revision_timing import sentence_ranges, prepare_transcript
+        transcript = talking_reel.transcript_for(job.dir, video)
+        faces_file = job.dir/'talking_reel_faces.json'
+        faces = [tuple(f) for f in json.loads(faces_file.read_text())] if faces_file.is_file() else []
+        decisions = talking_reel._apply_timeline_choices(state['decisions'], 'talking_1', settings)
+        transcript, decisions = prepare_transcript(transcript, decisions)
+        plan = plan_reel(transcript, decisions, faces, float(transcript.get('duration') or 0))
+        output_plan = plan
+        context['output_sentence_ranges'] = sentence_ranges(plan, sentences)
+        context['output_words'] = [{'start':round(sh.out_start+w['start']-sh.src_in,3),
+            'end':round(sh.out_start+min(w['end'],sh.src_out)-sh.src_in,3),'text':w.get('w','')}
+            for sh in plan.shots for w in transcript['words'] if sh.src_in<=w['start']<sh.src_out][:3000]
     try:
         revision = revise.interpret(text, context)
     except creative.CreativeUnavailable as exc:
         log.warning("revision interpreter unavailable: %s", exc)
         return False
-    change = revise.apply_to_talking(public, revision.ops, len(sentences))
+    change = revise.apply_to_talking(public, revision.ops, len(sentences), output_plan=output_plan)
     notes = ""
     if change.applied:
         notes += "\n\nتغییرات:\n" + "\n".join(f"• {item}" for item in change.applied)

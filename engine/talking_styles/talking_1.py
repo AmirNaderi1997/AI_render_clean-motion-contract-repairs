@@ -277,13 +277,15 @@ def plan_reel(transcript: dict, decisions: dict, faces: list[tuple[float, float,
 
     sentences = transcript["sentences"]
     words = transcript["words"]
-    dropped = [sentences[k] for k in decisions.get("drop", [])]
+    dropped = [sentences[k] for k in decisions.get("drop", []) if type(k) is int and 0 <= k < len(sentences)]
 
     def drop(word: dict) -> bool:
         t = float(word["start"])
         return is_filler(word.get("w", "")) or any(s["start"] - 0.05 <= t <= s["end"] + 0.05 for s in dropped)
 
     ranges = speech_ranges(words, drop, duration)
+    from engine.revision_timing import subtract_ranges
+    ranges = subtract_ranges(ranges, decisions.get('source_cuts') or [])
     if not ranges:
         raise ValueError("nothing left to keep after cutting pauses")
     shots = build_shots(ranges, words)
@@ -662,7 +664,7 @@ def eval_fps(fps: str) -> float:
     return float(num) / float(den or 1)
 
 
-def vignette_png(out: Path) -> Path:
+def vignette_png(out: Path, bottom_shade: float = 0, strength: float = 1) -> Path:
     """Soft edge vignette, darker towards the bottom (text area), as an RGBA overlay."""
     import numpy as np
     from PIL import Image
@@ -672,6 +674,9 @@ def vignette_png(out: Path) -> Path:
     edge = np.clip((np.sqrt(nx ** 2 * 0.9 + ny ** 2 * 0.55) - 0.55) / 0.6, 0, 1) ** 1.6 * 0.45
     bottom = np.clip((y / H - 0.55) / 0.45, 0, 1) ** 1.4 * 0.55
     alpha = np.clip(1 - (1 - edge) * (1 - bottom), 0, 0.8)
+    alpha *= max(0, min(1, strength))
+    shade = np.clip((y / H - 0.72) / 0.28, 0, 1) * max(0, min(.6, bottom_shade))
+    alpha = 1 - (1 - alpha) * (1 - shade)
     rgba = np.zeros((H, W, 4), np.uint8)
     rgba[..., 3] = (alpha * 255).astype(np.uint8)
     Image.fromarray(rgba, "RGBA").save(out)
@@ -899,7 +904,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     ass.write_text(ass_text, encoding="utf-8")
 
     fps_value = eval_fps(fps)
-    vignette = vignette_png(work_dir / "vignette.png")
+    vignette = vignette_png(work_dir / "vignette.png", float(settings.get('bottom_shade', 0)) / 100,
+                            float((settings.get('grade') or {}).get('vignette', 50)) / 100)
     logo = settings.get("outro_logo") or {}
     outro, outro_seconds = render_outro(work_dir, cta.strip(), fps, fonts,
                                         logo_enabled=logo.get("enabled", True),
@@ -965,8 +971,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     inputs = shot_concat(clips,work_dir)
     vf = ['[0:v]setpts=PTS-STARTPTS[cv]','[0:a]asetpts=PTS-STARTPTS[ca]']
     n = 1
-    vignette_alpha = max(0.0, min(1.0, float(grade_settings.get("vignette", 50)) / 100))
-    vf.append(f"[{n}:v]format=rgba,colorchannelmixer=aa={vignette_alpha:.3f}[vig]")
+    vf.append(f"[{n}:v]format=rgba[vig]")
     content = "vmain" if outro else "vout"
     windows = "+".join(f"between(t,{n['start']:.3f},{n['end']:.3f})" for n in plan.notes)
     emphasis = (f"gblur=sigma=9:enable='{windows}',hue=s=0:enable='{windows}',"

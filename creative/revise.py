@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from . import llm
 from .schemas import CreativeUnavailable
 
-Op = Literal["rewrite_hook", "edit_caption", "set_render", "change_style", "replace_visual", "drop_visual", "set_cta", "clear_identity", "unsupported"]
+Op = Literal["rewrite_hook", "edit_caption", "remove_sentence", "remove_range", "set_render", "change_style", "replace_visual", "drop_visual", "set_cta", "clear_identity", "unsupported"]
 VISUAL_TYPES = {"concept", "stat", "comparison", "steps", "ui_showcase", "media_collage", "chat", "map_route",
                 "spec_callout", "kinetic_type", "before_after"}
 STYLES = {"talking_1", "talking_2", "talking_3", "talking_4"}
@@ -29,6 +29,8 @@ class RevisionOp(BaseModel):
     model_config = ConfigDict(extra="ignore")
     op: Op
     sentence: int | None = None
+    start: float | None = None
+    end: float | None = None
     text: str = ""
     highlight: list[str] = Field(default_factory=list)
     items: list[str] = Field(default_factory=list)
@@ -78,11 +80,20 @@ You receive the transcript sentences (index: text), the current hook, captions, 
 settings and style. Return ONLY JSON: {"summary": "<one friendly Persian sentence saying what you will change>", "ops": [...]}.
 
 Operations (use exactly these):
+- {"op":"remove_range","start":<output seconds>,"end":<output seconds>} (Talking 1: a precise partial audio/video cut, with captions retimed.)
+  Use output_words to identify boundaries. For a repeated false start, cut ONLY that false start, NOT the entire long sentence.
+- {"op":"remove_sentence","sentence":<index>} (Talking 1: removes actual picture AND audio, not just caption.)
+  User timestamps refer to OUTPUT time: use output_sentence_ranges, NOT raw source timestamps.
+  Do not overrule a requested cut because you think a different sentence is more repetitive. Ask if the output timestamp is ambiguous.
 - {"op":"rewrite_hook","text":"<new Persian hook, 3-8 words, faithful to what the speaker says>","highlight":["<1-2 words from the hook>"]}
 - {"op":"edit_caption","sentence":<index>,"text":"<corrected caption>"}
-- {"op":"set_render","settings":{ any of: "title_color":"#RRGGBB", "zoom_amount":0-200, "zoom_enabled":bool, "outro_logo":bool,
+- {"op":"set_render","settings":{ any of: "title_color":"#RRGGBB", "zoom_amount":0-200, "base_scale":100-180,"close_scale":100-220,"first_key_moment_enabled":bool,"bottom_shade":0-60,"zoom_enabled":bool, "outro_logo":bool,
     "key_moments":bool, "brightness":-30..30, "contrast":50..160, "saturation":0..180, "temperature":-50..50, "vignette":0..100 }}
     (a "cinematic" look = lower saturation, slightly higher contrast, warmer temperature and stronger vignette; "more energy" = larger zoom_amount)
+    Frame zoom/crop means base_scale and close_scale, NOT zoom_amount (animation strength).
+    A 10% larger full frame multiplies current base_scale and close_scale by 1.1.
+    Disabling first_key_moment_enabled removes ONLY the opening teaser, keeping other moments.
+    bottom_shade adds a soft black gradient under the lower-third in Talking 1; subtle=20-30.
 - {"op":"change_style","style":"talking_1|talking_2|talking_3|talking_4"}   (re-plans the edit in that style)
 - {"op":"replace_visual","sentence":<index>,"text":"<2-6 word Persian title>","visual_type":"<concept|stat|comparison|steps|ui_showcase|media_collage|chat|map_route|spec_callout|kinetic_type|before_after>","items":["<up to 4 facts the speaker says>"]}
 - {"op":"drop_visual","sentence":<index>}
@@ -122,7 +133,7 @@ def _clamp(value: Any, low: int, high: int) -> int | None:
         return None
 
 
-def apply_to_talking(public_state: dict, ops: list[RevisionOp], sentence_count: int) -> TalkingChange:
+def apply_to_talking(public_state: dict, ops: list[RevisionOp], sentence_count: int, *, output_plan=None) -> TalkingChange:
     """Pure: map operations onto talking-engine edits. Anything outside the engine's real surface is reported, not faked."""
     out = TalkingChange()
     style = str(public_state.get("style") or "talking_1")
@@ -135,6 +146,24 @@ def apply_to_talking(public_state: dict, ops: list[RevisionOp], sentence_count: 
         return i is not None and 0 <= i < sentence_count
 
     for op in ops:
+        if op.op == 'remove_range':
+            if style != 'talking_1' or output_plan is None or op.start is None or op.end is None:
+                out.unsupported.append('برای برش جزئی باید نگاشت زمان خروجی در دسترس باشد.'); continue
+            from engine.revision_timing import source_cuts
+            try: cuts=source_cuts(output_plan, op.start, op.end)
+            except ValueError as exc:
+                out.unsupported.append(str(exc)); continue
+            settings['source_cuts'] = (settings.get('source_cuts') or []) + cuts
+            touched_settings = True
+            out.applied.append(f'تصویر و صدا در بازهٔ {op.start:g} تا {op.end:g} خروجی حذف می‌شود؛ زیرنویس هم باززمان‌بندی می‌شود.')
+            continue
+        if op.op == 'remove_sentence':
+            if style == 'talking_1' and known(op.sentence):
+                settings['dropped_sentences'] = sorted(set(settings.get('dropped_sentences', [])) | {op.sentence})
+                touched_settings = True
+                out.applied.append(f'تصویر و صدای جملهٔ {op.sentence} از تدوین حذف می‌شود؛ زمان‌بندی زیرنویس دوباره محاسبه می‌شود.')
+            else: out.unsupported.append('برش این جمله برای سبک فعلی تأیید نشده است.')
+            continue
         if op.op == 'clear_identity':
             out.changes.update(name='', title='')
             out.applied.append('نام و سمت تأییدنشدهٔ گوینده حذف شد.')
@@ -158,6 +187,14 @@ def apply_to_talking(public_state: dict, ops: list[RevisionOp], sentence_count: 
             grade = settings.setdefault("grade", {})
             zoom = settings.setdefault("zoom", {})
             labels = []
+            if 'first_key_moment_enabled' in s:
+                settings['first_key_moment_enabled'] = bool(s['first_key_moment_enabled']); touched_settings = True
+                labels.append('لحظهٔ کلیدی اول ' + ('فعال' if settings['first_key_moment_enabled'] else 'خاموش'))
+            for key, low, high in [('base_scale',100,180),('close_scale',100,220)]:
+                if key in s and (value := _clamp(s[key], low, high)) is not None:
+                    zoom[key] = value; touched_settings = True; labels.append(f'{key}={value}')
+            if 'bottom_shade' in s and style == 'talking_1' and (value := _clamp(s['bottom_shade'],0,60)) is not None:
+                settings['bottom_shade'] = value; touched_settings = True; labels.append(f'سایهٔ پایین قاب={value}')
             for key, (low, high) in GRADE_LIMITS.items():
                 if key in s and (value := _clamp(s[key], low, high)) is not None:
                     grade[key] = value; labels.append(f"{key}={value}"); touched_settings = True
