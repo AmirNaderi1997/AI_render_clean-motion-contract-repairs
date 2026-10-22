@@ -1,11 +1,11 @@
 /** Pure helpers for the project timeline view (type imports only, unit-tested with `node --test`). */
-import type { DocElement, ProjectDocument } from "../api";
+import type { DocElement, ProjectDocument, TimelineOp } from "../api";
 
 export const TYPE_LABEL: Record<string, string> = {
   clip: "برش تصویر", picture: "تصویر بالا", title: "عنوان", caption: "زیرنویس", card: "کارت متنی", chips: "فهرست",
   moment: "لحظهٔ کلیدی", flash: "فلش نور", motion: "صحنهٔ موشن", audio: "صدا", music: "موسیقی", cta: "دعوت به اقدام", logo: "لوگو",
 };
-export const VIA_LABEL: Record<string, string> = { plan: "برنامه (تب Edit)", chat: "چت" };
+export const VIA_LABEL: Record<string, string> = { plan: "برنامه (تب Edit)", chat: "چت", timeline: "همین‌جا روی تایم‌لاین" };
 
 /** "0:05.2" style time, tenths only when useful. */
 export function clock(seconds: number): string {
@@ -44,4 +44,33 @@ export function findElement(doc: ProjectDocument | null, id: string | null): Doc
 export function playerMatches(doc: ProjectDocument): boolean {
   const { plan_version, rendered_version } = doc.basis;
   return plan_version != null && plan_version === rendered_version;
+}
+
+/** What the user typed for a caption. Times are text so a half-typed number does not jump around. */
+export interface CaptionForm { text: string; start: string; end: string }
+
+export function captionForm(element: DocElement): CaptionForm {
+  return { text: element.text, start: element.start.toFixed(2), end: element.end.toFixed(2) };
+}
+
+/** The caption's complete edit for the form (and hidden flag); a form equal to the AI's version is a reset. */
+export function captionOp(element: DocElement, form: CaptionForm, deleted = false): TimelineOp {
+  const original = element.props.original as { text: string; start: number; end: number };
+  const op: TimelineOp = { id: element.id };
+  const start = Number(form.start), end = Number(form.end);
+  if (form.text.trim() !== original.text) op.text = form.text.trim();
+  if (Number.isFinite(start) && Math.abs(start - original.start) > 0.004) op.start = Math.round(start * 100) / 100;
+  if (Number.isFinite(end) && Math.abs(end - original.end) > 0.004) op.end = Math.round(end * 100) / 100;
+  if (deleted) op.deleted = true;
+  return Object.keys(op).length === 1 ? { id: element.id, reset: true } : op;
+}
+
+/** Client-side hints only; the server validates everything again. */
+export function captionProblem(form: CaptionForm, duration: number): string {
+  const start = Number(form.start), end = Number(form.end);
+  if (!form.text.trim()) return "متن زیرنویس نباید خالی باشد.";
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return "زمان شروع و پایان باید عدد باشد.";
+  if (start < 0 || end > duration) return "زمان باید داخل مدت ویدیو باشد.";
+  if (end - start < 0.3) return "هر زیرنویس دست‌کم ۰٫۳ ثانیه باید نمایش داده شود.";
+  return "";
 }

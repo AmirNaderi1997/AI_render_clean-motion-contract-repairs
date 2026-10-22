@@ -54,6 +54,7 @@ export function restoreEdits(current: PlanContent, target: PlanContent): PlanEdi
   if (target.brand.name !== current.brand.name) edits.name = target.brand.name;
   if (target.brand.tagline !== current.brand.tagline) edits.tagline = target.brand.tagline;
   if (target.brand.cta !== current.brand.cta) edits.cta = target.brand.cta;
+  if (JSON.stringify(target.timeline_edits || {}) !== JSON.stringify(current.timeline_edits || {})) edits.timeline_edits = target.timeline_edits || {};
   return edits;
 }
 

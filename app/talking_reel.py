@@ -38,7 +38,8 @@ DEFAULTS = {
         "disabled_moments": [],
     },
 }
-EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions", "storyboard", "render_settings"}
+EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions", "storyboard", "render_settings",
+            "timeline_edits"}
 _lock = threading.Lock()
 _running: set[str] = set()
 _cancel_events: dict[str, threading.Event] = {}
@@ -205,6 +206,10 @@ def update(job_dir: Path, changes: dict) -> dict:
             value = changes[key]
             if key == "render_settings":
                 state[key] = _clean_render_settings(value)
+                continue
+            if key == "timeline_edits":
+                from app import timeline_edits
+                state[key] = timeline_edits.clean(value)
                 continue
             if key in {"captions", "storyboard"}:
                 decisions_key = _decisions_key(str(state.get("style") or "talking_1"))
@@ -780,15 +785,21 @@ class PlannedReel:
     hyperframes: bool = False
 
 
-def plan_render(job_dir: Path, video: Path, *, prepare_media: bool = True) -> PlannedReel:
+def plan_render(job_dir: Path, video: Path, *, prepare_media: bool = True, apply_edits: bool = True) -> PlannedReel:
     """The render plan for the job's current decisions.
 
     ``prepare_media`` False is for reading only: no picture is generated, no face tracking runs and no
-    transcription is requested; AI pictures that do not exist yet appear as "ai_planned" slots."""
-    style = str(load(job_dir).get("style") or "talking_1")
-    if style in SPLIT_STYLES:
-        return _plan_split(job_dir, video, style, prepare_media=prepare_media)
-    return _plan_talking_1(job_dir, video, prepare_media=prepare_media)
+    transcription is requested; AI pictures that do not exist yet appear as "ai_planned" slots.
+    ``apply_edits`` False returns the plan as the AI made it, without the user's timeline edits."""
+    state = load(job_dir)
+    style = str(state.get("style") or "talking_1")
+    planned = (_plan_split(job_dir, video, style, prepare_media=prepare_media) if style in SPLIT_STYLES
+               else _plan_talking_1(job_dir, video, prepare_media=prepare_media))
+    if apply_edits and state.get("timeline_edits"):
+        from app import timeline_edits
+        for plan in {id(p): p for p in (planned.plan, planned.visual_plan) if p is not None}.values():
+            timeline_edits.apply(plan, planned.transcript["sentences"], state["timeline_edits"])
+    return planned
 
 
 def _planning_transcript(job_dir: Path, video: Path, prepare_media: bool) -> dict:

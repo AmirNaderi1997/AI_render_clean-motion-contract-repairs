@@ -791,6 +791,9 @@ def _reanalyze_talking(conversation_id: str, user_key: str, project: dict, job, 
         concept = next((c for c in candidates if c.get("id") == concept_id), None)
         if concept is None:
             raise creative_plan.PlanError("این ایده در برنامه پیدا نشد.")
+    # Timeline edits belong to the previous decisions (their ids point at its captions): start clean.
+    if talking_reel.load(job.dir).get("timeline_edits"):
+        talking_reel.update(job.dir, {"timeline_edits": {}})
     talking_reel.analyze(job.dir, job.dir / "raw" / job.raw_name, style=style,
                          request=project["state"].get("request", ""), concept=concept)
     latest = run(repo.get_project(project["id"], user_key))
@@ -798,6 +801,43 @@ def _reanalyze_talking(conversation_id: str, user_key: str, project: dict, job, 
     run(repo.update_project(project["id"], user_key, status="running", state=state))
     _emit(conversation_id, "tool.started", tool="analyze_talking_reel", project_id=project["id"],
           message="تصمیم‌های تدوین برای انتخاب جدید ساخته می‌شود.")
+
+
+def _validate_timeline_edits(job, edits: dict) -> None:
+    """Edits must name real captions of the AI's plan and leave readable, non-overlapping timing."""
+    from app import talking_reel, timeline_edits as layer
+    planned = talking_reel.plan_render(job.dir, job.dir / "raw" / job.raw_name, prepare_media=False, apply_edits=False)
+    try:
+        layer.validate(planned.plan, planned.transcript["sentences"], edits, planned.plan.duration)
+    except layer.EditError as exc:
+        raise creative_plan.PlanError(str(exc))
+
+
+async def edit_timeline(project_id: str, user_key: str, version_id: str, ops: list[dict]) -> dict:
+    """Timeline edits: set or reset individual captions (each op is that caption's complete edit).
+    The result is a new plan version awaiting approval."""
+    from app import talking_reel, timeline_edits as layer
+    project = await repo.get_project(project_id, user_key)
+    job = jobstore.get(project.get("external_ref")) if project["engine"] == "talking" else None
+    if not job:
+        raise creative_plan.PlanError("پروژهٔ صحبتی پیدا نشد.")
+    edits = {key: dict(value) for key, value in (talking_reel.load(job.dir).get("timeline_edits") or {}).items()}
+    for op in ops:
+        # An op is the caption's complete edit: it replaces the stored one, so a field set back to the
+        # AI's value stops being an edit. "reset" removes the edit entirely.
+        element_id = str(op.get("id") or "")
+        entry = {field: op[field] for field in ("text", "start", "end") if field in op}
+        if op.get("deleted"):
+            entry["deleted"] = True
+        if op.get("reset") or not entry:
+            edits.pop(element_id, None)
+        else:
+            edits[element_id] = entry
+    try:
+        edits = layer.clean(edits)
+    except layer.EditError as exc:
+        raise creative_plan.PlanError(str(exc))
+    return await edit_plan(project_id, user_key, version_id, {"timeline_edits": edits})
 
 
 async def edit_plan(project_id: str, user_key: str, version_id: str, edits: dict) -> dict:
@@ -817,6 +857,8 @@ async def edit_plan(project_id: str, user_key: str, version_id: str, edits: dict
         raise creative_plan.PlanError("فایل پروژه پیدا نشد.")
     status = talking_reel.public(talking_reel.load(job.dir))
     result = creative_plan.talking_edits(version["content"], edits, status)
+    if "timeline_edits" in result["engine"]:
+        await asyncio.to_thread(_validate_timeline_edits, job, result["engine"]["timeline_edits"])
     if result["engine"]:
         await asyncio.to_thread(talking_reel.update, job.dir, result["engine"])
     if result["profile"]:

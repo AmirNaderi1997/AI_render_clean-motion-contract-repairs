@@ -65,5 +65,5 @@ def test_ids_survive_text_edits_and_outro_follows_settings(document):
 def test_every_element_is_honest_about_how_it_changes(document):
     for track in document()["tracks"]:
         for element in track["elements"]:
-            assert set(element["edit"]["via"]) <= {"plan", "chat"}
+            assert set(element["edit"]["via"]) <= {"plan", "chat", "timeline"}
             assert element["end"] >= element["start"]

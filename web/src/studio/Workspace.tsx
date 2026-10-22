@@ -129,7 +129,7 @@ function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () =
       <button type="button" aria-pressed={shown === "plan"} onClick={() => setView("plan")}>برنامه</button>
       <button type="button" aria-pressed={shown === "timeline"} onClick={() => setView("timeline")}>تایم‌لاین</button>
     </div> : null}
-    {shown === "timeline" ? <TimelineView project={project}/>
+    {shown === "timeline" ? <TimelineView project={project} onChanged={onSaved}/>
       : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved}/>
       : <header><h2>Refine this video</h2><p>Ask for caption, pacing, colour or audio changes in the chat. Controls appear here when the current engine supports them.</p></header>}
     {project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}

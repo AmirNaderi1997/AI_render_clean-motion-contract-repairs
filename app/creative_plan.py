@@ -139,6 +139,7 @@ def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, 
                      "note": ("تصاویر بخش‌هایی که فایل یا تصویر کتابخانه ندارند با هوش مصنوعی ساخته می‌شوند و ممکن است هزینه داشته باشند."
                               if info["pictures"] else "رندر روی سرور انجام می‌شود و هزینهٔ مدل جدیدی ندارد.")},
         "concepts": concepts,
+        "timeline_edits": status.get("timeline_edits") or {},
         "style_options": [{"id": key, "label": value["label"], "summary": value["summary"], "complexity": value["complexity"]}
                           for key, value in STYLES.items()],
     }
@@ -197,7 +198,7 @@ def approve(state: dict, version_id: str) -> dict:
 # -- manual plan edits ----------------------------------------------------------------------------
 
 EDITABLE = {"hook", "hook_highlight", "look", "accent_color", "caption_font", "zoom", "key_moments",
-            "logo_enabled", "logo_motion", "name", "tagline", "cta", "concept_id", "style"}
+            "logo_enabled", "logo_motion", "name", "tagline", "cta", "concept_id", "style", "timeline_edits"}
 
 
 def talking_edits(content: dict, edits: dict, status: dict) -> dict:
@@ -272,6 +273,14 @@ def talking_edits(content: dict, edits: dict, status: dict) -> dict:
             applied.append(f"{label}: «{value}»" if value else f"{label} حذف شد")
     if touched:
         engine["render_settings"] = settings
+    if "timeline_edits" in edits:
+        from app import timeline_edits as layer
+        try:
+            engine["timeline_edits"] = layer.clean(edits["timeline_edits"])
+        except layer.EditError as exc:
+            raise PlanError(str(exc))
+        count = len(engine["timeline_edits"])
+        applied.append(f"ویرایش‌های تایم‌لاین: {count} مورد" if count else "ویرایش‌های تایم‌لاین پاک شد")
     reanalyze = None
     if "concept_id" in edits:
         concept = next((c for c in content.get("concepts") or [] if c.get("id") == edits["concept_id"]), None)
@@ -301,5 +310,8 @@ def summary_text(content: dict, version: dict) -> str:
     render = (content.get("estimate") or {}).get("render")
     if render:
         lines.append(f"• زمان رندر تخمینی: {round(render['low_s'] / 60, 1)} تا {round(render['high_s'] / 60, 1)} دقیقه")
+    edited = len(content.get("timeline_edits") or {})
+    if edited:
+        lines.append(f"• ویرایش دستی روی تایم‌لاین: {edited} مورد")
     lines.append("\nبرنامه را در تب «Edit» ببینید؛ هر بخش را عوض کنید یا همین‌جا بنویسید چه تغییری بدهم. رندر فقط بعد از تأیید شما شروع می‌شود.")
     return "\n".join(line for line in lines if line)

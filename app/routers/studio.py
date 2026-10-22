@@ -600,3 +600,30 @@ async def project_document(request: Request, project_id: str):
                          'rendered_version': plan.get('last_approved_n'),
                          'workflow': project['state'].get('workflow')}
     return document
+
+
+class TimelineOp(BaseModel):
+    model_config = {"extra": "forbid"}
+    id: str = Field(min_length=3, max_length=40)
+    text: str | None = Field(default=None, max_length=400)
+    start: float | None = None
+    end: float | None = None
+    deleted: bool | None = None
+    reset: bool | None = None
+
+
+class TimelineEdit(BaseModel):
+    version_id: str = Field(min_length=8, max_length=64)
+    ops: list[TimelineOp] = Field(min_length=1, max_length=50)
+
+
+@router.patch('/projects/{project_id}/timeline')
+async def edit_project_timeline(request: Request, project_id: str, body: TimelineEdit):
+    from app.creative_plan import PlanError
+    from app.studio_orchestrator import edit_timeline
+    try:
+        return _public_project(await edit_timeline(project_id, _user(request), body.version_id,
+                                                    [op.model_dump(exclude_none=True) for op in body.ops]))
+    except KeyError: raise HTTPException(404, 'project not found')
+    except PlanError as exc: raise HTTPException(422, str(exc))
+    except ValueError as exc: raise HTTPException(409, str(exc))

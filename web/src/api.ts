@@ -192,6 +192,7 @@ export interface PlanContent {
   engines: string[];
   estimate: { render: { low_s: number; high_s: number; samples: number } | null; paid_media: boolean; note: string };
   concepts: PlanConcept[];
+  timeline_edits: Record<string, { text?: string; start?: number; end?: number; deleted?: boolean }>;
   style_options: { id: string; label: string; summary: string; complexity: string }[];
   frames?: Record<string, string>;
 }
@@ -200,20 +201,22 @@ export interface PlanState { versions: PlanVersion[]; approved_id: string | null
 export type PlanEdits = Partial<{
   hook: string; hook_highlight: string[]; look: string; accent_color: string; caption_font: string; zoom: number;
   key_moments: boolean; logo_enabled: boolean; logo_motion: string; name: string; tagline: string; cta: string;
-  concept_id: string; style: string;
+  concept_id: string; style: string; timeline_edits: PlanContent["timeline_edits"];
 }>;
 /** Engine-neutral project timeline (app/project_document.py). Read-only in this phase. */
 export interface DocElement {
   id: string; type: string; start: number; end: number; label: string; text: string;
   source: { kind?: string; label?: string; file?: string | null; in?: number; out?: number };
-  props: Record<string, any>; edit: { via: ("plan" | "chat")[]; note: string };
+  props: Record<string, any>; edit: { via: ("plan" | "chat" | "timeline")[]; note: string };
 }
 export interface DocTrack { id: string; kind: string; label: string; elements: DocElement[] }
 export interface ProjectDocument {
   schema: number; engine: string; style: string; canvas: { width: number; height: number; fps: number };
   duration: number; content_duration: number; tracks: DocTrack[];
   basis: { plan_version: number | null; rendered_version: number | null; workflow: string | null };
+  stale_edits: string[]; edit_count: number;
 }
+export interface TimelineOp { id: string; text?: string; start?: number; end?: number; deleted?: boolean; reset?: boolean }
 export interface BrandProfile {
   name: string; tagline: string; cta: string; accent_color: string; caption_font: string; logo_motion: string;
   answered: string[]; has_logo: boolean; updated_at: number | null;
@@ -1095,6 +1098,9 @@ export const api = {
   },
   async editStudioPlan(id: string, versionId: string, edits: PlanEdits): Promise<StudioProject> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/plan`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId, edits }) }));
+  },
+  async editStudioTimeline(id: string, versionId: string, ops: TimelineOp[]): Promise<StudioProject> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/timeline`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId, ops }) }));
   },
   async studioDocument(id: string): Promise<ProjectDocument> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/document`));

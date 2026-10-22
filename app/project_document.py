@@ -8,12 +8,15 @@ produce it through adapters; the Talking adapter builds it from the exact render
 Ids are derived from the source, not from positions, so they survive text edits: a caption is
 ``caption:s<sentence>:<n>`` (n-th caption of that transcript sentence), a picture is ``picture:s<slot>``.
 
-This phase is read-only. Each element says how it can be changed today (``edit.via``: "plan", "chat")
-and nothing claims a manual timeline edit that the renderer cannot apply yet.
+Each element says how it can be changed today (``edit.via``: "plan", "chat", "timeline"); only captions are
+editable on the timeline so far, through the edits layer (``timeline_edits``), and nothing claims an edit the
+renderer cannot apply.
 """
 from __future__ import annotations
 
 from pathlib import Path
+
+from app import timeline_edits as edits_layer
 
 SCHEMA = 1
 
@@ -39,50 +42,20 @@ def _r(value: float) -> float:
     return round(float(value), 3)
 
 
-class _Clock:
-    """Maps output time to the transcript sentence it shows, through the plan's shots."""
-
-    def __init__(self, shots, sentences: list[dict]):
-        self.shots, self.sentences = shots, sentences
-
-    def source(self, t: float) -> float | None:
-        for shot in self.shots:
-            if shot.out_start - 1e-6 <= t < shot.out_start + shot.length:
-                return shot.src_in + (t - shot.out_start)
-        return None
-
-    def sentence(self, t: float) -> int | None:
-        src = self.source(t + 0.02)
-        if src is None:
-            return None
-        for k, s in enumerate(self.sentences):
-            if s["start"] - 0.05 <= src <= s["end"] + 0.05:
-                return k
-        return min(range(len(self.sentences)), key=lambda k: abs(self.sentences[k]["start"] - src)) if self.sentences else None
-
-
 def _element(id_: str, type_: str, start: float, end: float, label: str, *, text: str = "", source: dict | None = None,
              props: dict | None = None, via: list[str] | None = None, note: str = "") -> dict:
     return {"id": id_, "type": type_, "start": _r(start), "end": _r(max(end, start)), "label": label, "text": text,
             "source": source or {}, "props": props or {}, "edit": {"via": via or [], "note": note}}
 
 
-def _numbered(elements: list[dict], prefix: str, sentence: int | None) -> str:
-    """``prefix:s<sentence>:<n>``, n counting earlier elements of the same sentence."""
-    key = f"{prefix}:s{sentence if sentence is not None else 'x'}"
-    n = sum(1 for e in elements if e["id"].startswith(key + ":"))
-    return f"{key}:{n}"
-
-
 def talking_document(job_dir: Path, video: Path) -> dict:
     from app import talking_reel
     from engine.talking_styles.talking_1 import CTA_SECONDS, LOGO, LOGO_SECONDS
 
-    planned = talking_reel.plan_render(job_dir, video, prepare_media=False)
+    planned = talking_reel.plan_render(job_dir, video, prepare_media=False, apply_edits=False)
     plan, style, state = planned.plan, planned.style, talking_reel.load(job_dir)
     sentences = planned.transcript["sentences"]
-    clock = _Clock(plan.shots[1:] if plan.cold_open else plan.shots, sentences)
-    cold_clock = _Clock(plan.shots[:1], sentences)   # the opening teaser is taken from later in the talk
+    clock = edits_layer.Clock(plan.shots[1:] if plan.cold_open else plan.shots, sentences)
     tracks: dict[str, list[dict]] = {key: [] for key in TRACKS}
     split_style = style != "talking_1"
 
@@ -154,17 +127,23 @@ def talking_document(job_dir: Path, video: Path) -> dict:
         tracks["graphics"].append(_element(f"card:s{sentence}", "card", card["start"], card["end"], "کارت متنی",
                                            text=card["text"], via=["chat"]))
 
-    # Captions, with ids from their transcript sentence.
-    for caption in plan.captions:
-        text = caption.get("text") or " ".join(p for p in (caption.get("lead"), caption.get("key")) if p)
-        teaser = caption["start"] < plan.cold_open
-        sentence = (cold_clock if teaser else clock).sentence(caption["start"])
-        element_id = _numbered(tracks["captions"], "caption:cold" if teaser else "caption", sentence)
-        tracks["captions"].append(_element(element_id, "caption", caption["start"], caption["end"],
-                                           ("پیش‌نمایش ابتدایی · " if teaser else "") +
-                                           (f"جملهٔ {sentence + 1}" if sentence is not None else ""),
-                                           text=text, props={"sentence": sentence, "key": caption.get("key")},
-                                           via=["chat"], note="برای اصلاح متن در چت بگویید، مثلاً «زیرنویس جملهٔ ۲ را … کن»."))
+    # Captions, with ids from their transcript sentence and the user's edits laid over the AI's version.
+    edits = state.get("timeline_edits") or {}
+    caption_ids = edits_layer.caption_ids(plan, sentences)
+    for element_id, caption in zip(caption_ids, plan.captions):
+        edit = edits.get(element_id)
+        shown = edits_layer.merge_caption(caption, edit) or caption
+        teaser = element_id.startswith("caption:cold")
+        sentence = None if element_id.split(":")[-2] == "sx" else int(element_id.split(":")[-2][1:])
+        original = {"text": edits_layer.caption_text(caption), "start": _r(caption["start"]), "end": _r(caption["end"])}
+        tracks["captions"].append(_element(
+            element_id, "caption", shown["start"], shown["end"],
+            ("پیش‌نمایش ابتدایی · " if teaser else "") + (f"جملهٔ {sentence + 1}" if sentence is not None else ""),
+            text=edits_layer.caption_text(shown),
+            props={"sentence": sentence, "key": shown.get("key"), "edited": bool(edit), "deleted": bool(edit and edit.get("deleted")),
+                   "original": original},
+            via=["timeline", "chat"], note="متن و زمان این زیرنویس را همین‌جا عوض کنید یا آن را پنهان کنید."))
+    stale = sorted(set(edits) - set(caption_ids))
 
     # Graphics: chips (lists), key moments (style 1) and authored motion scenes (style 2 with HyperFrames).
     for chip in getattr(plan, "chips", []) or []:
@@ -213,6 +192,7 @@ def talking_document(job_dir: Path, video: Path) -> dict:
         "schema": SCHEMA, "engine": "talking", "style": style,
         "canvas": {"width": 1080, "height": 1920, "fps": 30},
         "duration": _r(total), "content_duration": _r(plan.duration),
+        "stale_edits": stale, "edit_count": len(edits) - len(stale),
         "tracks": [{"id": key, "kind": TRACKS[key][0], "label": TRACKS[key][1], "elements": sorted(items, key=lambda e: e["start"])}
                    for key, items in tracks.items() if items],
     }

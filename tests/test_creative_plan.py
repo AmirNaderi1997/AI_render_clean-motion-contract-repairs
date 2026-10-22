@@ -287,3 +287,27 @@ def test_talking_1_persian_name_keeps_joined_letters():
         return next(line for line in ass.splitlines() if line.startswith("Dialogue") and ",name," in line)
     assert "\\fsp0" in name_event("رضا رفیعی")       # letter spacing would break Persian joining
     assert "\\fsp0" not in name_event("Reza Rafiei")  # Latin names keep the style's spacing
+
+
+def test_timeline_edit_becomes_a_new_version_awaiting_approval_and_resets_with_reanalysis(studio, monkeypatch):
+    s = studio
+    monkeypatch.setattr(s.o, "_validate_timeline_edits", lambda job, edits: None)
+    run(s.o.sync_conversation(s.c["id"], "u"))
+    v1 = creative_plan.current(project(s)["state"])["id"]
+    run(s.o.edit_timeline(s.p["id"], "u", v1, [{"id": "caption:s0:0", "text": "متن تازه"},
+                                                {"id": "caption:s0:1", "deleted": True}]))
+    p = project(s)
+    v2 = creative_plan.current(p["state"])
+    assert v2["n"] == 2 and not creative_plan.is_approved(p["state"])
+    assert s.engine["timeline_edits"] == {"caption:s0:0": {"text": "متن تازه"}, "caption:s0:1": {"deleted": True}}
+    assert v2["content"]["timeline_edits"] == s.engine["timeline_edits"]
+    # an op replaces that caption's whole edit (so a field set back to the AI's value stops being an edit);
+    # other captions keep theirs, and reset removes one
+    run(s.o.edit_timeline(s.p["id"], "u", v2["id"], [{"id": "caption:s0:0", "start": 1.0}, {"id": "caption:s0:1", "reset": True}]))
+    assert s.engine["timeline_edits"] == {"caption:s0:0": {"start": 1.0}}
+    v3 = creative_plan.current(project(s)["state"])
+    with pytest.raises(creative_plan.PlanError):
+        run(s.o.edit_timeline(s.p["id"], "u", v1, [{"id": "caption:s0:0", "reset": True}]))   # stale version
+    run(s.o.edit_plan(s.p["id"], "u", v3["id"], {"concept_id": "c2"}))
+    assert s.engine["timeline_edits"] == {}   # edits belong to the previous decisions
+    assert s.calls["start"] == 0
