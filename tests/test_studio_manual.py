@@ -10,6 +10,8 @@ from app.studio_orchestrator import process_message, sync_conversation, _answer_
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
+    from app import jobs
+    monkeypatch.setattr(jobs, 'JOBS_ROOT', tmp_path)
     monkeypatch.setattr(studio_store, 'DB_AVAILABLE', False)
     monkeypatch.setattr(studio_store, 'ROOT', tmp_path)
     monkeypatch.setattr(studio_store, 'FALLBACK', tmp_path / 'studio.json')
@@ -32,8 +34,14 @@ def test_ready_job_applies_attachment_preferences_outside_async_loop(store, monk
     monkeypatch.setattr(manual,'apply_talking_preferences',lambda *args:run(asyncio.sleep(0)))
     starts=[]
     monkeypatch.setattr(talking_reel,'start',lambda *args,**kw:starts.append(args))
+    refreshed=[]
+    async def refresh_plan(cid,user,project,job,**kwargs):
+        refreshed.append(project['state'].get('manual_preferences_applied'))
+        return await store.update_project(project['id'],user,status='awaiting_confirmation',state=project['state']),True
+    monkeypatch.setattr(o,'_refresh_plan',refresh_plan)
     run(o.sync_conversation(c['id'],'u'))
-    assert len(starts)==1
+    assert starts==[]  # New versioned approval gate must not auto-render.
+    assert refreshed==[True]
     assert run(store.get_project(p['id'],'u'))['state']['manual_preferences_applied'] is True
 
 
@@ -146,23 +154,29 @@ def test_checkpoint_is_single_use_and_user_scoped(store):
     assert not run(store.claim_manual_checkpoint(p['id'], 'u', qid))
 
 
-def test_manual_talking_ready_never_auto_renders(store, monkeypatch):
+def test_manual_talking_ready_never_auto_renders(store, monkeypatch, tmp_path):
+    """Ready analysis stops at the Creative Plan gate (Auto and Manual alike); nothing renders unapproved."""
     from types import SimpleNamespace
     from app import studio_orchestrator as o, talking_reel
+    monkeypatch.setattr(o.jobstore, 'JOBS_ROOT', tmp_path)
     c = run(store.create_conversation('u'))
     p = run(store.create_project(c['id'], 'u', 'talking', 't', {'manual_mode':True,'auto_render':False}, 'job'))
-    monkeypatch.setattr(o.jobstore, 'get', lambda ref: SimpleNamespace(dir=None))
+    monkeypatch.setattr(o.jobstore, 'get', lambda ref: SimpleNamespace(dir=tmp_path, raw_name='v.mp4'))
     async def nothing(*args): pass
     monkeypatch.setattr(o, '_sync_motion_messages', nothing)
-    monkeypatch.setattr(o, '_announce_creative', nothing)
-    monkeypatch.setattr(talking_reel, 'load', lambda _: {'status':'ready','style':'talking_2'})
+    state = {'status':'ready','style':'talking_2','render_settings':{}}
+    monkeypatch.setattr(talking_reel, 'load', lambda _: state)
     monkeypatch.setattr(talking_reel, 'public', lambda s:s)
     monkeypatch.setattr(talking_reel, 'update', lambda *a:None)
     monkeypatch.setattr(talking_reel, 'start', lambda *a, **k: pytest.fail('unapproved render'))
+    monkeypatch.setattr(o, '_talking_context', lambda job: (tmp_path / 'v.mp4', state, [{'start':0,'end':2,'text':'سلام'}]))
+    monkeypatch.setattr(o, '_plan_frames', lambda *a: {})
+    monkeypatch.setattr(o, 'execute', lambda name, payload: {'duration': 30.0})
     run(sync_conversation(c['id'], 'u'))
     p = run(store.get_project(p['id'], 'u'))
     assert p['status'] == 'awaiting_confirmation'
-    assert p['state']['manual_checkpoint']['summary']['style'] == 'talking_2'
+    assert p['state']['workflow'] == 'awaiting_approval'
+    assert p['state']['plan']['versions'][-1]['content']['style']['id'] == 'talking_2'
 
 
 def test_message_contract_rejects_invalid_modes():

@@ -478,3 +478,125 @@ async def project_outputs(request: Request, project_id: str):
     return [{'file': p.name, 'version': int(re.search(r'_v([0-9]+)', p.name)[1])}
             for p in sorted(files, key=lambda p: int(re.search(r'_v([0-9]+)', p.name)[1]))]
 
+
+
+# -- Creative Plan ---------------------------------------------------------------------------------
+
+class PlanApproval(BaseModel):
+    version_id: str = Field(min_length=8, max_length=64)
+
+
+class PlanEdit(BaseModel):
+    version_id: str = Field(min_length=8, max_length=64)
+    edits: dict = Field(min_length=1, max_length=20)
+
+
+@router.post('/projects/{project_id}/plan/approve')
+async def approve_project_plan(request: Request, project_id: str, body: PlanApproval):
+    from app.creative_plan import PlanError
+    from app.studio_orchestrator import approve_plan
+    try:
+        return _public_project(await approve_plan(project_id, _user(request), body.version_id))
+    except KeyError: raise HTTPException(404, 'project not found')
+    except (PlanError, ValueError) as exc: raise HTTPException(409, str(exc))
+
+
+@router.patch('/projects/{project_id}/plan')
+async def edit_project_plan(request: Request, project_id: str, body: PlanEdit):
+    from app.creative_plan import PlanError
+    from app.studio_orchestrator import edit_plan
+    try:
+        return _public_project(await edit_plan(project_id, _user(request), body.version_id, body.edits))
+    except KeyError: raise HTTPException(404, 'project not found')
+    except PlanError as exc: raise HTTPException(422, str(exc))
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
+
+@router.get('/projects/{project_id}/plan/frames/{folder}/{name}')
+async def plan_frame(request: Request, project_id: str, folder: str, name: str):
+    """Concept mockups for the plan; only files under the owned job's plan_frames folder are served."""
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    if not re.fullmatch(r'[0-9a-f]{16}', folder) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}\.jpg', name):
+        raise HTTPException(404, 'frame not found')
+    job = jobstore.get(project.get('external_ref')) if project['engine'] == 'talking' else None
+    if not job: raise HTTPException(404, 'frame not found')
+    root = (job.dir / 'plan_frames').resolve()
+    path = (root / folder / name).resolve()
+    if not path.is_relative_to(root) or not path.is_file(): raise HTTPException(404, 'frame not found')
+    return FileResponse(path, media_type='image/jpeg', headers={'Cache-Control': 'private, max-age=86400'})
+
+
+# -- Brand profile ---------------------------------------------------------------------------------
+
+class ProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    tagline: str | None = Field(default=None, max_length=200)
+    cta: str | None = Field(default=None, max_length=200)
+    accent_color: str | None = Field(default=None, pattern=r'^#[0-9A-Fa-f]{6}$')
+    caption_font: Literal['default', 'Vazirmatn'] | None = None
+    logo_motion: Literal['pop', 'fade', 'slide', 'none'] | None = None
+
+
+@router.get('/profile')
+async def get_profile(request: Request):
+    from app import brand_profile
+    return brand_profile.load(_user(request))
+
+
+@router.put('/profile')
+async def put_profile(request: Request, body: ProfileUpdate):
+    from app import brand_profile
+    return brand_profile.update(_user(request), body.model_dump(exclude_none=True))
+
+
+@router.post('/profile/logo')
+async def put_profile_logo(request: Request, file: UploadFile = File(...)):
+    from tempfile import NamedTemporaryFile
+    from PIL import Image, UnidentifiedImageError
+    from app import brand_profile
+    if Path(file.filename or '').suffix.lower() not in IMAGE_EXTENSIONS:
+        raise HTTPException(422, 'Upload a PNG, JPG or WebP logo')
+    data = await file.read(MAX_BYTES['image'] + 1)
+    if len(data) > MAX_BYTES['image']: raise HTTPException(413, 'Logo is too large')
+    with NamedTemporaryFile(suffix=Path(file.filename).suffix.lower()) as tmp:
+        tmp.write(data); tmp.flush()
+        try:
+            with Image.open(tmp.name) as image: image.verify()
+            return brand_profile.save_logo(_user(request), Path(tmp.name))
+        except (UnidentifiedImageError, OSError): raise HTTPException(422, 'The file is not a valid image')
+
+
+@router.get('/profile/logo')
+async def get_profile_logo(request: Request):
+    from app import brand_profile
+    path = brand_profile.logo_path(_user(request))
+    if not path: raise HTTPException(404, 'no logo')
+    return FileResponse(path, media_type='image/png')
+
+
+# -- Project Document (timeline) -------------------------------------------------------------------
+
+@router.get('/projects/{project_id}/document')
+async def project_document(request: Request, project_id: str):
+    """The project's timeline built from the exact render plan; read-only in this phase."""
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    if project['engine'] != 'talking':
+        raise HTTPException(409, 'The timeline is available for talking-head projects first')
+    job = jobstore.get(project.get('external_ref'))
+    if not job: raise HTTPException(404, 'render job not found')
+    from app import project_document as documents
+    from app import talking_reel
+    if not talking_reel.load(job.dir).get('analysis_ready'):
+        raise HTTPException(409, 'The timeline appears once the video has been analysed')
+    try:
+        document = await asyncio.to_thread(documents.talking_document, job.dir, job.dir / 'raw' / job.raw_name)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    plan = project['state'].get('plan') or {}
+    versions = plan.get('versions') or []
+    document['basis'] = {'plan_version': versions[-1]['n'] if versions else None,
+                         'rendered_version': plan.get('last_approved_n'),
+                         'workflow': project['state'].get('workflow')}
+    return document

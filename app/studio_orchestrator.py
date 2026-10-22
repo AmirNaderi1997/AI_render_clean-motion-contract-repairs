@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from app import brand_profile, creative_plan
 from app import jobs as jobstore
 from app.studio_store import repo, run
 from app.studio_tools import execute, idempotency_key
@@ -295,6 +296,12 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
         from app import studio_manual as manual
         manual_mode = conversation.get('state', {}).get('execution_mode') == 'manual'
         session = conversation.get('state', {}).get('manual_session')
+        if (current and current['engine'] == 'talking' and current['state'].get('workflow') == 'awaiting_approval'
+                and not attachment_ids and _is_approval(text)):
+            version = creative_plan.current(current['state'])
+            if version:
+                run(approve_plan(current['id'], user_key, version['id']))
+                return
         if current and current['state'].get('manual_checkpoint'):
             response_id = manual_question_id or (current['state']['manual_checkpoint']['id'] if current['state'].get('manual_editing') else None)
             if _answer_manual_checkpoint(conversation_id, user_key, current, text, response_id):
@@ -335,10 +342,18 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
                 run(repo.set_conversation(conversation_id, user_key, title=title))
                 _emit(conversation_id, 'conversation.updated', title=title)
         intent = completed_manual['engine'] if completed_manual else _resolved_intent(text, attachments, current, on_title=set_title if first_turn and automatic_title else None)
+        if completed_manual and completed_manual['engine'] == 'talking':
+            _remember_brand_answers(conversation_id, user_key, completed_manual)
         if not completed_manual and ((manual_mode and intent in {'talking', 'localize', 'motion'}) or intent == 'talking'):
-            manual.begin(conversation_id, user_key, intent, text, attachment_ids, essentials=not manual_mode)
-            _assistant(conversation_id, user_key, 'قبل از شروع، اطلاعات سبک و هویت، لوگو و دعوت به اقدام را مشخص کنید؛ می‌توانید هرکدام را صریحاً بدون آن انتخاب کنید.')
-            return
+            # Auto mode asks only brand details the user has never answered; style and look are proposed
+            # in the Creative Plan, not asked up front.
+            skip = set() if manual_mode else _known_brand_keys(user_key)
+            session = manual.begin(conversation_id, user_key, intent, text, attachment_ids, essentials=not manual_mode, skip=skip)
+            if session.get('question_id'):
+                _assistant(conversation_id, user_key, 'قبل از شروع، چند مشخصهٔ هویتی را یک بار مشخص کنید؛ برای پروژه‌های بعدی به خاطر سپرده می‌شوند.' if not manual_mode else
+                           'قبل از شروع، اطلاعات سبک و هویت، لوگو و دعوت به اقدام را مشخص کنید؛ می‌توانید هرکدام را صریحاً بدون آن انتخاب کنید.')
+                return
+            completed_manual = session
         if intent == "question_video":
             _assistant(conversation_id, user_key, "برای این ویدیو کدام کار را انجام بدهم: فارسی‌سازی و دوبله، یا تدوین ریلز حرفه‌ای؟")
             _emit(conversation_id, "question.required", question="نوع پردازش ویدیو را مشخص کنید.", choices=["فارسی‌سازی", "تدوین ریلز"])
@@ -348,7 +363,7 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
             _emit(conversation_id, "question.required", question="برای ساخت ویدیو چه منبعی دارید؟")
             return
         if intent == "modify" and current:
-            if manual_mode:
+            if manual_mode and current["engine"] != "talking":  # Talking edits already wait for plan approval
                 import uuid
                 checkpoint = {'id': uuid.uuid4().hex, 'title': 'اصلاح همین پروژه اجرا شود؟', 'summary': text,
                               'revision_text': text, 'choices': [manual.choice('approve', 'تأیید اصلاح'), manual.choice('edit', 'تغییر درخواست')]}
@@ -378,11 +393,12 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
                        "style": selected_style, "request": text[:2000]}
             result = execute("analyze_talking_reel", payload)
             project = run(repo.create_project(conversation_id, user_key, "talking", source["filename"],
-                {"attachment_ids": attachment_ids, "selected_style": selected_style, "auto_render": not manual_mode,
+                {"attachment_ids": attachment_ids, "selected_style": selected_style, "auto_render": False,
+                 "workflow": "analyzing", "request": text[:2000],
                  "manual_mode": manual_mode, "manual_answers": (completed_manual or {}).get('answers', {}),
                  "manual_logo_attachment_id": (completed_manual or {}).get('logo_attachment_id'), "last_observed": {}}, result["external_ref"]))
             run(repo.update_project(project["id"], user_key, status="running"))
-            _assistant(conversation_id, user_key, "ویدیو را گرفتم. اول محتوا را تحلیل می‌کنم و چند ایدهٔ ادیت را می‌سنجم، بعد بهترین را اجرا می‌کنم.")
+            _assistant(conversation_id, user_key, "ویدیو را گرفتم. محتوا را تحلیل می‌کنم و چند ایدهٔ ادیت را می‌سنجم، بعد برنامهٔ تدوین را برای تأیید شما می‌فرستم. رندر قبل از تأیید شما شروع نمی‌شود.")
             return
         _create_motion(conversation_id, user_key, message_id, text, attachments)
         if manual_mode:
@@ -539,15 +555,19 @@ def _revise_talking(conversation_id: str, user_key: str, project: dict, job, tex
     if not change.rerender:
         _assistant(conversation_id, user_key, (revision.summary or "تغییری برای اعمال پیدا نکردم.") + notes)
         return True
-    talking_reel.update(job.dir, change.changes)
-    if not render:
-        _assistant(conversation_id, user_key, (revision.summary or 'برنامه اصلاح شد.') + notes + '\nرندر تا تأیید شما شروع نمی‌شود.')
+    # Every change goes through the Creative Plan: a new version that waits for approval before rendering.
+    changes = {key: value for key, value in change.changes.items() if key != "style"}
+    if changes:
+        talking_reel.update(job.dir, changes)
+        _remember_brand_changes(user_key, changes, previous=settings)
+    if change.restyle:
+        _reanalyze_talking(conversation_id, user_key, project, job, change.restyle, None)
+        _assistant(conversation_id, user_key, (revision.summary or "سبک عوض می‌شود.") + notes +
+                   "\n\nتصمیم‌های تدوین برای سبک جدید دوباره ساخته می‌شود و برنامهٔ تازه برای تأیید شما ارسال می‌شود.")
         return True
-    talking_reel.start(job.dir, video)
-    run(repo.update_project(project["id"], user_key, status="running",
-                            state={**project["state"], "last_observed": {}}, source="chat"))
-    _assistant(conversation_id, user_key, (revision.summary or "تغییرات اعمال شد.") + notes +
-               "\n\nیک نسخهٔ جدید از همین پروژه در حال رندر است؛ نسخهٔ قبلی دست‌نخورده می‌ماند.")
+    _assistant(conversation_id, user_key, (revision.summary or "برنامه اصلاح شد.") + notes)
+    run(_refresh_plan(conversation_id, user_key, run(repo.get_project(project["id"], user_key)), job,
+                      source="chat", note=text))
     return True
 
 
@@ -558,6 +578,8 @@ def _modify(conversation_id: str, user_key: str, project: dict, text: str) -> No
         from app import talking_reel
         job = jobstore.get(ref)
         if not job: raise KeyError(ref)
+        if project["state"].get("workflow") in {"analyzing", "production"}:
+            raise ValueError("این پروژه در حال تحلیل یا رندر است؛ بعد از پایان این مرحله تغییر را بگویید.")
         if _revise_talking(conversation_id, user_key, project, job, text):
             return
         state = talking_reel.load(job.dir); changes: dict[str, Any] = {}
@@ -571,10 +593,8 @@ def _modify(conversation_id: str, user_key: str, project: dict, text: str) -> No
         if render_settings != state.get("render_settings"): changes["render_settings"] = render_settings
         if not changes: raise ValueError("این تغییر هنوز به تنظیم معتبر Talking Reel نگاشت نشد؛ رنگ، لوگو یا میزان زوم را دقیق‌تر بگویید")
         talking_reel.update(job.dir, changes)
-        talking_reel.start(job.dir, job.dir / "raw" / job.raw_name)
-        run(repo.update_project(project["id"], user_key, status="running",
-                                state={**project["state"], "last_observed": {}}, source="chat"))
-        _assistant(conversation_id, user_key, "تنظیمات همان پروژه تغییر کرد و یک نسخه رندر جدید در حال ساخته‌شدن است.")
+        _assistant(conversation_id, user_key, "تنظیمات در برنامه اعمال شد.")
+        run(_refresh_plan(conversation_id, user_key, project, job, source="chat", note=text))
         return
     if engine == "localize":
         from app import localize
@@ -594,6 +614,241 @@ def _modify(conversation_id: str, user_key: str, project: dict, text: str) -> No
                        old.get("request", "") + "\nRequested revision: " + text, attachments)
         return
     raise ValueError("این موتور هنوز ویرایش محاوره‌ای پشتیبانی‌شده ندارد")
+
+
+# -- Creative Plan gate (Talking) -----------------------------------------------------------------
+# AI proposes a versioned plan, the user approves that exact version, only then the render starts.
+
+_APPROVALS = {"تأیید", "تایید", "تأیید شد", "تایید شد", "تأیید و رندر", "اوکی", "ok", "okay", "approve", "approved",
+              "رندر کن", "بساز", "شروع کن", "قبوله", "عالیه بساز"}
+
+
+def _is_approval(text: str) -> bool:
+    normalized = " ".join(text.strip().lower().replace("‌", " ").split()).rstrip(".!؛,،")
+    return normalized in _APPROVALS
+
+
+_BRAND_QUESTIONS = {"name": {"name"}, "tagline": {"tagline"}, "cta": {"cta"},
+                    "logo_motion": {"logo", "logo_asset", "logo_color"}}
+
+
+def _known_brand_keys(user_key: str) -> set[str]:
+    profile = brand_profile.load(user_key)
+    return {key for field, keys in _BRAND_QUESTIONS.items() if brand_profile.known(profile, field) for key in keys}
+
+
+def _remember_brand_answers(conversation_id: str, user_key: str, session: dict) -> None:
+    """Answers about identity and brand become the user's profile, so they are not asked again."""
+    answers = session.get("answers") or {}
+    changes = {}
+    for key, field in (("name", "name"), ("tagline", "tagline"), ("cta", "cta")):
+        if key in answers:
+            changes[field] = "" if answers[key] == "none" else answers[key]
+    if answers.get("logo") in {"off", "pop", "fade", "slide"}:
+        changes["logo_motion"] = "none" if answers["logo"] == "off" else answers["logo"]
+    if answers.get("color", "").startswith("#"):
+        changes["accent_color"] = answers["color"]
+    if answers.get("font") in {"default", "Vazirmatn"}:
+        changes["caption_font"] = answers["font"]
+    if changes:
+        brand_profile.update(user_key, changes)
+    if session.get("logo_attachment_id"):
+        attachment = run(repo.get_attachments([session["logo_attachment_id"]], conversation_id, user_key))
+        if attachment:
+            brand_profile.save_logo(user_key, Path(attachment[0]["path"]))
+
+
+def _remember_brand_changes(user_key: str, changes: dict, *, previous: dict) -> None:
+    """Brand fields changed by chat become the profile too, exactly like plan edits in the Edit tab."""
+    profile = {field: changes[key] for key, field in (("name", "name"), ("title", "tagline"), ("cta", "cta")) if key in changes}
+    colour = (changes.get("render_settings") or {}).get("title_color")
+    if colour and colour != (previous or {}).get("title_color"):
+        profile["accent_color"] = colour
+    if profile:
+        brand_profile.update(user_key, profile)
+
+
+def _apply_brand_defaults(user_key: str, job) -> None:
+    """Fill fields the analysis left empty from the brand profile; explicit project values win."""
+    from app import talking_reel
+    profile = brand_profile.load(user_key)
+    state = talking_reel.load(job.dir)
+    changes: dict[str, Any] = {}
+    for field, key in (("name", "name"), ("tagline", "title"), ("cta", "cta")):
+        if not state.get(key) and profile.get(field):
+            changes[key] = profile[field]
+    settings = dict(state.get("render_settings") or {})
+    touched = False
+    if profile.get("accent_color") and settings.get("title_color") in (None, "", "#F5B800"):
+        settings["title_color"] = profile["accent_color"]; touched = True
+    if profile.get("caption_font") and settings.get("caption_font", "default") == "default":
+        settings["caption_font"] = profile["caption_font"]; touched = True
+    if profile.get("logo_motion"):
+        motion = profile["logo_motion"]
+        settings["outro_logo"] = {"enabled": motion != "none", "motion": motion}; touched = True
+    if touched:
+        changes["render_settings"] = settings
+    if changes:
+        talking_reel.update(job.dir, changes)
+    if not talking_reel.custom_logo(job.dir):
+        brand_profile.copy_logo_to(user_key, job.dir / "talking_reel_logo.png")
+
+
+def _talking_context(job) -> tuple[Path, dict, list[dict]]:
+    from app import talking_reel
+    video = job.dir / "raw" / job.raw_name
+    status = talking_reel.public(talking_reel.load(job.dir))
+    sentences = talking_reel.transcript_for(job.dir, video)["sentences"]
+    return video, status, sentences
+
+
+def _plan_frames(job_dir: Path, video: Path, content: dict, sentences: list[dict]) -> dict:
+    """Style previews on a real frame, one per concept and one per style; failures are skipped, not faked."""
+    import hashlib
+    from engine.style_frames import PREVIEW_VERSION, MockupUnavailable, render_mockup
+    # The preview renderer's version is part of the cache key, so improved previews replace stale images.
+    folder = job_dir / "plan_frames" / hashlib.sha256(
+        f"{creative_plan.fingerprint(content)}:{PREVIEW_VERSION}".encode()).hexdigest()[:16]
+    beats = [b for b in content.get("structure") or [] if isinstance(b.get("sentence"), int)]
+    index = beats[0]["sentence"] if beats else min(len(sentences) - 1, max(0, len(sentences) // 3))
+    line = sentences[index] if sentences else {"start": content["duration_s"] / 3, "end": content["duration_s"] / 3, "text": ""}
+    at = (line["start"] + line["end"]) / 2
+    hook = content["hook"]["text"]
+    card = (content.get("pictures") or [{}])[0].get("title") or content["concept"]["name"] or hook
+    brand = content["brand"]
+    common = {"caption": " ".join(line["text"].split()[:7]), "card": card, "accent": content["look"]["accent_color"],
+              "name": brand["name"], "tagline": brand["tagline"], "grade": content["look"]["grade"],
+              "caption_font": content["look"]["caption_font"]}
+    # An unselected concept's "hook" describes the opening action, not on-screen text; its short name stands in.
+    jobs = [(f"concept-{c['id']}", c["style"], hook if c.get("selected") else c["name"],
+             content["hook"]["highlight"] if c.get("selected") else []) for c in content.get("concepts") or []]
+    jobs += [(f"style-{sid}", sid, hook, content["hook"]["highlight"]) for sid in creative_plan.STYLES]
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(job) -> tuple[str, str | None]:
+        key, style, text, highlight = job
+        name = re.sub(r"[^A-Za-z0-9_-]", "_", key)[:60] + ".jpg"
+        target = folder / name
+        try:
+            if not target.is_file():
+                render_mockup(video, target, style_id=style, at=at, hook=text, highlight=highlight, **common)
+            return key, f"{folder.name}/{name}"
+        except (MockupUnavailable, OSError) as exc:
+            log.warning("plan preview %s skipped: %s", key, str(exc)[:200])
+            return key, None
+
+    with ThreadPoolExecutor(max_workers=4) as pool:   # each preview is one short ffmpeg run
+        return {key: frame for key, frame in pool.map(one, jobs) if frame}
+
+
+async def _refresh_plan(conversation_id: str, user_key: str, project: dict, job, *, source: str, note: str = "",
+                        announce: bool = True, after_analysis: bool = False) -> tuple[dict, bool]:
+    """Rebuild the plan from the engine's current state; a changed plan becomes a new version awaiting approval.
+    After an analysis the plan always returns to review, even if it came out identical."""
+    import asyncio
+    from app import render_stats, talking_reel
+    video, status, sentences = await asyncio.to_thread(_talking_context, job)
+    seconds = project["state"].get("source_seconds")
+    if not seconds:
+        seconds = float((await asyncio.to_thread(execute, "inspect_media", {"path": str(video)}))["duration"])
+    estimate = render_stats.estimate(f"talking:{status.get('style')}", seconds)
+    has_logo = bool(talking_reel.custom_logo(job.dir) or brand_profile.logo_path(user_key))
+    content = creative_plan.build_talking(status, sentences=sentences, video_seconds=seconds, estimate=estimate,
+                                          has_logo=has_logo)
+    content["frames"] = await asyncio.to_thread(_plan_frames, job.dir, video, content, sentences)
+    state, created = creative_plan.add_version(project["state"], content, source=source, note=note)
+    state.update(plan_pending=False, source_seconds=seconds)
+    if after_analysis and not created:
+        state["workflow"] = "awaiting_approval"
+        state["plan"]["approved_id"] = None
+    waiting = state.get("workflow") == "awaiting_approval"
+    if waiting:
+        state["last_observed"] = {}
+    project = await repo.update_project(project["id"], user_key, state=state, source="plan" if created else None,
+                                        status="awaiting_confirmation" if waiting else project["status"])
+    version = creative_plan.current(state)
+    if created and announce:
+        await repo.emit(conversation_id, "plan.ready", {"project_id": project["id"], "version_id": version["id"],
+                                                        "version": version["n"], "message": "برنامهٔ تدوین آماده است"})
+        await repo.add_message(conversation_id, user_key, "assistant", creative_plan.summary_text(content, version))
+    return project, created
+
+
+async def approve_plan(project_id: str, user_key: str, version_id: str) -> dict:
+    """The only way a Talking render starts: the user approves the current plan version."""
+    import asyncio
+    from app import talking_reel
+    project = await repo.get_project(project_id, user_key)
+    if project["engine"] != "talking":
+        raise creative_plan.PlanError("تأیید برنامه برای این نوع پروژه از کارت تأیید همان پروژه انجام می‌شود.")
+    state = creative_plan.approve(project["state"], version_id)
+    job = jobstore.get(project["external_ref"])
+    if not job:
+        raise creative_plan.PlanError("فایل پروژه پیدا نشد.")
+    await asyncio.to_thread(talking_reel.start, job.dir, job.dir / "raw" / job.raw_name)
+    state.update(workflow="production", render_started=True, last_observed={})
+    project = await repo.update_project(project_id, user_key, status="running", state=state, source="approval")
+    version = creative_plan.current(state)
+    await repo.emit(project["conversation_id"], "tool.started", {"project_id": project_id, "tool": "render",
+                    "message": f"برنامهٔ نسخهٔ {version['n']} تأیید شد؛ رندر شروع شد."})
+    await repo.add_message(project["conversation_id"], user_key, "assistant",
+                           f"برنامهٔ نسخهٔ {version['n']} تأیید شد و رندر شروع شد. نسخه‌های قبلی ویدیو دست‌نخورده می‌مانند.")
+    return project
+
+
+def _reanalyze_talking(conversation_id: str, user_key: str, project: dict, job, style: str, concept_id: str | None) -> None:
+    """Rebuild the edit decisions for another style or concept; the plan returns for approval when ready."""
+    from app import talking_reel
+    plan = (talking_reel.load(job.dir).get("creative_plan") or {})
+    concept = None
+    if concept_id:
+        candidates = [plan.get("chosen") or {}] + list(plan.get("alternatives") or [])
+        concept = next((c for c in candidates if c.get("id") == concept_id), None)
+        if concept is None:
+            raise creative_plan.PlanError("این ایده در برنامه پیدا نشد.")
+    talking_reel.analyze(job.dir, job.dir / "raw" / job.raw_name, style=style,
+                         request=project["state"].get("request", ""), concept=concept)
+    latest = run(repo.get_project(project["id"], user_key))
+    state = {**latest["state"], "workflow": "analyzing", "plan_pending": True, "last_observed": {}}
+    run(repo.update_project(project["id"], user_key, status="running", state=state))
+    _emit(conversation_id, "tool.started", tool="analyze_talking_reel", project_id=project["id"],
+          message="تصمیم‌های تدوین برای انتخاب جدید ساخته می‌شود.")
+
+
+async def edit_plan(project_id: str, user_key: str, version_id: str, edits: dict) -> dict:
+    """Manual plan edits from the Edit tab. Each accepted edit produces a new version awaiting approval."""
+    import asyncio
+    from app import talking_reel
+    project = await repo.get_project(project_id, user_key)
+    if project["engine"] != "talking":
+        raise creative_plan.PlanError("ویرایش برنامه فعلاً برای ویدیوهای صحبتی فعال است.")
+    if project["state"].get("workflow") in {"analyzing", "production"}:
+        raise creative_plan.PlanError("پروژه در حال تحلیل یا رندر است؛ بعد از پایان این مرحله ویرایش کنید.")
+    version = creative_plan.current(project["state"])
+    if not version or version["id"] != version_id:
+        raise creative_plan.PlanError("برنامه در این فاصله تغییر کرده است؛ نسخهٔ جدید را باز کنید و دوباره ویرایش کنید.")
+    job = jobstore.get(project["external_ref"])
+    if not job:
+        raise creative_plan.PlanError("فایل پروژه پیدا نشد.")
+    status = talking_reel.public(talking_reel.load(job.dir))
+    result = creative_plan.talking_edits(version["content"], edits, status)
+    if result["engine"]:
+        await asyncio.to_thread(talking_reel.update, job.dir, result["engine"])
+    if result["profile"]:
+        brand_profile.update(user_key, result["profile"])
+    if result["reanalyze"]:
+        await asyncio.to_thread(_reanalyze_talking, project["conversation_id"], user_key, project, job,
+                                result["reanalyze"]["style"], result["reanalyze"]["concept_id"])
+        await repo.add_message(project["conversation_id"], user_key, "assistant",
+                               "انتخاب شما ثبت شد: " + "، ".join(result["applied"]) + ". تصمیم‌های تدوین دوباره ساخته می‌شود و برنامهٔ تازه برای تأیید می‌آید.")
+        return await repo.get_project(project_id, user_key)
+    project, created = await _refresh_plan(project["conversation_id"], user_key, project, job, source="user",
+                                           note="، ".join(result["applied"]), announce=False)
+    if created:
+        latest = creative_plan.current(project["state"])
+        await repo.emit(project["conversation_id"], "plan.ready", {"project_id": project_id, "version_id": latest["id"],
+                        "version": latest["n"], "message": "برنامه به‌روزرسانی شد"})
+    return project
 
 
 def confirm_action(action_id: str, user_key: str) -> dict:
@@ -776,16 +1031,15 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
         if not ref or project["status"] == "canceled": continue
         try:
             engine = project["engine"]
+            initial_workflow = project["state"].get("workflow")
             owned_job=jobstore.get(ref) if engine!='localize' else None
             if owned_job:await _sync_motion_messages(conversation_id,project,owned_job,user_key)
             if engine == "localize":
                 from app import localize
                 status = localize.public(localize.load(ref)); raw_status = status.get("status", "")
                 stage, progress = status.get("stage", ""), status.get("progress")
-                if raw_status == "ready" and project["state"].get("auto_render") and not project["state"].get("render_started"):
-                    localize.start_render(ref)
-                    project["state"]["render_started"] = True; raw_status, stage = "rendering", "rendering"
-                if raw_status == 'ready' and project['state'].get('manual_mode') and not project['state'].get('manual_render_approved'):
+                # Dubbing and render have a cost, so they wait for approval in Auto mode too.
+                if raw_status == 'ready' and not project['state'].get('manual_render_approved') and not project['state'].get('render_started'):
                     from app.studio_manual import render_checkpoint
                     answers = project['state'].get('manual_answers', {})
                     changes = {k: answers[k] for k in ('caption_box',) if k in answers}
@@ -802,24 +1056,27 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                 status = talking_reel.public(talking_reel.load(job.dir)); raw_status = status.get("status", "")
                 stage, progress = status.get("stage", ""), status.get("progress")
                 await _announce_creative(conversation_id, user_key, project, status)
-                if raw_status == 'ready' and project['state'].get('manual_answers') and not project['state'].get('manual_preferences_applied'):
-                    from app.studio_manual import apply_talking_preferences
-                    await asyncio.to_thread(apply_talking_preferences, conversation_id, user_key, project, job, status)
-                    project['state'] = {**project['state'], 'manual_preferences_applied': True}
-                if raw_status == 'ready' and project['state'].get('manual_mode') and not project['state'].get('manual_render_approved'):
-                    from app.studio_manual import render_checkpoint, talking_changes, apply_talking_preferences
-                    changes = talking_changes(project['state'].get('manual_answers', {}), status)
-                    if not project['state'].get('manual_preferences_applied'):
+                needs_plan = raw_status == "ready" and (creative_plan.current(project["state"]) is None
+                                                        or project["state"].get("plan_pending"))
+                if needs_plan:
+                    if project['state'].get('manual_answers') and not project['state'].get('manual_preferences_applied'):
+                        from app.studio_manual import apply_talking_preferences
                         await asyncio.to_thread(apply_talking_preferences, conversation_id, user_key, project, job, status)
                         project['state'] = {**project['state'], 'manual_preferences_applied': True}
-                    if await render_checkpoint(conversation_id, user_key, project,
-                        {'style': status.get('style'), 'hook': status.get('hook2') or status.get('hook'),
-                         'storyboard': status.get('storyboard', []), 'cta': changes['cta'],
-                         'next': 'ساخت موشن و رندر؛ تولید مدیای جدید فقط با تأیید مستقل مجاز است.'}):
-                        continue
-                if raw_status == "ready" and project["state"].get("auto_render") and not project["state"].get("render_started"):
-                    talking_reel.start(job.dir, job.dir / "raw" / job.raw_name)
-                    project["state"]["render_started"] = True; raw_status, stage = "running", "rendering"
+                    if not project['state'].get('brand_applied'):
+                        await asyncio.to_thread(_apply_brand_defaults, user_key, job)
+                        project['state'] = {**project['state'], 'brand_applied': True}
+                    await _refresh_plan(conversation_id, user_key, project, job, source="agent", after_analysis=True)
+                    continue
+                workflow = project["state"].get("workflow")
+                if workflow == "awaiting_approval":
+                    continue  # nothing runs until the user approves the current plan version
+                if workflow in {"production", "analyzing", "quality_evaluation", "user_review"}:
+                    if raw_status == "done":
+                        project["state"]["workflow"] = ("completed" if status.get("quality_accepted_by_user") else
+                                                        "quality_evaluation" if status.get("candidate_output") else "user_review")
+                    elif raw_status == "error" and workflow != "quality_evaluation":
+                        project["state"]["workflow"] = "failed"
                 output = f"/api/jobs/{ref}/talking-reel/output" if raw_status == "done" else None
             else:
                 from brain.content_creator import get_storyboard_status
@@ -879,7 +1136,8 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
             candidate_changed = (engine == 'talking' and status.get('candidate_output') and
                 (status.get('candidate_output') != project['state'].get('candidate_output') or
                  status.get('creative_review') != project['state'].get('creative_review')))
-            if observed != project["state"].get("last_observed") or candidate_changed or activity_changed:
+            workflow_changed = project["state"].get("workflow") != initial_workflow
+            if observed != project["state"].get("last_observed") or candidate_changed or activity_changed or workflow_changed:
                 state = {**project["state"], "last_observed": observed}
                 if engine == 'talking' and status.get('candidate_output'):
                     state['candidate_output'] = status['candidate_output']
@@ -887,6 +1145,8 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                 new_status = ("done" if output else "paused" if raw_status == "paused" else "error" if raw_status == "error" else
                               "awaiting_confirmation" if raw_status == "awaiting_confirmation" else "running")
                 await repo.update_project(project["id"], user_key, status=new_status, state=state)
+                if not (observed != project["state"].get("last_observed") or candidate_changed or activity_changed):
+                    continue  # only the workflow position moved; nothing new to announce
                 event_type = "render.completed" if output else ("tool.failed" if raw_status == "error" else "tool.progress")
                 await repo.emit(conversation_id, event_type, {"project_id": project["id"], "engine": engine,
                     "status": raw_status, "stage": stage, "progress": progress,

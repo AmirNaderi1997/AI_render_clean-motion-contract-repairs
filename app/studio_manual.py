@@ -66,7 +66,10 @@ def save(cid, user, session):
         run(repo.emit(cid, "question.required", {"kind": "manual", "question": question(session)["title"]}))
 
 
-def begin(cid, user, engine, text, attachment_ids, *, essentials=False):
+def begin(cid, user, engine, text, attachment_ids, *, essentials=False, skip=frozenset()):
+    """Start the question flow. ``essentials`` (Auto mode) asks only brand details, because style and
+    look are proposed in the Creative Plan; ``skip`` drops questions the brand profile already answers.
+    With nothing left to ask the session is returned complete (``question_id`` None) and not saved."""
     specs = steps(engine)
     if engine == 'talking':
         identity = [
@@ -77,11 +80,13 @@ def begin(cid, user, engine, text, attachment_ids, *, essentials=False):
         ]
         specs = specs[:1] + identity + specs[1:]
         if essentials:
-            specs = [s for s in specs if s['key'] in {'style','name','tagline','logo','logo_asset','cta','reference'}]
+            specs = [s for s in specs if s['key'] in {'name','tagline','logo','logo_asset','cta'}]
+    specs = [s for s in specs if s['key'] not in skip]
     session = {"id": uuid.uuid4().hex, "engine": engine, "text": text,
                "attachment_ids": attachment_ids, "reference_ids": [], "answers": {}, "index": 0,
-               "question_id": uuid.uuid4().hex, 'steps':specs, 'essentials':essentials}
-    save(cid, user, session)
+               "question_id": uuid.uuid4().hex if specs else None, 'steps':specs, 'essentials':essentials}
+    if specs:
+        save(cid, user, session)
     return session
 
 

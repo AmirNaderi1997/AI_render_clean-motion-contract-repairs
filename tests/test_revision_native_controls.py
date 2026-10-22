@@ -54,3 +54,20 @@ def test_partial_cut_preserves_rest_of_sentence_and_original_transcript():
     assert all('تکرار' not in cue['text'] for cue in plan_cut.captions)
     plan=SimpleNamespace(duration=3,shots=[SimpleNamespace(src_in=10,src_out=13,out_start=0)])
     assert source_cuts(plan,1,2)==[{'start':11,'end':12}]
+
+
+def test_shared_plan_keeps_main_source_cuts_in_readonly_timeline(tmp_path, monkeypatch):
+    import json
+    from app import talking_reel
+    transcript={'duration':3,'words':[{'start':0,'end':1,'w':'اول'},
+        {'start':1,'end':2,'w':'تکرار'},{'start':2,'end':3,'w':'ادامه'}],
+        'sentences':[{'start':0,'end':3,'text':'اول تکرار ادامه'}]}
+    (tmp_path/'transcript.json').write_text(json.dumps(transcript))
+    monkeypatch.setattr(talking_reel,'load',lambda _: {'style':'talking_1',
+        'decisions':{'captions':{'0':'اول تکرار ادامه'},'drop':[]},
+        'render_settings':{'source_cuts':[{'start':1,'end':2}]}})
+    monkeypatch.setattr(talking_reel,'transcript_for',lambda *a: (_ for _ in ()).throw(AssertionError('no ASR')))
+    planned=talking_reel.plan_render(tmp_path,tmp_path/'source.mp4',prepare_media=False)
+    assert planned.plan.duration == 2
+    assert all(s.src_out<=1 or s.src_in>=2 for s in planned.plan.shots)
+    assert all('تکرار' not in c['text'] for c in planned.plan.captions)

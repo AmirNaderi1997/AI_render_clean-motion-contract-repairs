@@ -453,8 +453,10 @@ def build_ass(plan: ReelPlan, hook: str, highlight: list[str], name: str, title:
     if name or title:
         y = bottom + H * 0.062
         if name:
+            # The name style's letter spacing suits Latin names; in Persian it breaks the joined letters.
+            spacing = "\\fsp0" if re.search(r"[؀-ۿ]", name) else ""
             events.append(f"Dialogue: 2,{_ass_time(0)},{_ass_time(end)},name,,0,0,0,,"
-                          f"{{\\an2\\pos({W / 2:.0f},{y:.1f})}}{_esc(name)}")
+                          f"{{\\an2\\pos({W / 2:.0f},{y:.1f}){spacing}}}{_esc(name)}")
         if title:
             events.append(f"Dialogue: 2,{_ass_time(0)},{_ass_time(end)},title,,0,0,0,,"
                           f"{{\\an8\\pos({W / 2:.0f},{y + 6:.1f})}}{_esc(title)}")

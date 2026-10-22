@@ -6,9 +6,17 @@ import { Icon } from "../components/Icon";
 import { displayTitle } from "../format";
 import { renderView } from "./model";
 import {MotionScenes} from './MotionScenes';
+import { PlanReview } from "./PlanReview";
+import { currentVersion, planPhase } from "./plan";
+import { TimelineView } from "./TimelineView";
 import { ProgressNotice, useProgressAge } from './ProgressNotice';
 
 export type WorkspaceTab = "preview" | "edit";
+
+/** Talking projects carry a Creative Plan, shown at the top of the Edit tab as soon as one is being built. */
+export function hasPlan(project?: StudioProject): boolean {
+  return project?.engine === "talking" && planPhase(project) !== "none";
+}
 
 export function statusMeta(project?: StudioProject): { label: string; tone: "success" | "error" | "warning" | "working" | "neutral" } {
   const status = project?.status || "";
@@ -110,10 +118,20 @@ export function advancedEditorUrl(project?: StudioProject): string {
 }
 
 function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () => void }) {
+  const [view, setView] = React.useState<"plan" | "timeline">("plan");
   if (!project) return <Empty icon="advanced" title="Nothing to edit yet" text="Once EditorGPT creates a project, the controls that apply to it appear here."/>;
   const advanced = advancedEditorUrl(project);
+  // The timeline exists once a plan does: it is built from the same analysis the plan describes.
+  const timeline = hasPlan(project) && Boolean(currentVersion(project));
+  const shown = timeline ? view : "plan";
   return <div className="ws-edit">
-    <header><h2>Refine this video</h2><p>Ask for caption, pacing, colour or audio changes in the chat. Controls appear here when the current engine supports them.</p></header>
+    {timeline ? <div className="segmented ws-edit-views" role="group" aria-label="نمای ویرایش" dir="rtl">
+      <button type="button" aria-pressed={shown === "plan"} onClick={() => setView("plan")}>برنامه</button>
+      <button type="button" aria-pressed={shown === "timeline"} onClick={() => setView("timeline")}>تایم‌لاین</button>
+    </div> : null}
+    {shown === "timeline" ? <TimelineView project={project}/>
+      : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved}/>
+      : <header><h2>Refine this video</h2><p>Ask for caption, pacing, colour or audio changes in the chat. Controls appear here when the current engine supports them.</p></header>}
     {project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}
     {project.external_ref && project.engine!=='localize' ? <MotionScenes jobId={project.external_ref} onSaved={onSaved}/> : null}
     {advanced

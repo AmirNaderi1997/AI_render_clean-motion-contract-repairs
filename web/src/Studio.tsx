@@ -11,10 +11,11 @@ import { Composer, PendingFile } from "./studio/Composer";
 import { ManualQuestion } from "./studio/ManualQuestion";
 import { Thread, LocalFileInfo } from "./studio/Thread";
 import { Workspace, WorkspaceTab, advancedEditorUrl } from "./studio/Workspace";
+import { currentVersion, planPhase } from "./studio/plan";
 import { PendingMessage, activeStep, buildTimeline, isProcessing, renderView, thinkingLabel } from "./studio/model";
 import { suggestions, templatePrompts } from "./templateData";
 
-type MobileView = "chat" | "preview" | "edit";
+type MobileView = "chat" | WorkspaceTab;
 const lsGet = (key: string, fallback: string) => { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } };
 const lsSet = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* storage unavailable */ } };
 
@@ -143,6 +144,24 @@ export default function Studio() {
   };
   const pendingAction = (conversation?.actions || []).find(item => item.project_id === current?.id && item.status === "pending");
   const [resuming, setResuming] = React.useState(false);
+  const phase = planPhase(current);
+  const planVersion = currentVersion(current);
+  const awaitingPlan = current?.engine === "talking" && phase === "awaiting" ? planVersion : undefined;
+  const approvePlan = async () => {
+    if (!current || !awaitingPlan || resuming) return;
+    setResuming(true); setError("");
+    try { await api.approveStudioPlan(current.id, awaitingPlan.id); await refresh(); }
+    catch (e) { setError(friendlyError(e, "approve the plan")); }
+    finally { setResuming(false); }
+  };
+  // A new plan version waiting for approval brings the Edit tab (where the plan lives) forward; the panel opens on desktop only.
+  const shownPlanRef = React.useRef("");
+  React.useEffect(() => {
+    if (!awaitingPlan || shownPlanRef.current === awaitingPlan.id) return;
+    shownPlanRef.current = awaitingPlan.id;
+    setWsTab("edit");
+    if (layout === "desktop") { setDesktopOpen(true); lsSet("editorgpt.workspace", "open"); }
+  }, [awaitingPlan?.id, layout]);
   const qualityBlocked = current?.engine === 'talking' && current?.status === 'error' && Boolean(current?.state?.candidate_output);
   const acceptOutput = async () => {
     if (!current || resuming) return;
@@ -315,6 +334,14 @@ export default function Studio() {
           }}><Icon name="play" size={14}/>تلاش مجدد درخواست</button> : null}
           {styles.length > 0 && current?.status === "awaiting_input" ? <div className="action-card"><h3>Choose a style</h3><p>How should this video feel?</p><div className="style-options">{styles.map((style: any) => <button key={style.id || style.key} onClick={() => void send(`سبک ${style.id || style.key}`)}><b className="bidi" dir="auto">{style.label || style.title || style.name}</b><small className="bidi" dir="auto">{style.description || "Talking Reel style"}</small></button>)}</div></div> : null}
           {manualQuestion ? <ManualQuestion key={manualQuestion.id} question={manualQuestion} busy={processing || sending} onAnswer={value => void send(value)}/> : null}
+          {awaitingPlan && current ? <section className="action-card plan-gate" dir="rtl" aria-label="تأیید برنامهٔ تدوین">
+            <h3>برنامهٔ تدوین آماده است · نسخهٔ {awaitingPlan.n}</h3>
+            <p>سبک «{awaitingPlan.content.style.label}»{awaitingPlan.content.hook.text ? <> با هوک «{awaitingPlan.content.hook.text}»</> : null}. رندر فقط بعد از تأیید شما شروع می‌شود؛ هر تغییری را در تب Edit یا همین چت بگویید.</p>
+            <div className="action-buttons">
+              <button className="btn" disabled={resuming} onClick={() => void approvePlan()}><Icon name="check" size={15}/>{resuming ? "در حال شروع…" : "تأیید و شروع رندر"}</button>
+              <button className="btn btn-secondary" onClick={() => openWorkspace("edit", current.id)}>بررسی و تغییر برنامه</button>
+            </div>
+          </section> : null}
           {pendingAction ? <div className="action-card"><h3>Approve this plan?</h3><p>EditorGPT will create the media, voice-over and final render using the plan above.</p>{pendingAction.estimated_cost_usd != null ? <small className="muted-text">Recorded estimate: ${pendingAction.estimated_cost_usd.toFixed(4)}</small> : null}
             <div className="action-buttons"><button className="btn" onClick={() => void api.confirmStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "approve the plan")))}>Approve and continue</button><button className="btn btn-secondary" onClick={() => void api.cancelStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "cancel the plan")))}>Cancel</button></div></div> : null}
         </div>

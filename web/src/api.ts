@@ -175,6 +175,50 @@ export interface StudioConversation {
 }
 export interface StudioEvent { id: number; seq: number; type: string; data: Record<string, any>; created_at: string }
 
+/** Plain-language Creative Plan built by the backend from the real analysis (app/creative_plan.py). */
+export interface PlanConcept { id: string; name: string; angle: string; hook: string; style: string; selected: boolean; why: string }
+export interface PlanContent {
+  kind: "talking"; goal: string; audience: string; message: string; tone: string;
+  concept: { name: string; angle: string };
+  hook: { text: string; highlight: string[] };
+  structure: { role: string; intent: string; visual: string; sentence: number | null; at: string; text: string }[];
+  duration_s: number;
+  style: { id: string; label: string; summary: string; complexity: string };
+  look: { preset: string; grade: Record<string, number>; accent_color: string; caption_font: string; zoom: number; key_moments: boolean };
+  captions: string; motion: string; broll: string; pictures: { sentence: number; title: string; visual_type: string }[];
+  audio: { music: string; voice: string; sfx: string };
+  brand: { name: string; tagline: string; cta: string; logo: { enabled: boolean; motion: string; has_logo: boolean } };
+  format: { aspect: string; resolution: string; fps: number };
+  engines: string[];
+  estimate: { render: { low_s: number; high_s: number; samples: number } | null; paid_media: boolean; note: string };
+  concepts: PlanConcept[];
+  style_options: { id: string; label: string; summary: string; complexity: string }[];
+  frames?: Record<string, string>;
+}
+export interface PlanVersion { id: string; n: number; source: string; note: string; created_at: number; fingerprint: string; content: PlanContent }
+export interface PlanState { versions: PlanVersion[]; approved_id: string | null }
+export type PlanEdits = Partial<{
+  hook: string; hook_highlight: string[]; look: string; accent_color: string; caption_font: string; zoom: number;
+  key_moments: boolean; logo_enabled: boolean; logo_motion: string; name: string; tagline: string; cta: string;
+  concept_id: string; style: string;
+}>;
+/** Engine-neutral project timeline (app/project_document.py). Read-only in this phase. */
+export interface DocElement {
+  id: string; type: string; start: number; end: number; label: string; text: string;
+  source: { kind?: string; label?: string; file?: string | null; in?: number; out?: number };
+  props: Record<string, any>; edit: { via: ("plan" | "chat")[]; note: string };
+}
+export interface DocTrack { id: string; kind: string; label: string; elements: DocElement[] }
+export interface ProjectDocument {
+  schema: number; engine: string; style: string; canvas: { width: number; height: number; fps: number };
+  duration: number; content_duration: number; tracks: DocTrack[];
+  basis: { plan_version: number | null; rendered_version: number | null; workflow: string | null };
+}
+export interface BrandProfile {
+  name: string; tagline: string; cta: string; accent_color: string; caption_font: string; logo_motion: string;
+  answered: string[]; has_logo: boolean; updated_at: number | null;
+}
+
 async function authFetch(url: string, init?: RequestInit): Promise<Response> {
   await ensureFreshToken();
   const token = getToken();
@@ -1047,6 +1091,27 @@ export const api = {
   async updateStudioStoryboard(id: string, scenes: any[]): Promise<StudioProject> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/storyboard`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ scenes }) }));
   },
+  async approveStudioPlan(id: string, versionId: string): Promise<StudioProject> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/plan/approve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId }) }));
+  },
+  async editStudioPlan(id: string, versionId: string, edits: PlanEdits): Promise<StudioProject> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/plan`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId, edits }) }));
+  },
+  async studioDocument(id: string): Promise<ProjectDocument> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/document`));
+  },
+  studioPlanFrameUrl(id: string, frame: string): string { return `${BASE}/studio/projects/${id}/plan/frames/${frame}`; },
+  async getBrandProfile(): Promise<BrandProfile> {
+    return j(await authFetch(`${BASE}/studio/profile`));
+  },
+  async updateBrandProfile(patch: Partial<Pick<BrandProfile, "name" | "tagline" | "cta" | "accent_color" | "caption_font" | "logo_motion">>): Promise<BrandProfile> {
+    return j(await authFetch(`${BASE}/studio/profile`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }));
+  },
+  async uploadBrandLogo(file: File): Promise<BrandProfile> {
+    const form = new FormData(); form.append("file", file);
+    return j(await authFetch(`${BASE}/studio/profile/logo`, { method: "POST", body: form }));
+  },
+  brandLogoUrl(): string { return `${BASE}/studio/profile/logo`; },
   studioOutputUrl(id: string): string { return `${BASE}/studio/projects/${id}/output`; },
   studioAssetUrl(id: string, index: number): string { return `${BASE}/studio/projects/${id}/assets/${index}`; },
   studioAttachmentUrl(conversationId: string, attachmentId: string): string { return `${BASE}/studio/conversations/${conversationId}/attachments/${attachmentId}`; },
