@@ -251,6 +251,7 @@ def _answer_manual_checkpoint(cid, user, project, text, question_id):
         return True
     if not run(repo.claim_manual_checkpoint(project['id'], user, question_id)):
         raise ValueError('این مرحله قبلاً تأیید شده است؛ درخواست تکراری اجرا نشد.')
+    _emit(cid, 'manual.approved', project_id=project['id'], question_id=question_id, message='تأیید ثبت شد؛ در حال آماده‌سازی همان مرحله هستم.')
     state = {**project['state'], 'manual_checkpoint': None, 'manual_render_approved': True, 'auto_render': True}
     if checkpoint.get('revision_text'):
         _modify(cid, user, project, checkpoint['revision_text'])
@@ -329,9 +330,9 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
                 run(repo.set_conversation(conversation_id, user_key, title=title))
                 _emit(conversation_id, 'conversation.updated', title=title)
         intent = completed_manual['engine'] if completed_manual else _resolved_intent(text, attachments, current, on_title=set_title if first_turn and automatic_title else None)
-        if manual_mode and not completed_manual and intent in {'talking', 'localize', 'motion'}:
-            manual.begin(conversation_id, user_key, intent, text, attachment_ids)
-            _assistant(conversation_id, user_key, 'حالت دستی فعال است. انتخاب‌ها را مرحله‌به‌مرحله تأیید کنید؛ قبل از اجرای تحلیل و رندر دوباره اجازه می‌گیرم.')
+        if not completed_manual and ((manual_mode and intent in {'talking', 'localize', 'motion'}) or intent == 'talking'):
+            manual.begin(conversation_id, user_key, intent, text, attachment_ids, essentials=not manual_mode)
+            _assistant(conversation_id, user_key, 'قبل از شروع، اطلاعات سبک و هویت، لوگو و دعوت به اقدام را مشخص کنید؛ می‌توانید هرکدام را صریحاً بدون آن انتخاب کنید.')
             return
         if intent == "question_video":
             _assistant(conversation_id, user_key, "برای این ویدیو کدام کار را انجام بدهم: فارسی‌سازی و دوبله، یا تدوین ریلز حرفه‌ای؟")
@@ -776,6 +777,10 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                 status = talking_reel.public(talking_reel.load(job.dir)); raw_status = status.get("status", "")
                 stage, progress = status.get("stage", ""), status.get("progress")
                 await _announce_creative(conversation_id, user_key, project, status)
+                if raw_status == 'ready' and project['state'].get('manual_answers') and not project['state'].get('manual_preferences_applied'):
+                    from app.studio_manual import apply_talking_preferences
+                    apply_talking_preferences(conversation_id, user_key, project, job, status)
+                    project['state'] = {**project['state'], 'manual_preferences_applied': True}
                 if raw_status == 'ready' and project['state'].get('manual_mode') and not project['state'].get('manual_render_approved'):
                     from app.studio_manual import render_checkpoint, talking_changes, apply_talking_preferences
                     changes = talking_changes(project['state'].get('manual_answers', {}), status)
@@ -822,8 +827,14 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                 failure_message = str(status.get("message") or "")
             observed = {"status": raw_status, "stage": stage, "progress": progress, "output": output,
                         "message": failure_message}
-            if observed != project["state"].get("last_observed"):
+            candidate_changed = (engine == 'talking' and status.get('candidate_output') and
+                (status.get('candidate_output') != project['state'].get('candidate_output') or
+                 status.get('creative_review') != project['state'].get('creative_review')))
+            if observed != project["state"].get("last_observed") or candidate_changed:
                 state = {**project["state"], "last_observed": observed}
+                if engine == 'talking' and status.get('candidate_output'):
+                    state['candidate_output'] = status['candidate_output']
+                    state['creative_review'] = status.get('creative_review')
                 new_status = ("done" if output else "paused" if raw_status == "paused" else "error" if raw_status == "error" else
                               "awaiting_confirmation" if raw_status == "awaiting_confirmation" else "running")
                 await repo.update_project(project["id"], user_key, status=new_status, state=state)

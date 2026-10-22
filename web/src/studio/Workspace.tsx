@@ -19,8 +19,9 @@ export function statusMeta(project?: StudioProject): { label: string; tone: "suc
 }
 
 export function projectOutputUrl(project?: StudioProject) {
-  const output = project?.state?.last_observed?.output;
-  return output && project ? `${api.studioOutputUrl(project.id)}?version=${encodeURIComponent(output)}` : undefined;
+  const candidate = project?.state?.candidate_output;
+  const output = candidate || project?.state?.last_observed?.output;
+  return output && project ? `${api.studioOutputUrl(project.id)}?candidate=${Boolean(candidate)}&version=${encodeURIComponent(output)}` : undefined;
 }
 
 function Empty({ icon, title, text }: { icon: "spark" | "advanced"; title: string; text: string }) {
@@ -28,14 +29,25 @@ function Empty({ icon, title, text }: { icon: "spark" | "advanced"; title: strin
 }
 
 function PreviewPane({ project, conversation, sourceAttachment, onCancel }: { project?: StudioProject; conversation: StudioConversation | null; sourceAttachment?: string; onCancel: () => void }) {
+  const [versions, setVersions] = React.useState<{file: string; version: number}[]>([]);
+  const [selected, setSelected] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let active = true;
+    setSelected(null);
+    setVersions([]);
+    if (project) void api.studioOutputs(project.id).then(items => { if (active) setVersions(items); }).catch(() => {});
+    return () => { active = false; };
+  }, [project?.id, project?.state?.candidate_output, project?.state?.last_observed?.output]);
   if (!project) return <Empty icon="spark" title="Your preview will appear here" text="Describe an edit or add media in the chat. The video shows up here as soon as there is something to watch."/>;
-  const output = projectOutputUrl(project);
+  const selectedFile = selected || versions[versions.length - 1]?.file;
+  const output = selectedFile ? `${api.studioOutputUrl(project.id)}?file=${encodeURIComponent(selectedFile)}` : projectOutputUrl(project);
   const view = renderView(project);
   const source = sourceAttachment && conversation ? api.studioAttachmentUrl(conversation.id, sourceAttachment) : undefined;
   const meta = statusMeta(project);
   const version = String(project.state?.last_observed?.output || "").match(/\/v(\d+)(?:_preview)?\.mp4(?:$|\?)/)?.[1] || project.current_version;
   const busy = view.phase === "queued" || view.phase === "rendering" || view.phase === "finalizing";
   return <div className="ws-preview">
+    {versions.length ? <div className="ws-actions" role="group" aria-label="نسخه‌های خروجی">{versions.map(item => <button key={item.file} className="btn btn-sm btn-secondary" aria-pressed={selectedFile === item.file} onClick={() => setSelected(item.file)}>نسخهٔ {item.version}</button>)}</div> : null}
     <div className="ws-player">
       {output ? <AuthenticatedMedia as="video" controls playsInline preload="metadata" src={output}/>
         : source ? <AuthenticatedMedia as="video" controls playsInline preload="metadata" src={source}/>
@@ -46,11 +58,11 @@ function PreviewPane({ project, conversation, sourceAttachment, onCancel }: { pr
       <div className="rc-meta"><span>{view.stageLabel}</span>{typeof view.progress === "number" ? <span>{view.progress}%</span> : null}</div>
     </div> : null}
     <div className="ws-meta">
-      <span>Version {version}</span>
-      <span>{output ? "Final quality" : "Original upload"}</span>
+      <span>Version {versions.find(item => item.file === selectedFile)?.version || version}</span>
+      <span>{output ? (project.state?.candidate_output && project.state?.creative_review?.status !== 'passed' ? 'Rendered · needs quality review' : 'Final quality') : 'Original upload'}</span>
     </div>
     <div className="ws-actions">
-      {output ? <button className="btn btn-sm" onClick={() => void api.downloadAuthenticated(api.studioOutputUrl(project.id), `${project.title || "video"}.mp4`)}><Icon name="download" size={15}/>Download video</button> : null}
+      {output ? <button className="btn btn-sm" onClick={() => void api.downloadAuthenticated(output, `${project.title || "video"}.mp4`)}><Icon name="download" size={15}/>Download video</button> : null}
       {project.status === "running" ? <button className="btn btn-sm btn-secondary" onClick={onCancel}>Cancel</button> : null}
     </div>
   </div>;

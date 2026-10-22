@@ -1034,6 +1034,12 @@ export const api = {
   async cancelStudioProject(id: string): Promise<any> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/cancel`, { method: "POST" }));
   },
+  async acceptStudioOutput(id: string, candidate: string): Promise<any> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/accept-output`, {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({candidate})}));
+  },
+  async studioOutputs(id: string): Promise<{file: string; version: number}[]> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/outputs`));
+  },
   async resumeStudioProject(id: string, retryConfirmed: boolean = false): Promise<any> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/resume`, { method: "POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({retry_confirmed:retryConfirmed}) }));
   },

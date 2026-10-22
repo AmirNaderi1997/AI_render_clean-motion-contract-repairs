@@ -368,8 +368,44 @@ async def resume_stopped_project(request: Request, project_id: str, body: Resume
     except ValueError as exc: raise HTTPException(409, str(exc))
 
 
+class AcceptOutputRequest(BaseModel):
+    candidate: str
+
+
+@router.post('/projects/{project_id}/accept-output')
+async def accept_output(request: Request, project_id: str, body: AcceptOutputRequest):
+    user = _user(request)
+    try:
+        project = await repo.get_project(project_id, user)
+    except KeyError:
+        raise HTTPException(404, 'project not found')
+    if project['engine'] != 'talking':
+        raise HTTPException(409, 'No reviewable talking output')
+    from app import talking_reel
+    job = jobstore.get(project.get('external_ref'))
+    state = talking_reel.load(job.dir) if job else {}
+    candidate = state.get('candidate_output')
+    if not candidate or candidate != body.candidate or state.get('status') not in {'error', 'done'}:
+        raise HTTPException(409, 'Output changed or rendering is still active')
+    path = (job.dir / candidate).resolve()
+    if not path.is_relative_to((job.dir / 'exports').resolve()) or not path.is_file():
+        raise HTTPException(404, 'output not found')
+    report = state.get('creative_review') or {}
+    if not report:
+        raise HTTPException(409, 'No quality review to override')
+    # Preserve the reviewer verdict. User acceptance is not a fabricated QC pass.
+    state.update(output=candidate, status='done', stage='', message='', progress=100,
+                 quality_accepted_by_user=True)
+    talking_reel.save(job.dir, state)
+    await sync_conversation(project['conversation_id'], user)
+    await repo.add_message(project['conversation_id'], user, 'assistant',
+        'خروجی موجود با تأیید شما تحویل شد؛ نتیجهٔ بازبینی کیفیت حفظ شده و رندر مجدد انجام نشد.')
+    return {'accepted': True}
+
+
+
 @router.get("/projects/{project_id}/output")
-async def project_output(request: Request, project_id: str):
+async def project_output(request: Request, project_id: str, candidate: bool = False, file: str | None = None):
     try: project = await repo.get_project(project_id, _user(request))
     except KeyError: raise HTTPException(404, "project not found")
     ref = project.get("external_ref")
@@ -381,7 +417,14 @@ async def project_output(request: Request, project_id: str):
     elif project["engine"] == "talking" and ref:
         from app import talking_reel
         job = jobstore.get(ref); state = talking_reel.load(job.dir) if job else {}
-        path = job.dir / state.get("output", "") if job else None
+        relative = state.get('candidate_output') if candidate else state.get('output')
+        if file:
+            if not re.fullmatch(r'talking_reel_v[0-9]+\.mp4', file):
+                raise HTTPException(404, 'version not found')
+            relative = 'exports/' + file
+        path = (job.dir / relative).resolve() if job and relative else None
+        if path and not path.is_relative_to((job.dir / 'exports').resolve()):
+            raise HTTPException(404, 'output not found')
     elif project["engine"] == "motion" and ref:
         job = jobstore.get(ref)
         path = job.dir / "exports" / job.render.output if job and job.render.output else None
@@ -416,3 +459,17 @@ def capabilities():
     return {"engines": ["localize", "talking", "motion"], "talking_styles": style_list(),
             "media_providers": list_providers(), "aspect_ratios": {"localize": ["source"], "talking": ["9:16"], "motion": ["9:16"]},
             "live_events": "sse", "status_voice": True, "cancel": {"localize": True, "talking": True, "motion": False}}
+
+
+@router.get('/projects/{project_id}/outputs')
+async def project_outputs(request: Request, project_id: str):
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    job = jobstore.get(project.get('external_ref')) if project['engine'] == 'talking' else None
+    if not job: return []
+    files = [p for p in (job.dir/'exports').glob('talking_reel_v*.mp4')
+             if re.fullmatch(r'talking_reel_v[0-9]+\.mp4', p.name) and p.is_file()
+             and p.resolve().is_relative_to((job.dir/'exports').resolve())]
+    return [{'file': p.name, 'version': int(re.search(r'_v([0-9]+)', p.name)[1])}
+            for p in sorted(files, key=lambda p: int(re.search(r'_v([0-9]+)', p.name)[1]))]
+

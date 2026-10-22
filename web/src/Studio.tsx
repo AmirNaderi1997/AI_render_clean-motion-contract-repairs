@@ -37,6 +37,7 @@ export default function Studio() {
   const [listening, setListening] = React.useState(false);
   const [manualDraft, setManualDraft] = React.useState(false);
   const [modeSaving, setModeSaving] = React.useState(false);
+  const [submittedQuestionId, setSubmittedQuestionId] = React.useState<string | null>(null);
   const [wsTab, setWsTab] = React.useState<WorkspaceTab>("preview");
   const [desktopOpen, setDesktopOpen] = React.useState(() => lsGet("editorgpt.workspace", "open") !== "closed");
   const [overlayOpen, setOverlayOpen] = React.useState(false);
@@ -120,7 +121,9 @@ export default function Studio() {
   const projects = conversation?.projects || [];
   const current = projects.find(item => item.id === (selectedProject || conversation?.state?.current_project_id)) || projects[projects.length - 1];
   const manual = conversation ? conversation.state.execution_mode === "manual" : manualDraft;
-  const manualQuestion = current?.state?.manual_checkpoint || (manual ? conversation?.state?.manual_question : null);
+  const checkpoint = current?.state?.manual_checkpoint;
+  const rawManualQuestion = checkpoint ? (checkpoint.claimed ? null : checkpoint) : conversation?.state?.manual_question;
+  const manualQuestion = rawManualQuestion?.id === submittedQuestionId ? null : rawManualQuestion;
   const toggleManual = async () => {
     if (modeSaving) return;
     if (!authenticated) { openAuth("login"); return; }
@@ -132,6 +135,14 @@ export default function Studio() {
   };
   const pendingAction = (conversation?.actions || []).find(item => item.project_id === current?.id && item.status === "pending");
   const [resuming, setResuming] = React.useState(false);
+  const qualityBlocked = current?.engine === 'talking' && current?.status === 'error' && Boolean(current?.state?.candidate_output);
+  const acceptOutput = async () => {
+    if (!current || resuming) return;
+    setResuming(true); setError('');
+    try { await api.acceptStudioOutput(current.id, current.state.candidate_output); await refresh(); openWorkspace('preview', current.id); }
+    catch (e) { setError(friendlyError(e, 'accept output')); }
+    finally { setResuming(false); }
+  };
   const resume = async () => {
     if (!current || resuming) return;
     const warning = 'تحلیل و دارایی‌های آماده دوباره تولید نمی‌شوند. تکمیل مراحل ناقص ممکن است هزینهٔ API داشته باشد، حتی اگر تلاش قبلی timeout شده باشد. هر تصویر و صدا جداگانه محاسبه می‌شود و هزینهٔ دقیق در دسترس نیست. برای ادامه و هر مدیای ناقص فقط یک تلاش انجام شود؟';
@@ -211,6 +222,7 @@ export default function Studio() {
     try {
       const id = await ensureConversation(finalText.slice(0, 70));
       await api.sendStudioMessage(id, finalText, ids, { execution_mode: conversation || !activeId ? (manual ? "manual" : "auto") : undefined, manual_question_id: manualQuestion?.id });
+      if (manualQuestion?.id && finalText === 'approve') setSubmittedQuestionId(manualQuestion.id);
       await refresh(id);
       setPending(null); setLocalFiles(list => { list.forEach(file => URL.revokeObjectURL(file.url)); return []; });
     } catch (e) {
@@ -283,9 +295,13 @@ export default function Studio() {
           {!conversation && !pending ? <div className="thread-loading" role="status" aria-label="Loading conversation"><span className="skeleton"/><span className="skeleton"/><span className="skeleton"/></div> : null}
           <Thread items={items} conversation={conversation} projects={projects} localFiles={localFiles} thinking={thinking} sourceUrl={sourceUrl} compactRender={layout === "desktop" && desktopOpen}
             onOpenPreview={id => openWorkspace("preview", id)} onEditAgain={editAgain}
-            retryHref={current?.status === "error" ? advancedEditorUrl(current) || undefined : undefined}
+            retryHref={current?.status === "error" && !qualityBlocked ? advancedEditorUrl(current) || undefined : undefined}
             onChoice={choice => void send(choice)} onRetryMessage={retryMessage}/>
-          {current && (["talking", "localize"].includes(current.engine) || (current.engine === "motion" && current.state?.confirmed)) && ["error", "canceled", "paused"].includes(current.status) ? <button className="btn btn-secondary" disabled={resuming} onClick={() => void resume()}><Icon name="play" size={14}/>{resuming ? "در حال ادامه…" : "ادامه از مرحلهٔ متوقف‌شده"}</button> : null}
+          {qualityBlocked && current ? <div className="rc-actions" aria-label="بازبینی خروجی">
+            <button className="btn btn-secondary" disabled={resuming} onClick={() => void acceptOutput()}>تأیید خروجی</button>
+            <button className="btn btn-secondary" disabled={resuming} onClick={() => void send('ایرادهای واقعی کنترل کیفیت همین خروجی را اصلاح کن؛ انتخاب‌های طراحی تأییدشده را حفظ کن و مدیای پولی جدید بدون تأیید تولید نکن.')}>درست کردن</button>
+            {advancedEditorUrl(current) ? <a className="btn btn-secondary" href={advancedEditorUrl(current)!}>ویرایش دستی</a> : null}
+          </div> : current && (["talking", "localize"].includes(current.engine) || (current.engine === "motion" && current.state?.confirmed)) && ["error", "canceled", "paused"].includes(current.status) ? <button className="btn btn-secondary" disabled={resuming} onClick={() => void resume()}><Icon name="play" size={14}/>{resuming ? "در حال ادامه…" : "ادامه از مرحلهٔ متوقف‌شده"}</button> : null}
           {!current && !processing && !pending && lastUserMessage && messages[messages.length - 1]?.content.startsWith('عملیات متوقف شد:') ? <button className="btn btn-secondary" disabled={sending} onClick={() => {
             if (window.confirm('هنوز پروژه‌ای ساخته نشده است. درخواست اصلی با همان فایل‌ها دوباره بررسی شود؟ این کار ممکن است هزینهٔ API داشته باشد؛ تولید نهایی همچنان نیازمند تأیید برنامه است.')) void send(undefined, { text: lastUserMessage.content, ids: lastUserMessage.attachments || [] });
           }}><Icon name="play" size={14}/>تلاش مجدد درخواست</button> : null}

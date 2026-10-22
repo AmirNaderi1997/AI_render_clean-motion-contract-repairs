@@ -19,6 +19,22 @@ def store(tmp_path, monkeypatch):
 def run(coro): return asyncio.run(coro)
 
 
+def test_automatic_mode_collects_identity_and_explicit_opt_out(store):
+    conv = run(store.create_conversation('u'))
+    session = manual.begin(conv['id'], 'u', 'talking', 'edit', [], essentials=True)
+    answers = {'style':'talking_1','name':'Mahtab Asgari','tagline':'Co-founder of eatfitapp',
+               'logo':'off','cta':'none','reference':'skip'}
+    while session.get('question_id'):
+        key = manual.question(session)['key']
+        assert key not in {'logo_asset','logo_color','look','font','analyze'}
+        session = manual.answer(conv['id'],'u',session,session['question_id'],answers[key],[])
+    changes = manual.talking_changes(session['answers'], {})
+    assert changes['name'] == 'Mahtab Asgari'
+    assert changes['title'] == 'Co-founder of eatfitapp'
+    assert changes['cta'] == ''
+    assert changes['render_settings']['outro_logo']['enabled'] is False
+
+
 def test_manual_question_is_persisted_and_source_is_not_a_reference(store):
     conv = run(store.create_conversation('u'))
     source = run(store.create_attachment(conv['id'], 'u', kind='video', filename='source.mp4', path='/source', mime_type='video/mp4', size_bytes=1))
@@ -138,7 +154,7 @@ def test_logo_file_only_message_answers_logo_step(store):
     c = run(store.create_conversation('u'))
     image = run(store.create_attachment(c['id'], 'u', kind='image', filename='logo.png', path='/logo', mime_type='image/png', size_bytes=1))
     s = manual.begin(c['id'], 'u', 'talking', 'تدوین', [])
-    s['index'] = next(i for i,v in enumerate(manual.steps('talking')) if v['key']=='logo_asset')
+    s['index'] = next(i for i,v in enumerate(manual.session_steps(s)) if v['key']=='logo_asset')
     manual.save(c['id'], 'u', s)
     s = manual.answer(c['id'], 'u', s, s['question_id'], 'این فایل را بررسی کن و برای تدوین آماده کن', [image['id']])
     assert s['logo_attachment_id'] == image['id']
@@ -159,7 +175,7 @@ def test_all_choices_resume_original_source_and_explicit_selected_style(store, m
     run(store.set_conversation(c['id'], 'u', state={'execution_mode':'manual'}))
     a = run(store.create_attachment(c['id'], 'u', kind='video', filename='source.mp4', path='/source', mime_type='video/mp4', size_bytes=1))
     s = manual.begin(c['id'], 'u', 'talking', 'تدوین صحبتی دو', [a['id']])
-    answers = {'style':'talking_1','look':'warm','font':'Vazirmatn','color':'#FFFFFF','logo':'off',
+    answers = {'style':'talking_1','name':'Mahtab Asgari','tagline':'Co-founder of eatfitapp','look':'warm','font':'Vazirmatn','color':'#FFFFFF','logo':'off',
                'logo_asset':'existing','logo_color':'original','cta':'none','reference':'skip'}
     while manual.question(s)['key'] != 'analyze':
         s = manual.answer(c['id'], 'u', s, s['question_id'], answers[manual.question(s)['key']], [])

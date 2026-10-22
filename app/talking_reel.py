@@ -520,6 +520,7 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
                  render_settings=settings,
                  logo_path=custom_logo(job_dir),
                  on_progress=progress)
+    _review_creative_output(job_dir,out)
     state = load(job_dir)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",
                  duration=round(plan.duration, 2), shots=len(plan.shots))
@@ -528,6 +529,32 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
 
 MEDIA_DIR = "talking_media"            # the creator's own pictures for "صحبتی ۲"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _review_creative_output(job_dir: Path, output: Path, moments: list[float] | None = None) -> None:
+    from creative.review import required, review_export, enforce
+    state=load(job_dir)
+    direction=state.get('creative_plan')
+    if not required(direction):
+        return  # Legacy outputs are not retroactively blocked by new policy.
+    from creative.capabilities import TALKING_STYLES
+    direction={**direction,'render_contract': {
+        'style':state.get('style'),
+        'style_description':TALKING_STYLES.get(state.get('style'),''),
+        'hook':state.get('hook'),
+        'pinned_hook_is_intentional':state.get('style')=='talking_1',
+    }}
+    from engine.probe import probe
+    from engine.technical_qc import inspect_export
+    duration=float(probe(output)['format']['duration'])
+    _stage(job_dir,'reviewing creative output',progress=99)
+    technical=inspect_export(output,width=1080,height=1920,fps=30,duration=duration,target_lufs=None)
+    report=review_export(output,direction,job_dir/'talking_reel_work/creative_review',
+        duration=duration,moments=moments)
+    _stage(job_dir,'reviewing creative output',progress=99,creative_review=report,
+        technical_qc=technical,candidate_output=f'exports/{output.name}')
+    enforce(report)
+
 
 
 def user_media(job_dir: Path) -> list[Path]:
@@ -848,6 +875,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         if not review["passed"]:
             raise ValueError('بازبینی موشن نیازمند اصلاح است؛ رندر تکراری خودکار انجام نشد: '+
                 '; '.join(review['problems']))
+    _review_creative_output(job_dir,out)
     state = load(job_dir)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",
                  duration=round(plan.duration, 2), shots=len(plan.shots))

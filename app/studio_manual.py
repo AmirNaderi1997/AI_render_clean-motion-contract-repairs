@@ -50,8 +50,12 @@ def steps(engine):
              "choices": [choice("minimal", "مینیمال", "تایپوگرافی خوانا و فضای خلوت"), choice("editorial", "روایی", "صحنه‌های مفهومی متناسب با روایت"), choice("brand", "برند محصول", "بر اساس تصاویر واقعی محصول")]}] + common
 
 
+def session_steps(session):
+    return session.get('steps') or steps(session['engine'])
+
+
 def question(session):
-    spec = steps(session["engine"])[session["index"]]
+    spec = session_steps(session)[session["index"]]
     return {**spec, "id": session["question_id"], "engine": session["engine"]}
 
 
@@ -62,10 +66,21 @@ def save(cid, user, session):
         run(repo.emit(cid, "question.required", {"kind": "manual", "question": question(session)["title"]}))
 
 
-def begin(cid, user, engine, text, attachment_ids):
+def begin(cid, user, engine, text, attachment_ids, *, essentials=False):
+    specs = steps(engine)
+    if engine == 'talking':
+        identity = [
+            {'key':'name', 'title':'نام گوینده برای نمایش روی ویدیو', 'input':True,
+             'choices':[choice('none','بدون نام')]},
+            {'key':'tagline', 'title':'تگ‌لاین یا سمت گوینده', 'input':True,
+             'choices':[choice('none','بدون تگ‌لاین')]},
+        ]
+        specs = specs[:1] + identity + specs[1:]
+        if essentials:
+            specs = [s for s in specs if s['key'] in {'style','name','tagline','logo','logo_asset','cta','reference'}]
     session = {"id": uuid.uuid4().hex, "engine": engine, "text": text,
                "attachment_ids": attachment_ids, "reference_ids": [], "answers": {}, "index": 0,
-               "question_id": uuid.uuid4().hex}
+               "question_id": uuid.uuid4().hex, 'steps':specs, 'essentials':essentials}
     save(cid, user, session)
     return session
 
@@ -74,7 +89,7 @@ def answer(cid, user, session, response, text, attachment_ids):
     """Validate the exact live question, never interpret stale card clicks as a new edit."""
     if response != session["question_id"]:
         raise ValueError("این سؤال دیگر فعال نیست؛ انتخاب فعلی چت را پاسخ بدهید.")
-    spec = steps(session["engine"])[session["index"]]
+    spec = session_steps(session)[session["index"]]
     value = text.strip()
     if spec['key'] == 'logo_asset' and attachment_ids and value not in {'existing', 'attached'}:
         value = 'attached'
@@ -97,7 +112,9 @@ def answer(cid, user, session, response, text, attachment_ids):
     result.pop('claimed', None)
     result["answers"][spec["key"]] = value[:2000]
     result["index"] += 1
-    result["question_id"] = uuid.uuid4().hex if result["index"] < len(steps(result["engine"])) else None
+    while result['index'] < len(session_steps(result)) and result['answers'].get('logo') == 'off' and session_steps(result)[result['index']]['key'] in {'logo_asset','logo_color'}:
+        result['index'] += 1
+    result["question_id"] = uuid.uuid4().hex if result["index"] < len(session_steps(result)) else None
     save(cid, user, result)
     return result
 
@@ -116,7 +133,10 @@ def talking_changes(answers, current):
     if answers.get("color"): settings["title_color"] = answers["color"]
     if answers.get("logo"):
         settings["outro_logo"] = {"enabled": answers["logo"] != "off", "motion": answers["logo"] if answers["logo"] != "off" else "none"}
-    return {"render_settings": settings, "cta": "" if answers.get("cta") == "none" else answers.get("cta", current.get("cta", ""))}
+    changes = {"render_settings": settings, "cta": "" if answers.get("cta") == "none" else answers.get("cta", current.get("cta", ""))}
+    for key, field in [('name','name'), ('tagline','title')]:
+        if key in answers: changes[field] = '' if answers[key] == 'none' else answers[key]
+    return changes
 
 
 def apply_talking_preferences(cid, user, project, job, status):
