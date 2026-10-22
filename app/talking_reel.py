@@ -22,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MUSIC = "assets/music/motivational_piano_beat.mp3"
 DEFAULTS = {
     "status": "idle", "stage": "", "message": "", "progress": 0,
-    "hook": "", "hook_highlight": [], "name": "Reza Rafiei", "title": "Founder Of Rafiei Group",
+    "hook": "", "hook_highlight": [], "name": "", "title": "",
     "music": DEFAULT_MUSIC, "cta": "", "style": "talking_1", "suggested_style": None,
     "suggested_style_reason": "", "analysis_ready": False, "output": None, "decisions": None,
     "render_settings": {

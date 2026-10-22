@@ -494,6 +494,9 @@ def _revise_talking(conversation_id: str, user_key: str, project: dict, job, tex
         "render_settings": {"grade": settings.get("grade"), "zoom": settings.get("zoom"), "title_color": settings.get("title_color"),
                             "outro_logo": settings.get("outro_logo"), "key_moments_enabled": settings.get("key_moments_enabled")},
         "direction": ((state.get("creative_plan") or {}).get("chosen") or {}).get("angle"),
+        "quality_review": state.get("creative_review"),
+        "last_failure": state.get("message"),
+        "speaker_name": state.get("name"), "speaker_title": state.get("title"),
         "sentences": [{"i": k, "start": round(x["start"], 1), "end": round(x["end"], 1), "text": x["text"]} for k, x in enumerate(sentences)],
     }
     try:

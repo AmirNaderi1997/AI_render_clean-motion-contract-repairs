@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from . import llm
 from .schemas import CreativeUnavailable
 
-Op = Literal["rewrite_hook", "edit_caption", "set_render", "change_style", "replace_visual", "drop_visual", "set_cta", "unsupported"]
+Op = Literal["rewrite_hook", "edit_caption", "set_render", "change_style", "replace_visual", "drop_visual", "set_cta", "clear_identity", "unsupported"]
 VISUAL_TYPES = {"concept", "stat", "comparison", "steps", "ui_showcase", "media_collage", "chat", "map_route",
                 "spec_callout", "kinetic_type", "before_after"}
 STYLES = {"talking_1", "talking_2", "talking_3", "talking_4"}
@@ -87,9 +87,12 @@ Operations (use exactly these):
 - {"op":"replace_visual","sentence":<index>,"text":"<2-6 word Persian title>","visual_type":"<concept|stat|comparison|steps|ui_showcase|media_collage|chat|map_route|spec_callout|kinetic_type|before_after>","items":["<up to 4 facts the speaker says>"]}
 - {"op":"drop_visual","sentence":<index>}
 - {"op":"set_cta","text":"<call to action>"}
+- {"op":"clear_identity"} (remove an incorrect/unverified speaker name and role; never invent a replacement identity)
 - {"op":"unsupported","reason":"<what was asked that cannot be done with these operations, in Persian>"}
 
-Rules: refer to moments by sentence index (convert a timestamp using the [start-end] times given). Use `unsupported` instead of
+Rules: when asked to fix the output, address the supplied quality_review/last_failure, not just aesthetic preferences.
+Use clear_identity if the review flags an incorrect default speaker name. Do not invent a person's identity.
+Refer to moments by sentence index (convert a timestamp using the [start-end] times given). Use `unsupported` instead of
 guessing. Never invent facts or numbers the speaker did not say. A request that does not change the video (a question) gets
 an empty ops list and an answer in `summary`."""
 
@@ -132,6 +135,10 @@ def apply_to_talking(public_state: dict, ops: list[RevisionOp], sentence_count: 
         return i is not None and 0 <= i < sentence_count
 
     for op in ops:
+        if op.op == 'clear_identity':
+            out.changes.update(name='', title='')
+            out.applied.append('نام و سمت تأییدنشدهٔ گوینده حذف شد.')
+            continue
         if op.op == "rewrite_hook" and op.text:
             out.changes["hook" if style == "talking_1" else "hook2"] = op.text
             out.changes["hook_highlight"] = [h for h in op.highlight if h in op.text][:2]

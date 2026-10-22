@@ -113,6 +113,27 @@ def test_message_contract_rejects_invalid_modes():
     with pytest.raises(ValidationError): MessageCreate(content='test', execution_mode='magic')
 
 
+def test_followup_after_completed_manual_session_is_sent(store, monkeypatch):
+    from types import SimpleNamespace
+    from app.routers import studio
+    c = run(store.create_conversation('u'))
+    run(store.set_conversation(c['id'], 'u', state={'execution_mode':'manual',
+        'manual_session':{'engine':'talking','index':len(manual.steps('talking')), 'question_id':None}}))
+    calls = []
+    monkeypatch.setattr(studio, 'dispatch_message', lambda *args: calls.append(args))
+    request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id='u')))
+    message = run(studio.send_message(request, c['id'], MessageCreate(content='درستش کن', execution_mode='manual')))
+    assert message['content'] == 'درستش کن'
+    assert calls[0][-1] is None
+    assert calls[0][3] == 'درستش کن'
+
+
+def test_revision_can_remove_incorrect_speaker_identity():
+    from creative.revise import apply_to_talking, RevisionOp
+    result = apply_to_talking({'style':'talking_1'}, [RevisionOp(op='clear_identity')], 1)
+    assert result.changes['name'] == result.changes['title'] == ''
+
+
 def test_caption_preference_only_changes_captions():
     from engine.caption_preferences import caption_font
     original = 'Style: hook,Ray,50\nStyle: key,Ray,42\nStyle: lead,Ray,40\n'

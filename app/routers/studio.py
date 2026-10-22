@@ -249,7 +249,7 @@ async def send_message(request: Request, conversation_id: str, body: MessageCrea
         await repo.get_attachments(body.attachment_ids, conversation_id, user_key)
         display = body.content.strip()
         session = conversation.get('state', {}).get('manual_session')
-        if session and session.get('question_id') == body.manual_question_id:
+        if session and session.get('question_id') and session['question_id'] == body.manual_question_id:
             from app.studio_manual import question
             spec = question(session)
             selected = next((c for c in spec['choices'] if c['value'] == display), None)
