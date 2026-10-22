@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 import { api, StudioConversation, StudioProject } from "../api";
 import { AuthenticatedMedia } from "../AuthenticatedMedia";
 import { Icon } from "../components/Icon";
+import { useFullscreen } from "../components/useFullscreen";
 import { displayTitle } from "../format";
 import { renderView } from "./model";
 import {MotionScenes} from './MotionScenes';
@@ -43,6 +44,9 @@ function PreviewPane({ project, conversation, sourceAttachment, onCancel }: { pr
   const progressAge = useProgressAge(rendering, phase.progress, phase.stageLabel);
   const [versions, setVersions] = React.useState<{file: string; version: number}[]>([]);
   const [selected, setSelected] = React.useState<string | null>(null);
+  const playerRef = React.useRef<HTMLDivElement>(null);
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+  const fullscreen = useFullscreen(playerRef, videoRef);
   React.useEffect(() => {
     let active = true;
     setSelected(null);
@@ -60,10 +64,13 @@ function PreviewPane({ project, conversation, sourceAttachment, onCancel }: { pr
   const busy = view.phase === "queued" || view.phase === "rendering" || view.phase === "finalizing";
   return <div className="ws-preview">
     {versions.length ? <div className="ws-actions" role="group" aria-label="نسخه‌های خروجی">{versions.map(item => <button key={item.file} className="btn btn-sm btn-secondary" aria-pressed={selectedFile === item.file} onClick={() => setSelected(item.file)}>نسخهٔ {item.version}</button>)}</div> : null}
-    <div className="ws-player">
-      {output ? <AuthenticatedMedia as="video" controls playsInline preload="metadata" src={output}/>
-        : source ? <AuthenticatedMedia as="video" controls playsInline preload="metadata" src={source}/>
+    <div className="ws-player" ref={playerRef}>
+      {output ? <AuthenticatedMedia as="video" ref={videoRef} controls playsInline preload="metadata" src={output}/>
+        : source ? <AuthenticatedMedia as="video" ref={videoRef} controls playsInline preload="metadata" src={source}/>
         : <div className="ws-placeholder"><span className="spinner"/><span>{view.stageLabel || "Preparing preview"}</span></div>}
+      {(output || source) ? <button type="button" className="ws-fs" onClick={() => void fullscreen.toggle()} aria-pressed={fullscreen.active}
+        aria-label={fullscreen.active ? "Exit fullscreen" : "Fullscreen"} data-tip={fullscreen.active ? "Exit fullscreen" : "Fullscreen"}>
+        <Icon name={fullscreen.active ? "fullscreenExit" : "fullscreen"} size={18}/></button> : null}
     </div>
     {busy ? <div className="rc-progress">
       <ProgressNotice seconds={progressAge}/>
@@ -140,13 +147,16 @@ function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () =
   </div>;
 }
 
-export function Workspace({ conversation, project, projects, onSelectProject, tab, onTab, sourceAttachment, onCancel, onSaved, onCollapse, showTabs, panelRef }: {
+export function Workspace({ conversation, project, projects, onSelectProject, tab, onTab, sourceAttachment, onCancel, onSaved, onCollapse, showTabs, panelRef, resizer }: {
   conversation: StudioConversation | null; project?: StudioProject; projects: StudioProject[]; onSelectProject: (id: string) => void;
   tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; sourceAttachment?: string; onCancel: () => void; onSaved: () => void;
   onCollapse?: () => void; showTabs: boolean; panelRef?: React.Ref<HTMLElement>;
+  /** Drag handle on the panel's inner edge (desktop only), rendered by the page that owns the layout. */
+  resizer?: React.ReactNode;
 }) {
   const meta = statusMeta(project);
   return <section className="workspace" ref={panelRef} aria-label="Video workspace">
+    {resizer}
     <header className="ws-head">
       {showTabs ? <div className="tabs-bar" role="tablist" aria-label="Workspace">
         {(["preview", "edit"] as WorkspaceTab[]).map(item => <button key={item} role="tab" id={`ws-tab-${item}`} aria-controls={`ws-panel-${item}`} aria-selected={tab === item} tabIndex={tab === item ? 0 : -1} className="tab"

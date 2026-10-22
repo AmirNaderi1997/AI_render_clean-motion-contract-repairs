@@ -7,6 +7,7 @@ import { useStudioLayout } from "./components/hooks";
 import { useTopbarTitle } from "./components/ShellContext";
 import { displayTitle, parseTime, relativeTime } from "./format";
 import { friendlyError } from "./ui";
+import { Resizer, usePanelWidth } from "./components/Resizer";
 import { Composer, PendingFile } from "./studio/Composer";
 import { ManualQuestion } from "./studio/ManualQuestion";
 import { Thread, LocalFileInfo } from "./studio/Thread";
@@ -16,6 +17,9 @@ import { PendingMessage, activeStep, buildTimeline, isProcessing, renderView, th
 import { suggestions, templatePrompts } from "./templateData";
 
 type MobileView = "chat" | WorkspaceTab;
+const WORKSPACE_BOUNDS = { min: 340, max: 1100 };
+/** The chat keeps at least this much room, so the workspace cannot be dragged over it. */
+const MIN_CHAT = 360;
 const lsGet = (key: string, fallback: string) => { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } };
 const lsSet = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* storage unavailable */ } };
 
@@ -47,6 +51,11 @@ export default function Studio() {
   const [stuck, setStuck] = React.useState(true);
   const [now, setNow] = React.useState(() => Date.now());
 
+  const studioRef = React.useRef<HTMLDivElement>(null);
+  const workspaceRef = React.useRef<HTMLElement>(null);
+  const [workspaceWidth, setWorkspaceWidth] = usePanelWidth("editorgpt.workspace.width", WORKSPACE_BOUNDS);
+  const [liveWorkspace, setLiveWorkspace] = React.useState<number | null>(null);
+  const [resizingWorkspace, setResizingWorkspace] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const cursorRef = React.useRef(0);
@@ -311,7 +320,9 @@ export default function Studio() {
     </div>
   </div>;
 
-  return <div className="studio" data-layout={layout} data-ws={wsVisible ? "open" : "closed"} data-view={mobileView}>
+  const shownWorkspace = liveWorkspace ?? workspaceWidth;
+  return <div className="studio" ref={studioRef} data-layout={layout} data-ws={wsVisible ? "open" : "closed"} data-view={mobileView} data-resizing={resizingWorkspace || undefined}
+    style={layout === "desktop" && wsVisible && shownWorkspace ? { ["--ws-w" as string]: `${shownWorkspace}px` } : undefined}>
     <section className="chat-col" aria-label="Conversation" hidden={layout === "mobile" && mobileView !== "chat"}>
       {layout !== "mobile" ? <header className="chat-head">
         <h1 className="chat-title bidi wrap-safe" dir="auto" title={conversation?.title}>{title}</h1>
@@ -355,7 +366,11 @@ export default function Studio() {
 
     {layout === "tablet" && overlayOpen ? <button className="ws-backdrop" onClick={() => setOverlayOpen(false)} aria-label="Close workspace" tabIndex={-1}/> : null}
     <Workspace conversation={conversation} project={current} projects={projects} onSelectProject={setSelectedProject} tab={wsTab} onTab={setWsTab}
-      sourceAttachment={sourceAttachment} onCancel={stop} onSaved={() => void refresh()} showTabs={layout !== "mobile"} onCollapse={layout === "mobile" ? undefined : closeWorkspace}/>
+      sourceAttachment={sourceAttachment} onCancel={stop} onSaved={() => void refresh()} showTabs={layout !== "mobile"} onCollapse={layout === "mobile" ? undefined : closeWorkspace}
+      panelRef={workspaceRef}
+      resizer={layout === "desktop" && wsVisible ? <Resizer panel={workspaceRef} edge="start" label="عرض پنل پیش‌نمایش" width={shownWorkspace}
+        bounds={() => ({ min: WORKSPACE_BOUNDS.min, max: Math.min(WORKSPACE_BOUNDS.max, (studioRef.current?.clientWidth ?? 1400) - MIN_CHAT) })}
+        onResize={setLiveWorkspace} onDragState={setResizingWorkspace} onCommit={value => { setWorkspaceWidth(value); setLiveWorkspace(null); }}/> : undefined}/>
 
     {layout === "mobile" ? <nav className="studio-tabs" aria-label="Studio views">
       {([["chat", "Chat", "spark"], ["preview", "Preview", "eye"], ["edit", "Edit", "edit"]] as const).map(([id, label, icon]) => <button key={id} aria-current={mobileTab === id ? "page" : undefined}
