@@ -27,6 +27,9 @@ export function Composer(props: ComposerProps) {
   const ref = props.textareaRef || own;
   const fileInput = React.useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = React.useState(false);
+  const [templateMenu, setTemplateMenu] = React.useState(false);
+  const menuFirst = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => { menuFirst.current?.focus({ preventScroll: true }); }, [templateMenu]);
   const uploading = files.some(file => !file.attachmentId);
 
   // Auto-resize: grows with content up to a cap, then scrolls.
@@ -58,12 +61,17 @@ export function Composer(props: ComposerProps) {
         onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); } }}/>
 
       <div className="composer-bar">
-        <Menu label="Add to message" side="top" trigger={triggerProps => <button type="button" className="icon-btn" {...triggerProps} aria-label="Attach or choose a template" data-tip="Attach or choose a template" data-tip-pos="top"><Icon name="plus" size={20}/></button>}>
+        <Menu label={templateMenu ? "Templates" : "Add to message"} side="top" trigger={triggerProps => <button type="button" className="icon-btn" {...triggerProps} onClick={() => { setTemplateMenu(false); triggerProps.onClick(); }} aria-label="Attach or choose a template" data-tip="Attach or choose a template" data-tip-pos="top"><Icon name="plus" size={20}/></button>}>
           {close => <>
-            <button role="menuitem" className="menu-item" onClick={() => { close(); fileInput.current?.click(); }}><Icon name="paperclip" size={18}/><span>Add video, image or audio</span></button>
-            <div className="menu-sep"/>
-            <div className="menu-label">Templates</div>
-            {templates.slice(0, 6).map(item => <button key={item.id} role="menuitem" className="menu-item" onClick={() => { setText(item.prompt); close(); ref.current?.focus(); }}><Icon name={item.icon} size={18}/><span>{item.title}</span></button>)}
+            {templateMenu ? <>
+              <button ref={menuFirst} type="button" role="menuitem" className="menu-item" onClick={() => setTemplateMenu(false)}><Icon name="chevronLeft" size={18}/><span>Back</span></button>
+              <div className="menu-sep"/>
+              <div className="menu-label">Templates</div>
+              {templates.map(item => <button type="button" key={item.id} role="menuitem" className="menu-item" onClick={() => { setText(item.prompt); close(); ref.current?.focus(); }}><Icon name={item.icon} size={18}/><span>{item.title}</span></button>)}
+            </> : <>
+              <button ref={menuFirst} type="button" role="menuitem" className="menu-item" onClick={() => { close(); fileInput.current?.click(); }}><Icon name="paperclip" size={18}/><span>Attach media</span></button>
+              <button type="button" role="menuitem" className="menu-item" onClick={() => setTemplateMenu(true)}><Icon name="grid" size={18}/><span>Templates</span><Icon name="chevron" size={14}/></button>
+            </>}
           </>}
         </Menu>
         <input ref={fileInput} type="file" multiple hidden accept="video/*,image/*,audio/*" onChange={event => { const picked = Array.from(event.target.files || []); event.target.value = ""; if (picked.length) void onFiles(picked); }}/>
