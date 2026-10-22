@@ -266,6 +266,8 @@ function TimelineReview({ jobId, state, disabled, onChange }: {
           background: settings.grade.temperature > 0 ? "#ff8a3d" : "#4b8dff", mixBlendMode: "soft-light",
           opacity: Math.abs(settings.grade.temperature) / 250 }} />}
         <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none", boxShadow: `inset 0 0 ${settings.grade.vignette * 1.4}px rgba(0,0,0,${settings.grade.vignette / 125})` }} />
+        <div aria-hidden style={{ position: "absolute", inset: "72% 0 0", pointerEvents: "none",
+          background: `linear-gradient(to bottom, transparent, rgba(0,0,0,${(settings.bottom_shade ?? 0) / 100}))` }} />
       </div>
       <div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
@@ -274,6 +276,12 @@ function TimelineReview({ jobId, state, disabled, onChange }: {
               onChange={e => setGrade(item.key, Number(e.target.value))} />
           </label>)}
         </div>
+        <label style={{ display: "grid", gap: 4, marginTop: 14 }}>شدت فید مشکی پایین: {settings.bottom_shade ?? 0}%
+          <input aria-label="شدت فید مشکی پایین" type="range" min="0" max="60" step="1"
+            value={settings.bottom_shade ?? 0} disabled={disabled}
+            onChange={e => onChange({ ...settings, bottom_shade: Number(e.target.value) })} />
+          <span className="muted">پیش‌نمایش زنده؛ برای اعمال روی فایل نهایی، رندر را بزنید.</span>
+        </label>
         <div className="row" style={{ marginTop: 14 }}>
           <label><input type="checkbox" checked={settings.zoom.enabled} disabled={disabled}
             onChange={e => onChange({ ...settings, zoom: { ...settings.zoom, enabled: e.target.checked } })} /> زوم‌های دوربین</label>
