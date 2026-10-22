@@ -41,13 +41,15 @@ Any edit that changes output creates a new plan version and clears approval.
 
 Each phase ships working, tested behaviour end to end; nothing is a UI-only label.
 
-1. **Approval and personalization (this branch).** Versioned Creative Plan for Talking projects built
+1. **Approval and personalization — done.** Versioned Creative Plan for Talking projects built
    from real analysis; mandatory approval in Auto and Manual modes; plan edits by chat and by form, each a
    new version; concept cards with real-frame style mockups (libass, Ray font); brand profile that fills
    plans and is updated from answers, so known values are not asked again. Localize and Motion keep their
    existing gates in this phase.
-2. **Project Document + read-only timeline.** Adapters convert Talking/Localize/Motion state into tracks
-   and elements with stable ids; the Edit tab shows the real timeline of what was rendered.
+2. **Project Document + read-only timeline — done for Talking.** `app/project_document.py` builds tracks and
+   elements with stable ids from `talking_reel.plan_render`, the same plan the renderer uses (no media is generated
+   to read it). The Edit tab shows it with the rendered video; each element states how it can be changed today.
+   Localize and Motion adapters follow with phase 3.
 3. **Timeline renderer.** A document-driven compositor (MLT, extending `engine/build_mlt.py`) so manual
    edits to clips, titles, captions and audio render for real; Talking styles become document producers.
 4. **Element editing.** Captions/on-screen text (drag, font, colour, animation, RTL), B-roll replace and

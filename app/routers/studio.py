@@ -573,3 +573,30 @@ async def get_profile_logo(request: Request):
     path = brand_profile.logo_path(_user(request))
     if not path: raise HTTPException(404, 'no logo')
     return FileResponse(path, media_type='image/png')
+
+
+# -- Project Document (timeline) -------------------------------------------------------------------
+
+@router.get('/projects/{project_id}/document')
+async def project_document(request: Request, project_id: str):
+    """The project's timeline built from the exact render plan; read-only in this phase."""
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    if project['engine'] != 'talking':
+        raise HTTPException(409, 'The timeline is available for talking-head projects first')
+    job = jobstore.get(project.get('external_ref'))
+    if not job: raise HTTPException(404, 'render job not found')
+    from app import project_document as documents
+    from app import talking_reel
+    if not talking_reel.load(job.dir).get('analysis_ready'):
+        raise HTTPException(409, 'The timeline appears once the video has been analysed')
+    try:
+        document = await asyncio.to_thread(documents.talking_document, job.dir, job.dir / 'raw' / job.raw_name)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    plan = project['state'].get('plan') or {}
+    versions = plan.get('versions') or []
+    document['basis'] = {'plan_version': versions[-1]['n'] if versions else None,
+                         'rendered_version': plan.get('last_approved_n'),
+                         'workflow': project['state'].get('workflow')}
+    return document

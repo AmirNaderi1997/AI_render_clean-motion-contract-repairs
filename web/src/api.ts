@@ -202,6 +202,18 @@ export type PlanEdits = Partial<{
   key_moments: boolean; logo_enabled: boolean; logo_motion: string; name: string; tagline: string; cta: string;
   concept_id: string; style: string;
 }>;
+/** Engine-neutral project timeline (app/project_document.py). Read-only in this phase. */
+export interface DocElement {
+  id: string; type: string; start: number; end: number; label: string; text: string;
+  source: { kind?: string; label?: string; file?: string | null; in?: number; out?: number };
+  props: Record<string, any>; edit: { via: ("plan" | "chat")[]; note: string };
+}
+export interface DocTrack { id: string; kind: string; label: string; elements: DocElement[] }
+export interface ProjectDocument {
+  schema: number; engine: string; style: string; canvas: { width: number; height: number; fps: number };
+  duration: number; content_duration: number; tracks: DocTrack[];
+  basis: { plan_version: number | null; rendered_version: number | null; workflow: string | null };
+}
 export interface BrandProfile {
   name: string; tagline: string; cta: string; accent_color: string; caption_font: string; logo_motion: string;
   answered: string[]; has_logo: boolean; updated_at: number | null;
@@ -1083,6 +1095,9 @@ export const api = {
   },
   async editStudioPlan(id: string, versionId: string, edits: PlanEdits): Promise<StudioProject> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/plan`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId, edits }) }));
+  },
+  async studioDocument(id: string): Promise<ProjectDocument> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/document`));
   },
   studioPlanFrameUrl(id: string, frame: string): string { return `${BASE}/studio/projects/${id}/plan/frames/${frame}`; },
   async getBrandProfile(): Promise<BrandProfile> {

@@ -189,6 +189,7 @@ def approve(state: dict, version_id: str) -> dict:
     state = copy.deepcopy(state)
     state["plan"]["approved_id"] = version_id
     state["plan"]["approved_at"] = time.time()
+    state["plan"]["last_approved_n"] = version["n"]   # kept when later versions clear approval: what the video shows
     state["workflow"] = "approved"
     return state
 

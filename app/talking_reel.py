@@ -13,6 +13,7 @@ import logging
 import re
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -536,20 +537,8 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
             state["hook"] = decisions["hook"]
             state["hook_highlight"] = decisions["hook_highlight"]
         save(job_dir, state)
-    decisions = {**decisions, "captions": {int(k): v for k, v in decisions["captions"].items()}}
-    settings = state.get("render_settings") or DEFAULTS["render_settings"]
-    decisions = _apply_timeline_choices(decisions, "talking_1", settings)
-
-    _stage(job_dir, "tracking the face", progress=35)
-    faces_path = job_dir / "talking_reel_faces.json"
-    if faces_path.is_file():
-        faces = [tuple(f) for f in json.loads(faces_path.read_text())]
-    else:
-        faces = media.track_faces(video)
-        faces_path.write_text(json.dumps(faces))
-
-    plan = media.plan_reel(transcript, decisions, faces, float(transcript.get("duration") or 0)
-                           or media.probe_video(video)[2])
+    planned = plan_render(job_dir, video)
+    settings, plan = planned.settings, planned.plan
     _stage(job_dir, "rendering", progress=45)
     exports = job_dir / "exports"
     exports.mkdir(exist_ok=True)
@@ -624,11 +613,14 @@ def _library_pictures() -> list[dict]:
             and (PROJECT_ROOT / a["path"]).is_file()]
 
 
-def resolve_pictures(job_dir: Path, decisions: dict, style: str) -> tuple[dict[int, str], list[dict]]:
+def resolve_pictures(job_dir: Path, decisions: dict, style: str, *,
+                     generate_missing: bool = True) -> tuple[dict[int, str], list[dict]]:
     """Picture per B-roll slot: the creator's upload, then a library image, then an AI image.
 
     Returns ({sentence index: path}, slots for the settings card). Slots
     with no picture are drawn as text cards. AI images are cached by prompt.
+    With ``generate_missing`` False nothing is generated: AI slots without a cached
+    image stay in the result with source "ai_planned" and their future cache path.
     """
     import hashlib
     from concurrent.futures import ThreadPoolExecutor
@@ -673,6 +665,14 @@ def resolve_pictures(job_dir: Path, decisions: dict, style: str) -> tuple[dict[i
         result = get_provider(provider_name).generate_image(prompt, "1:1", dst.parent)
         Path(result.file_path).replace(dst)
 
+    if not generate_missing:
+        for entry in slots:
+            if entry["file"] and Path(entry["file"]).is_file():
+                pictures[entry["i"]] = entry["file"]
+            elif entry["source"] == "ai":
+                entry["source"] = "ai_planned"
+                pictures[entry["i"]] = entry["file"]
+        return pictures, slots
     with ThreadPoolExecutor(max_workers=4) as pool:
         for item, outcome in zip(wanted_ai, pool.map(lambda i: _try(generate, i), wanted_ai)):
             if outcome:
@@ -764,6 +764,139 @@ def _apply_timeline_choices(decisions: dict, style: str, settings: dict) -> dict
     return result
 
 
+@dataclass
+class PlannedReel:
+    """Everything a render is built from. The render and the project timeline both use this, so the
+    timeline always shows exactly what the renderer will produce."""
+    style: str
+    media: object
+    transcript: dict
+    decisions: dict
+    settings: dict
+    plan: object
+    visual_plan: object = None
+    pictures: dict = field(default_factory=dict)
+    slots: list = field(default_factory=list)
+    hyperframes: bool = False
+
+
+def plan_render(job_dir: Path, video: Path, *, prepare_media: bool = True) -> PlannedReel:
+    """The render plan for the job's current decisions.
+
+    ``prepare_media`` False is for reading only: no picture is generated, no face tracking runs and no
+    transcription is requested; AI pictures that do not exist yet appear as "ai_planned" slots."""
+    style = str(load(job_dir).get("style") or "talking_1")
+    if style in SPLIT_STYLES:
+        return _plan_split(job_dir, video, style, prepare_media=prepare_media)
+    return _plan_talking_1(job_dir, video, prepare_media=prepare_media)
+
+
+def _planning_transcript(job_dir: Path, video: Path, prepare_media: bool) -> dict:
+    if prepare_media:
+        return transcript_for(job_dir, video)
+    path = job_dir / "transcript.json"
+    if not path.is_file():
+        raise ValueError("analyze the video before reading its timeline")
+    return json.loads(path.read_text())
+
+
+def _cached_faces(job_dir: Path) -> list:
+    path = job_dir / "talking_reel_faces.json"
+    return [tuple(f) for f in json.loads(path.read_text())] if path.is_file() else []
+
+
+def _plan_talking_1(job_dir: Path, video: Path, *, prepare_media: bool) -> PlannedReel:
+    from engine.talking_reel import get_style
+    media = get_style("talking_1")
+    transcript = _planning_transcript(job_dir, video, prepare_media)
+    state = load(job_dir)
+    if not state.get("decisions"):
+        raise ValueError("analyze the video before planning the render")
+    decisions = {**state["decisions"], "captions": {int(k): v for k, v in state["decisions"]["captions"].items()}}
+    settings = state.get("render_settings") or DEFAULTS["render_settings"]
+    decisions = _apply_timeline_choices(decisions, "talking_1", settings)
+    if prepare_media:
+        _stage(job_dir, "tracking the face", progress=35)
+    faces = _faces(job_dir, video, media) if prepare_media else _cached_faces(job_dir)
+    plan = media.plan_reel(transcript, decisions, faces, float(transcript.get("duration") or 0)
+                           or media.probe_video(video)[2])
+    return PlannedReel("talking_1", media, transcript, decisions, settings, plan)
+
+
+def _plan_split(job_dir: Path, video: Path, style: str, *, prepare_media: bool) -> PlannedReel:
+    from app.config import settings
+    from engine.talking_reel import get_style
+    _brain_name, decisions_key, _music = SPLIT_STYLES[style]
+    media = get_style(style)
+    transcript = _planning_transcript(job_dir, video, prepare_media)
+    state = load(job_dir)
+    decisions = state.get(decisions_key)
+    if not decisions:
+        raise ValueError("analyze the video before planning the render")
+    decisions = {**decisions, "captions": {int(k): v for k, v in decisions["captions"].items()},
+                 "hook": load(job_dir).get("hook2") or decisions["hook"]}
+    render_settings = state.get("render_settings") or DEFAULTS["render_settings"]
+    decisions = _apply_timeline_choices(decisions, style, render_settings)
+    motion_panels={}
+    panel_manifest=job_dir/'generated'/'motion_so'/'talking_panels.json'
+    if style=='talking_2' and panel_manifest.is_file():
+        for row in json.loads(panel_manifest.read_text()).get('panels',[]):
+            key=str(row.get('clip',''))
+            if not re.fullmatch('[a-f0-9]{24}',key):continue
+            clip=panel_manifest.parent/(key+'.mp4')
+            index=int(row['sentence'])
+            if clip.is_file() and 0<=index<len(transcript['sentences']):motion_panels[index]=str(clip)
+    hyperframes = style == "talking_2" and settings.TALKING_HYPERFRAMES_ENABLED
+    if motion_panels:
+        # Explicitly chosen Motion panels use the native split renderer. They do
+        # not trigger HyperFrames, image generation, or media regeneration.
+        hyperframes=False
+        decisions={**decisions,'broll':[{'i':i,'label':'Motion'} for i in sorted(motion_panels)],
+                   'chips':[c for c in decisions.get('chips',[]) if int(c['i']) not in motion_panels]}
+    if prepare_media:
+        _stage(job_dir, "planning visual beats" if hyperframes else "finding pictures", progress=25)
+    if motion_panels:
+        pictures=motion_panels
+        slots=[{'i':i,'source':'motion_so','status':'ready'} for i in sorted(motion_panels)]
+    elif hyperframes:
+        # A neutral placeholder makes the proven style-2 renderer place the
+        # speaker in the lower half. HyperFrames paints over the upper card,
+        # so motion graphics never cover the speaker's face.
+        from PIL import Image
+
+        placeholder = job_dir / "talking_reel_work" / "motion_placeholder.png"
+        placeholder.parent.mkdir(parents=True, exist_ok=True)
+        if not placeholder.is_file():
+            Image.new("RGB", (1080, 1080), "#F3F0E8").save(placeholder)
+        pictures = {int(item["i"]): str(placeholder) for item in decisions.get("broll") or []}
+        slots = [{"i": item["i"], "source": "motion", "status": "planned"}
+                 for item in decisions.get("broll") or []]
+    else:
+        pictures, slots = resolve_pictures(job_dir, decisions, style, generate_missing=prepare_media)
+    if prepare_media and not hyperframes and style in {"talking_2", "talking_3"} and decisions.get("broll"):
+        required = min(2, len(decisions["broll"]))
+        if len(pictures) < required:
+            raise RuntimeError("Enough AI visuals were not generated. Check the image provider, then analyze and render again.")
+        # A failed image slot should return to the real speaker, never become
+        # an unattractive text-card substitute.
+        decisions = {
+            **decisions,
+            "broll": [item for item in decisions["broll"] if item["i"] in pictures],
+        }
+    if prepare_media:
+        _stage(job_dir, "tracking the face", progress=35, slots=slots)
+    faces = _faces(job_dir, video, media) if prepare_media else _cached_faces(job_dir)
+    source_duration = float(transcript.get("duration") or 0) or media.probe_video(video)[2]
+    visual_plan = media.plan_reel(transcript, decisions, faces, source_duration, pictures)
+    # The rough cut stays clean: HyperFrames owns the visual beats, while the
+    # proven FFmpeg renderer keeps cuts, audio, face framing and Ray captions.
+    clean_decisions = {**decisions, "chips": [], "broll": []} if hyperframes else decisions
+    plan = media.plan_reel(transcript, clean_decisions, faces, source_duration,
+                           {} if hyperframes else pictures)
+    return PlannedReel(style, media, transcript, decisions, render_settings, plan, visual_plan,
+                       pictures, slots, hyperframes)
+
+
 def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> None:
     """The split-screen styles ("صحبتی ۲", "صحبتی ۳"): pictures on top, the speaker below."""
     from importlib import import_module
@@ -786,64 +919,9 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         if regenerate or not state.get("hook2"):
             state["hook2"] = decisions["hook"]
         save(job_dir, state)
-    decisions = {**decisions, "captions": {int(k): v for k, v in decisions["captions"].items()},
-                 "hook": load(job_dir).get("hook2") or decisions["hook"]}
-    render_settings = state.get("render_settings") or DEFAULTS["render_settings"]
-    decisions = _apply_timeline_choices(decisions, style, render_settings)
-    motion_panels={}
-    panel_manifest=job_dir/'generated'/'motion_so'/'talking_panels.json'
-    if style=='talking_2' and panel_manifest.is_file():
-        for row in json.loads(panel_manifest.read_text()).get('panels',[]):
-            key=str(row.get('clip',''))
-            if not re.fullmatch('[a-f0-9]{24}',key):continue
-            clip=panel_manifest.parent/(key+'.mp4')
-            index=int(row['sentence'])
-            if clip.is_file() and 0<=index<len(transcript['sentences']):motion_panels[index]=str(clip)
-    hyperframes = style == "talking_2" and settings.TALKING_HYPERFRAMES_ENABLED
-    if motion_panels:
-        # Explicitly chosen Motion panels use the native split renderer. They do
-        # not trigger HyperFrames, image generation, or media regeneration.
-        hyperframes=False
-        decisions={**decisions,'broll':[{'i':i,'label':'Motion'} for i in sorted(motion_panels)],
-                   'chips':[c for c in decisions.get('chips',[]) if int(c['i']) not in motion_panels]}
-    _stage(job_dir, "planning visual beats" if hyperframes else "finding pictures", progress=25)
-    if motion_panels:
-        pictures=motion_panels
-        slots=[{'i':i,'source':'motion_so','status':'ready'} for i in sorted(motion_panels)]
-    elif hyperframes:
-        # A neutral placeholder makes the proven style-2 renderer place the
-        # speaker in the lower half. HyperFrames paints over the upper card,
-        # so motion graphics never cover the speaker's face.
-        from PIL import Image
-
-        placeholder = job_dir / "talking_reel_work" / "motion_placeholder.png"
-        placeholder.parent.mkdir(parents=True, exist_ok=True)
-        if not placeholder.is_file():
-            Image.new("RGB", (1080, 1080), "#F3F0E8").save(placeholder)
-        pictures = {int(item["i"]): str(placeholder) for item in decisions.get("broll") or []}
-        slots = [{"i": item["i"], "source": "motion", "status": "planned"}
-                 for item in decisions.get("broll") or []]
-    else:
-        pictures, slots = resolve_pictures(job_dir, decisions, style)
-    if not hyperframes and style in {"talking_2", "talking_3"} and decisions.get("broll"):
-        required = min(2, len(decisions["broll"]))
-        if len(pictures) < required:
-            raise RuntimeError("Enough AI visuals were not generated. Check the image provider, then analyze and render again.")
-        # A failed image slot should return to the real speaker, never become
-        # an unattractive text-card substitute.
-        decisions = {
-            **decisions,
-            "broll": [item for item in decisions["broll"] if item["i"] in pictures],
-        }
-    _stage(job_dir, "tracking the face", progress=35, slots=slots)
-    faces = _faces(job_dir, video, media)
-    source_duration = float(transcript.get("duration") or 0) or media.probe_video(video)[2]
-    visual_plan = media.plan_reel(transcript, decisions, faces, source_duration, pictures)
-    # The rough cut stays clean: HyperFrames owns the visual beats, while the
-    # proven FFmpeg renderer keeps cuts, audio, face framing and Ray captions.
-    clean_decisions = {**decisions, "chips": [], "broll": []} if hyperframes else decisions
-    plan = media.plan_reel(transcript, clean_decisions, faces, source_duration,
-                           {} if hyperframes else pictures)
+    planned = plan_render(job_dir, video)
+    decisions, transcript, hyperframes = planned.decisions, planned.transcript, planned.hyperframes
+    render_settings, visual_plan, plan = planned.settings, planned.visual_plan, planned.plan
     _stage(job_dir, "rendering", progress=45)
     out = _next_output(job_dir)
     state = load(job_dir)
