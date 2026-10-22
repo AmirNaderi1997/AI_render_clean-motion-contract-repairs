@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import re
 import threading
@@ -789,13 +790,13 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                 await _announce_creative(conversation_id, user_key, project, status)
                 if raw_status == 'ready' and project['state'].get('manual_answers') and not project['state'].get('manual_preferences_applied'):
                     from app.studio_manual import apply_talking_preferences
-                    apply_talking_preferences(conversation_id, user_key, project, job, status)
+                    await asyncio.to_thread(apply_talking_preferences, conversation_id, user_key, project, job, status)
                     project['state'] = {**project['state'], 'manual_preferences_applied': True}
                 if raw_status == 'ready' and project['state'].get('manual_mode') and not project['state'].get('manual_render_approved'):
                     from app.studio_manual import render_checkpoint, talking_changes, apply_talking_preferences
                     changes = talking_changes(project['state'].get('manual_answers', {}), status)
                     if not project['state'].get('manual_preferences_applied'):
-                        apply_talking_preferences(conversation_id, user_key, project, job, status)
+                        await asyncio.to_thread(apply_talking_preferences, conversation_id, user_key, project, job, status)
                         project['state'] = {**project['state'], 'manual_preferences_applied': True}
                     if await render_checkpoint(conversation_id, user_key, project,
                         {'style': status.get('style'), 'hook': status.get('hook2') or status.get('hook'),

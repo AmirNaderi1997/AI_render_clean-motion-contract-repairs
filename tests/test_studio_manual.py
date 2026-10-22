@@ -19,6 +19,24 @@ def store(tmp_path, monkeypatch):
 def run(coro): return asyncio.run(coro)
 
 
+def test_ready_job_applies_attachment_preferences_outside_async_loop(store, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from app import studio_orchestrator as o, talking_reel
+    c=run(store.create_conversation('u'))
+    p=run(store.create_project(c['id'],'u','talking','test',
+        {'manual_answers':{'name':'Mahtab'}, 'auto_render':True},'job'))
+    monkeypatch.setattr(o.jobstore,'get',lambda _:SimpleNamespace(dir=tmp_path,raw_name='source.mp4'))
+    monkeypatch.setattr(talking_reel,'load',lambda _:{'status':'ready','stage':'','progress':100})
+    monkeypatch.setattr(talking_reel,'public',lambda s:s)
+    # The real attachment adapter resolves ownership using repo.run().
+    monkeypatch.setattr(manual,'apply_talking_preferences',lambda *args:run(asyncio.sleep(0)))
+    starts=[]
+    monkeypatch.setattr(talking_reel,'start',lambda *args,**kw:starts.append(args))
+    run(o.sync_conversation(c['id'],'u'))
+    assert len(starts)==1
+    assert run(store.get_project(p['id'],'u'))['state']['manual_preferences_applied'] is True
+
+
 def test_phase_narration_is_deduplicated_and_never_restarts_render(store, monkeypatch, tmp_path):
     from types import SimpleNamespace
     from app import studio_orchestrator as o, talking_reel

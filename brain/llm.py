@@ -192,6 +192,7 @@ def chat_vision(
     temperature: float = 0.3,
     return_json: bool = False,
     timeout_seconds: Optional[float] = None,
+    route: str = "video_understanding",
 ) -> tuple[str | dict, LLMUsage]:
     """Image-capable call for content generation, editing, and engagement hints.
 
@@ -213,8 +214,9 @@ def chat_vision(
                 url = f"data:{media_type};base64,{b64}"
             content.append({"type":"image_url","image_url":{"url":url}})
         content.append({"type":"text","text":user})
-        data, record = complete("video_understanding", [{"role":"system","content":system},
-            {"role":"user","content":content}], required={"chat","vision"}, tokens=max_tokens)
+        data, record = complete(route, [{"role":"system","content":system},
+            {"role":"user","content":content}], required={"chat","vision"}, tokens=max_tokens,
+            validate_response=_extract_json if return_json else None)
         value = text("chat", data)
         usage = LLMUsage(input_tokens=record.get("input_tokens") or 0, output_tokens=record.get("output_tokens") or 0,
             model=record.get("actual_model") or record["requested_model"], elapsed_sec=record["latency_ms"]/1000)
@@ -386,12 +388,21 @@ def _log_usage(usage: LLMUsage, *, preset: str = "",
 
 
 def _extract_json(text: str) -> dict:
-    """Extract JSON from LLM response, handling markdown fences."""
+    """Accept one structured document, including a fenced document plus prose.
+
+    Never silently choose between two documents or repair invalid JSON values.
+    Downstream task schemas still validate the returned structure.
+    """
     text = text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = lines[1:]  # drop ```json
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines)
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as original:
+        import re
+        fences = list(re.finditer(r'```(?:json)?\s*\n(.*?)```', text, re.DOTALL | re.IGNORECASE))
+        if len(fences) == 1:
+            match = fences[0]
+            surrounding = text[:match.start()] + text[match.end():]
+            if any(char in surrounding for char in '{['):
+                raise ValueError('پاسخ مدل شامل چند ساختار یا بخش مبهم است؛ برنامه اجرا نشد.') from original
+            return json.loads(match.group(1).strip())
+        raise ValueError('پاسخ ساختاریافتهٔ مدل معتبر نیست؛ برنامه اجرا نشد و نیاز به بررسی دارد.') from original
