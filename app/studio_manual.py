@@ -76,6 +76,8 @@ def answer(cid, user, session, response, text, attachment_ids):
         raise ValueError("این سؤال دیگر فعال نیست؛ انتخاب فعلی چت را پاسخ بدهید.")
     spec = steps(session["engine"])[session["index"]]
     value = text.strip()
+    if spec['key'] == 'logo_asset' and attachment_ids and value not in {'existing', 'attached'}:
+        value = 'attached'
     values = {c["value"] for c in spec["choices"]}
     if value not in values and not spec.get("input"):
         raise ValueError("یکی از گزینه‌های همین مرحله را انتخاب کنید.")

@@ -197,7 +197,7 @@ export default function Studio() {
     if (!authenticated) { requireLogin(); return; }
     const source = resend?.text ?? override ?? text;
     const ids = resend?.ids ?? files.map(item => item.attachmentId!).filter(Boolean);
-    const finalText = source.trim() || (ids.length ? "این فایل را بررسی کن و برای تدوین آماده کن" : "");
+    const finalText = source.trim() || (ids.length ? (manualQuestion?.key === "logo_asset" ? "attached" : "این فایل را بررسی کن و برای تدوین آماده کن") : "");
     if (!finalText || sending) return;
     if (!resend && files.some(item => !item.attachmentId)) { setError("Please wait for the uploads to finish."); return; }
     // Show the message and the processing state immediately.

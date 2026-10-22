@@ -134,6 +134,17 @@ def test_revision_can_remove_incorrect_speaker_identity():
     assert result.changes['name'] == result.changes['title'] == ''
 
 
+def test_logo_file_only_message_answers_logo_step(store):
+    c = run(store.create_conversation('u'))
+    image = run(store.create_attachment(c['id'], 'u', kind='image', filename='logo.png', path='/logo', mime_type='image/png', size_bytes=1))
+    s = manual.begin(c['id'], 'u', 'talking', 'تدوین', [])
+    s['index'] = next(i for i,v in enumerate(manual.steps('talking')) if v['key']=='logo_asset')
+    manual.save(c['id'], 'u', s)
+    s = manual.answer(c['id'], 'u', s, s['question_id'], 'این فایل را بررسی کن و برای تدوین آماده کن', [image['id']])
+    assert s['logo_attachment_id'] == image['id']
+    assert s['answers']['logo_asset'] == 'attached'
+
+
 def test_caption_preference_only_changes_captions():
     from engine.caption_preferences import caption_font
     original = 'Style: hook,Ray,50\nStyle: key,Ray,42\nStyle: lead,Ray,40\n'
