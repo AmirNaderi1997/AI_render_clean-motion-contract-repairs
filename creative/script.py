@@ -103,7 +103,11 @@ def script_text(draft: ScriptDraft) -> str:
     return "\n".join(f"{line.id}: {line.narration}" for line in draft.lines)
 
 
-def measure(draft: ScriptDraft, duration_s: float, *, outro_s: float = 0.0) -> dict:
+def _plain(text: str) -> str:
+    return re.sub(r"[\u200c\s]+", "", str(text).replace("ي", "ی").replace("ك", "ک"))
+
+
+def measure(draft: ScriptDraft, duration_s: float, *, outro_s: float = 0.0, must_name: tuple | list = ()) -> dict:
     """Facts about the script that need no model: what the critic is shown, and what can force a rewrite regardless of scores."""
     narrations = [line.narration for line in draft.lines]
     seconds = [round(speech.speech_seconds(text), 2) for text in narrations]
@@ -116,6 +120,13 @@ def measure(draft: ScriptDraft, duration_s: float, *, outro_s: float = 0.0) -> d
         problems.append(f"نریشن حدود {total:.1f} ثانیه طول می‌کشد و بیشتر از ظرفیت {limit:.1f} ثانیهٔ این ویدیو است.")
     elif total < limit * 0.45 and duration_s >= 12:
         problems.append(f"نریشن فقط حدود {total:.1f} ثانیه از {limit:.1f} ثانیهٔ ممکن را پر می‌کند؛ ویدیو خالی و کشدار می‌شود.")
+    spoken = _plain(" ".join(narrations))
+    missing = [term for term in must_name if _plain(term) and _plain(term) not in spoken]
+    if missing:
+        problems.append("موضوع ویدیو در گفتار نیامده؛ این واژه‌ها باید شنیده شوند: " + "، ".join(f"«{t}»" for t in missing))
+    opening = _plain(" ".join(narrations[:2]))
+    if must_name and not any(_plain(term) in opening for term in must_name if _plain(term)) and not missing:
+        notes.append("هیچ‌کدام از واژه‌های موضوع در دو جملهٔ اول نیامده؛ بیننده دیر می‌فهمد ویدیو دربارهٔ چیست.")
     found = sorted({phrase for phrase in CLICHES if phrase in " ".join(narrations)})
     if found:
         problems.append("عبارت‌های کلیشه‌ای: " + "، ".join(f"«{p}»" for p in found))
@@ -223,7 +234,7 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
     report = ScriptReport(structure=draft.structure)
     review: ScriptReview | None = None
     for attempt in range(rewrites + 1):
-        measured = measure(draft, duration_s, outro_s=outro_s)
+        measured = measure(draft, duration_s, outro_s=outro_s, must_name=brief.must_name)
         try:
             review = critique(draft, brief, concept, reference, measured, used=used)
         except CreativeUnavailable as exc:
@@ -249,7 +260,7 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
             report.history[-1]["rewrite_rejected"] = "فقط واژه‌ها جابه‌جا شده بود"
             continue
         draft = candidate
-    final = measure(draft, duration_s, outro_s=outro_s)
+    final = measure(draft, duration_s, outro_s=outro_s, must_name=brief.must_name)
     # Fitting the video is not a matter of taste: if the script still overruns, tighten it (at most twice, no critic call).
     for _ in range(2):
         if final["total_speech_s"] <= final["budget_s"] or time.monotonic() - started > budget_s * 1.25:
@@ -264,7 +275,7 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
         except CreativeUnavailable as exc:
             log.warning("script tightening unavailable: %s", exc)
             break
-        after = measure(tighter, duration_s, outro_s=outro_s)
+        after = measure(tighter, duration_s, outro_s=outro_s, must_name=brief.must_name)
         report.history.append({"attempt": report.attempts, "tighten": True, "speech_s_before": final["total_speech_s"], "speech_s_after": after["total_speech_s"]})
         if after["total_speech_s"] < final["total_speech_s"]:
             draft, final = tighter, after

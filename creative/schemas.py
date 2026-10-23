@@ -51,13 +51,14 @@ class ContentBrief(_Model):
     key_moments: list[KeyMoment] = Field(default_factory=list)
     proof_points: list[str] = Field(default_factory=list)   # facts actually present in the source
     must_not: list[str] = Field(default_factory=list)       # claims/edits that would distort the source
+    must_name: list[str] = Field(default_factory=list)      # the 2-4 terms a viewer must hear to know what the video is about
 
     @field_validator("topic", "core_message", "audience", "goal", "tone", mode="before")
     @classmethod
     def _clean(cls, value):
         return _text(value)
 
-    @field_validator("emotional_arc", "proof_points", "must_not", mode="before")
+    @field_validator("emotional_arc", "proof_points", "must_not", "must_name", mode="before")
     @classmethod
     def _list(cls, value):
         return _texts(value)

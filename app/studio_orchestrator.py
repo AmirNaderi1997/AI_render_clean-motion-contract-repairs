@@ -524,7 +524,8 @@ def _reference_message(profile) -> str:
         rows.append(("رنگ‌های غالب", "، ".join(profile.palette)))
     rows.append(("صدا", profile.sound))
     note = f"\n\n{profile.reason}" if profile.reason else ""
-    return "**رفرنس را دیدم و تحلیل کردم**\n" + "\n".join(f"• {label}: {value}" for label, value in rows if value) + \
+    described = any((profile.typography, profile.composition, profile.motion_language, profile.overall_feel))
+    return ("**رفرنس را دیدم و تحلیل کردم**\n" if described else "**ریتم و رنگ رفرنس را اندازه گرفتم (توصیف بصری انجام نشد)**\n") + "\n".join(f"• {label}: {value}" for label, value in rows if value) + \
         "\n\nتکنیک و زبان بصری را بازتولید می‌کنم، نه محتوای اختصاصی آن را." + note
 
 

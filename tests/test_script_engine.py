@@ -3,7 +3,8 @@ import pytest
 from creative import llm, script, speech
 from creative.schemas import (Concept, ContentBrief, CreativeUnavailable, CriterionScore, ScriptDraft, ScriptLine, ScriptReview)
 
-BRIEF = ContentBrief(kind="idea", topic="جایگزینی تدوینگرها با هوش مصنوعی", core_message="هوش مصنوعی اجرا را می‌گیرد، سلیقه را نه")
+BRIEF = ContentBrief(kind="idea", topic="جایگزینی تدوینگرها با هوش مصنوعی", core_message="هوش مصنوعی اجرا را می‌گیرد، سلیقه را نه",
+                     must_name=["تدوینگر"])
 CONCEPT = Concept(id="A", name="سلیقه", angle="تدوینگر ابزار نیست، چشم است", hook="ابزار جای چشم را نمی‌گیرد", structure="contrarian_insight")
 
 
@@ -159,3 +160,14 @@ def test_beat_weights_stay_within_the_schema_for_long_videos():
     long_draft = draft(*["ابزار برش می‌زند؛ چشم انتخاب می‌کند و ماشین فقط سریع‌تر می‌شود، همین."] * 8)
     weights = [b.duration_weight for b in script.to_beats(long_draft, 120)]
     assert all(0.2 <= w <= 10 for w in weights) and abs(sum(weights) / len(weights) - 1) < 0.01
+
+
+def test_the_topic_must_be_spoken():
+    off_topic = draft("برش رو می‌شه سپرد به ابزار.", "ولی تصمیمِ برش رو نه.", "ابزار می‌بره؛ تو تصمیم می‌گیری.")
+    facts = script.measure(off_topic, 15, must_name=["تدوینگر", "هوش مصنوعی"])
+    assert any("موضوع ویدیو در گفتار نیامده" in p and "هوش مصنوعی" in p for p in facts["problems"])
+    named = draft("هوش مصنوعی جای تدوینگر را می‌گیرد؟", "ابزار می‌بُرد؛ تصمیم با توست.", "این هنوز کار آدم است.")
+    ok = script.measure(named, 15, must_name=["تدوینگر", "هوش مصنوعی"])
+    assert not any("موضوع ویدیو" in p for p in ok["problems"]) and not ok["notes"]
+    late = draft("ابزار می‌بُرد؛ تصمیم با توست.", "این کار آدم است.", "هوش مصنوعی تدوینگر را کنار نمی‌گذارد.")
+    assert any("دو جملهٔ اول" in n for n in script.measure(late, 15, must_name=["تدوینگر"])["notes"])

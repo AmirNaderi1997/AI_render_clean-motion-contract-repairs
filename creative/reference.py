@@ -192,10 +192,17 @@ def analyze_video(path: Path, *, source: str = "", describe=None) -> ReferencePr
 def _describe(sheet: Path, profile: ReferenceProfile) -> dict:
     from brain.llm import chat_vision
     measured = f"Measured: {profile.shot_count} shots, average {profile.avg_shot_s}s, {profile.cuts_per_second} cuts/s, {profile.duration_s}s long."
-    result, _usage = chat_vision(DESCRIBE, measured, images=[str(sheet)], return_json=True, max_tokens=1800, timeout_seconds=120)
-    if not isinstance(result, dict):
-        raise ValueError("vision returned no JSON")
-    return result
+    last: Exception | None = None
+    for _attempt in range(2):                        # one retry: provider timeouts are common and say nothing about the video
+        try:
+            result, _usage = chat_vision(DESCRIBE, measured, images=[str(sheet)], return_json=True, max_tokens=1800, timeout_seconds=120)
+        except Exception as exc:
+            last = exc
+            continue
+        if isinstance(result, dict):
+            return result
+        last = ValueError("vision returned no JSON")
+    raise last or ValueError("vision unavailable")
 
 
 def analyze(source: str | Path, directory: Path, *, describe=None) -> ReferenceProfile:
