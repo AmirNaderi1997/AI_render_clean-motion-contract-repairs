@@ -81,7 +81,7 @@ def test_evidence_must_be_in_the_script_or_the_score_is_capped(monkeypatch):
 
 def test_cosmetic_rewrite_is_rejected_unless_structure_change_was_requested(monkeypatch):
     synonyms = draft("ابزار برش می‌زند؛ چشم انتخاب می‌کند!", "ماشین سریع‌تر است، ولی سلیقه ندارد.", "تدوینگر خوب هنوز کارگردان لحظه‌هاست.")
-    bad = scores(5, verdict="rewrite", must_fix=["قوی‌تر"], change=[])
+    bad = scores(5, verdict="rewrite", must_fix=["هوک باید قوی‌تر شود"], change=[])
     fake = Fake([GOOD, synonyms], [bad, bad])
     result, report = run(fake, monkeypatch)
     assert result is GOOD and report.history[0].get("rewrite_rejected")
@@ -90,8 +90,10 @@ def test_cosmetic_rewrite_is_rejected_unless_structure_change_was_requested(monk
 def test_clichés_missing_visuals_and_repeated_title_are_found():
     weak = ScriptDraft(structure="x", lines=[line(1, "در دنیای امروز همه چیز عوض شده است."), line(2, "تدوین سریع", see="تصویر مرتبط", title="تدوین سریع"),
                                              line(3, "پایان خوبی بود.")])
-    problems = " ".join(script.measure(weak, 15)["problems"])
-    assert "کلیشه" in problems and "تصویر مشخص" in problems and "تکرار نریشن" in problems and "ساختار" in problems
+    facts = script.measure(weak, 15)
+    hard, soft = " ".join(facts["problems"]), " ".join(facts["notes"])
+    assert "کلیشه" in hard and "تصویر مشخص" in hard and "ساختار" in hard
+    assert "تکرار نریشن" in soft and "تکرار نریشن" not in hard        # a repeated title alone never costs a rewrite round
 
 
 def test_critic_outage_does_not_hide_measured_problems(monkeypatch):
@@ -108,3 +110,44 @@ def test_beats_carry_the_visual_first_contract():
     beats = script.to_beats(GOOD, 15)
     assert [b.line_id for b in beats] == ["L1", "L2", "L3"] and beats[0].why_visual and beats[0].focus and beats[1].link_prev
     assert beats[0].duration_weight >= speech.speech_seconds(beats[0].narration)
+
+
+def test_dropped_connection_is_retried_not_fatal(monkeypatch):
+    import httpx
+    from brain import llm as brain_llm
+    from creative import llm as creative_llm
+    calls = []
+    def flaky(system, user, route, budget):
+        calls.append(route)
+        if len(calls) == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        return {"structure": "x", "lines": []}, type("U", (), {"model": "m"})()
+    monkeypatch.setattr(brain_llm, "gateway_json", flaky)
+    monkeypatch.setattr(creative_llm, "configured", lambda: True)
+    monkeypatch.setattr(creative_llm, "_sleep", lambda s: None)
+    result = creative_llm._ask(ScriptDraft, "s", "u", route="creative_director", attempts=3)
+    assert len(calls) == 2 and result.lines == []
+
+
+def test_a_rewrite_that_only_fixes_a_measured_problem_is_accepted(monkeypatch):
+    long_but_otherwise_same = draft(*["ابزار برش می‌زند؛ چشم انتخاب می‌کند. " * 3] * 3)
+    fixed = draft("ابزار برش می‌زند؛ چشم انتخاب می‌کند.", "ماشین سریع‌تر است، اما سلیقه ندارد.", "تدوینگر خوب هنوز کارگردان لحظه‌هاست.")
+    fake = Fake([long_but_otherwise_same, fixed], [scores(), scores()])
+    result, report = run(fake, monkeypatch)
+    assert result is fixed and report.timing_ok and "rewrite_rejected" not in report.history[0]
+
+
+def test_unresolved_critic_objections_stay_in_the_report(monkeypatch):
+    bad = scores(5, verdict="rewrite", must_fix=["پایان مبهم است"], change=["ending"])
+    result, report = run(Fake([GOOD, GOOD], [bad, bad]), monkeypatch)
+    assert report.review.verdict == "rewrite" and "پایان مبهم است" in report.review.must_fix
+
+
+def test_a_script_still_over_budget_after_the_critic_rounds_is_tightened_without_another_critic_call(monkeypatch):
+    shorter = draft("ابزار برش می‌زند؛ چشم انتخاب می‌کند.", "ماشین سریع‌تر است، اما سلیقه ندارد.", "تدوینگر خوب هنوز کارگردان لحظه‌هاست.")
+    ok = scores()
+    fake = Fake([TOO_LONG, shorter], [ok])        # critic says ship, but the script is too long; no more critic rounds remain at depth 0
+    monkeypatch.setattr(script, "DEPTH_REWRITES", {"fast": 0})
+    result, report = run(fake, monkeypatch)
+    assert result is shorter and report.timing_ok and fake.calls == {"write": 2, "review": 1}
+    assert any(item.get("tighten") for item in report.history)

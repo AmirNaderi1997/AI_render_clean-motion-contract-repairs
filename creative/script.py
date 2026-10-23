@@ -37,6 +37,8 @@ speak Persian (natural, modern, polite colloquial unless the brief asks for form
 
 Craft rules
 - Open with the hook in the first line: a specific tension, contradiction, number, or question about THIS topic. No warm-up.
+- Keep a curiosity gap open: never answer the hook's question in the same line; the reveal comes at the turn.
+- Make the ending echo the opening image or line so the video feels designed, and say who the last line is for.
 - One idea per line. Short sentences. Concrete nouns and verbs; name the thing instead of the category.
 - Use the chosen structure; let the turn (reframe/reveal) land late and the payoff be the last line, never a summary of earlier lines.
 - Never write: filler, textbook definitions, empty slogans, advertising clichés, invented facts or numbers, a closing line that
@@ -77,6 +79,8 @@ Then decide: verdict "ship" only if the hook and payoff are genuinely strong and
 For a rewrite, list must_fix (specific, actionable: name the line ids and what is wrong) and `change`, the structural moves
 needed: angle | structure | hook | ending | cut | tone. If the angle itself is the problem, say so: synonyms will not fix it.
 
+Write reason, must_fix and summary in Persian (evidence stays a verbatim quote). `measured` also lists soft `notes`: weigh them.
+
 Return ONLY JSON:
 {"scores": [{"criterion": "hook_strength", "score": 0, "reason": "...", "evidence": "<quote>"}],
  "verdict": "ship|rewrite", "must_fix": ["..."], "change": ["hook"], "summary": "<2 sentences in Persian>"}"""
@@ -104,7 +108,8 @@ def measure(draft: ScriptDraft, duration_s: float, *, outro_s: float = 0.0) -> d
     narrations = [line.narration for line in draft.lines]
     seconds = [round(speech.speech_seconds(text), 2) for text in narrations]
     total, limit = sum(seconds), speech.budget(duration_s, outro_s=outro_s)
-    problems: list[str] = []
+    problems: list[str] = []      # hard: force a rewrite whatever the critic says
+    notes: list[str] = []         # soft: shown to the critic and reported, but not worth a rewrite round on their own
     if not MIN_LINES <= len(draft.lines) <= MAX_LINES:
         problems.append(f"تعداد صحنه‌ها {len(draft.lines)} است؛ باید بین {MIN_LINES} و {MAX_LINES} باشد.")
     if total > limit:
@@ -120,20 +125,20 @@ def measure(draft: ScriptDraft, duration_s: float, *, outro_s: float = 0.0) -> d
         if len(line.see.strip()) < 14 or any(generic in line.see for generic in GENERIC_VISUALS):
             problems.append(f"{line.id}: تصویر مشخص و اجرایی ندارد («{line.see[:40]}»).")
         if line.title and _tokens(line.title) and _tokens(line.title) <= _tokens(text):
-            problems.append(f"{line.id}: متن روی تصویر فقط تکرار نریشن است.")
+            notes.append(f"{line.id}: متن روی تصویر فقط تکرار نریشن است.")
     seen: dict[str, str] = {}
     for line in draft.lines:
         words = re.findall(r"[\w؀-ۿ]+", line.narration)
         for i in range(len(words) - 2):
             gram = " ".join(words[i:i + 3])
             if gram in seen and seen[gram] != line.id:
-                problems.append(f"عبارت «{gram}» در {seen[gram]} و {line.id} تکرار شده است.")
+                notes.append(f"عبارت «{gram}» در {seen[gram]} و {line.id} تکرار شده است.")
                 break
             seen.setdefault(gram, line.id)
     if draft.structure and draft.structure not in STRUCTURES:
         problems.append(f"ساختار «{draft.structure}» از فهرست مجاز نیست.")
     return {"line_seconds": dict(zip((line.id for line in draft.lines), seconds)), "total_speech_s": round(total, 2),
-            "budget_s": round(limit, 2), "target_s": duration_s, "problems": problems}
+            "budget_s": round(limit, 2), "target_s": duration_s, "problems": problems, "notes": notes}
 
 
 def _verify(review: ScriptReview, draft: ScriptDraft, measured: dict, has_reference: bool) -> ScriptReview:
@@ -237,17 +242,36 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
         except CreativeUnavailable as exc:
             log.warning("script rewrite unavailable: %s", exc)
             break
-        if similarity(script_text(candidate), script_text(draft)) > 0.8 and not review.change:
+        asked = [item for item in review.must_fix if item not in measured["problems"]]       # what the critic itself wants changed
+        if similarity(script_text(candidate), script_text(draft)) > 0.8 and (asked or review.change):
             report.history[-1]["rewrite_rejected"] = "فقط واژه‌ها جابه‌جا شده بود"
             continue
         draft = candidate
     final = measure(draft, duration_s, outro_s=outro_s)
+    # Fitting the video is not a matter of taste: if the script still overruns, tighten it (at most twice, no critic call).
+    for _ in range(2):
+        if final["total_speech_s"] <= final["budget_s"] or time.monotonic() - started > budget_s * 1.25:
+            break
+        over = final["total_speech_s"] - final["budget_s"]
+        order = sorted(final["line_seconds"].items(), key=lambda item: -item[1])[:3]
+        ask = ScriptReview(verdict="rewrite", change=["cut"], must_fix=[
+            f"نریشن {final['total_speech_s']:.1f} ثانیه است و باید حداکثر {final['budget_s']:.1f} ثانیه شود: {over + 0.3:.1f} ثانیه کم کن. "
+            f"ایده، هوک و پایان را نگه دار و طولانی‌ترین خط‌ها را کوتاه کن ({', '.join(f'{k}: {v:.1f}s' for k, v in order)})."])
+        try:
+            tighter = rewrite(draft, ask, brief, concept, reference, source, caps, duration_s, final, outro_s=outro_s, used=used)
+        except CreativeUnavailable as exc:
+            log.warning("script tightening unavailable: %s", exc)
+            break
+        after = measure(tighter, duration_s, outro_s=outro_s)
+        report.history.append({"attempt": report.attempts, "tighten": True, "speech_s_before": final["total_speech_s"], "speech_s_after": after["total_speech_s"]})
+        if after["total_speech_s"] < final["total_speech_s"]:
+            draft, final = tighter, after
     report.review = review
     report.structure = draft.structure
     report.speech_seconds = final["total_speech_s"]
     report.budget_seconds = final["budget_s"]
     report.timing_ok = final["total_speech_s"] <= final["budget_s"]
-    report.deterministic = final["problems"]
+    report.deterministic = final["problems"] + final["notes"]
     return draft, report
 
 

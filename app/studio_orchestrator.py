@@ -142,11 +142,12 @@ def _status_voice(conversation_id: str, seq: int, message: str) -> None:
 
 
 def _page_brief(page: dict) -> dict:
+    from creative.source import article_text
     """Use the configured text model to distinguish product facts from chrome."""
     content = {
         "title": page.get("title"), "description": page.get("description"),
         "structured_products": page.get("structured_products"),
-        "visible_content": page.get("content", [])[:120],
+        "visible_content": article_text(page, 9000).splitlines(),
         "image_alt_texts": [item.get("alt") for item in page.get("images", [])],
     }
     system = """You inspect a source page for a video editor. It may be an encyclopedia article, news,
@@ -176,11 +177,12 @@ Never invent a claim, price, metric or feature. Write concise Persian values."""
 
 
 def _motion_prompt(user_text: str, page: dict | None, facts: dict | None, duration: int = 30, plan=None) -> str:
+    from creative.source import article_text
     source = ""
     if page and facts:
         source = "\n\nVerified landing-page evidence:\n" + json.dumps({
             "url": page.get("url"), "facts": facts,
-            "visible_content": page.get("content", [])[:80],
+            "visible_content": article_text(page, 8000).splitlines(),
         }, ensure_ascii=False)
     direction = ("\n\n" + plan.director_notes + "\nBuild the scenes from this direction: the hook is scene 1, each beat becomes "
                  "one distinct scene, and no scene repeats another's composition.") if plan else ""
@@ -465,7 +467,7 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
 
 
 def _creative_direction(conversation_id: str, text: str, facts: dict | None, assets: list, duration: int,
-                        catalog: list[dict] | None = None, reference=None):
+                        catalog: list[dict] | None = None, reference=None, excerpt: str = ''):
     """Flows B/C/D: understand the brief, explore concepts, and let the best one drive the storyboard.
     Returns None (and says so) if the creative layer is unavailable; the standard storyboard still runs."""
     import creative
@@ -475,8 +477,8 @@ def _creative_direction(conversation_id: str, text: str, facts: dict | None, ass
           message="در حال تحلیل مخاطب و پیام و سنجیدن چند ایدهٔ خلاقانه هستم.")
     try:
         evidence=[{'index':r['index'],'subject':r['subject']} for r in catalog or []]
-        plan = (creative.direct_product(facts, text, image_count=len(assets), duration_s=duration,assets=evidence,reference=reference,depth=_script_depth()) if facts
-                else creative.direct_idea(text, image_count=len(assets), duration_s=duration,assets=evidence,reference=reference,depth=_script_depth()))
+        plan = (creative.direct_product(facts, text, image_count=len(assets), duration_s=duration,assets=evidence,reference=reference,depth=_script_depth(),excerpt=excerpt) if facts
+                else creative.direct_idea(text, image_count=len(assets), duration_s=duration,assets=evidence,reference=reference,depth=_script_depth(),excerpt=excerpt))
     except creative.CreativeUnavailable as exc:
         log.warning("creative direction unavailable: %s", exc)
         raise ValueError('طراحی خلاقانه کامل نشد؛ برای جلوگیری از خروجی قالبی، تولید مدیا شروع نشد.') from exc
@@ -572,6 +574,8 @@ def _script_report_text(report) -> str:
             lines.append(f"{label}: " + "؛ ".join(f"{_CRITERION_FA.get(s.criterion, s.criterion)} {s.score:g}/10 («{_short(s.evidence, 60)}»)" for s in rows))
         if review.summary:
             lines.append(review.summary)
+    if review and review.verdict == "rewrite" and review.must_fix:
+        lines.append("منتقد هنوز این موارد را باز می‌داند (سقف دورهای بازنویسی تمام شد): " + "؛ ".join(_short(x, 140) for x in review.must_fix[:3]))
     if report.deterministic:
         lines.append("هشدارها: " + "؛ ".join(report.deterministic[:3]))
     return "\n".join(lines)
@@ -643,7 +647,8 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
         _emit(conversation_id,'tool.started',tool='inspect_visual_assets',message='دارم خود تصاویر، جزئیات قابل‌مشاهده و ارتباطشان با موضوع را بررسی می‌کنم.')
         catalog = inspect_assets([Path(p) for p in assets],text)
         _emit(conversation_id,'tool.completed',tool='inspect_visual_assets',message=f'{len(catalog)} تصویر برای طراحی صحنه تأیید شد.')
-    plan = _creative_direction(conversation_id, text, facts, assets, duration,catalog,reference_profile)
+    from creative.source import article_text
+    plan = _creative_direction(conversation_id, text, facts, assets, duration,catalog,reference_profile,article_text(page, 8000) if page else '')
     if plan:
         _assistant(conversation_id, user_key, _idea_message(plan))
     prompt = _motion_prompt(text, page, facts, duration, plan)
