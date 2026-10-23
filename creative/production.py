@@ -5,6 +5,7 @@ generation here. Invalid direction stops before paid production.
 """
 from __future__ import annotations
 
+from . import speech
 from .schemas import CreativePlan, CreativeUnavailable
 
 
@@ -12,11 +13,17 @@ def storyboard_from_plan(plan: CreativePlan, *, prompt: str, language: str, styl
                          duration: float, asset_indices: set[int], brief: dict | None = None):
     from brain.storyboard import Scene, Storyboard
     beats = plan.chosen.beats
-    if not 3 <= len(beats) <= 10 or not 15 <= duration <= 90:
+    if not 3 <= len(beats) <= 10 or not 10 <= duration <= 90:
         raise CreativeUnavailable('برنامهٔ خلاقانه هنوز صحنه‌های اجرایی کافی یا مدت معتبر ندارد.')
-    total_weight = sum(b.duration_weight for b in beats)
     frames = round(duration*30)
-    lengths = [round(frames*b.duration_weight/total_weight) for b in beats[:-1]]
+    # Time follows the real length of the spoken line: a scene is never shorter than its narration, and the total speech
+    # must fit the video (estimated from Persian letters and pauses, not from a word count).
+    needs = [speech.speech_seconds(b.narration)*speech.MARGIN if b.narration else 0.0 for b in beats]
+    if sum(needs) > duration:
+        raise CreativeUnavailable(f'نریشن حدود {sum(needs):.1f} ثانیه طول می‌کشد و در {duration:g} ثانیه جا نمی‌شود؛ پیش از تولید باید کوتاه شود.')
+    weights = [b.duration_weight for b in beats]
+    seconds_each = _allocate(duration, weights, [max(n, .5) for n in needs])
+    lengths = [round(sec*30) for sec in seconds_each[:-1]]
     lengths.append(frames-sum(lengths))
     scenes = []
     for index, (beat, length) in enumerate(zip(beats, lengths)):
@@ -25,23 +32,38 @@ def storyboard_from_plan(plan: CreativePlan, *, prompt: str, language: str, styl
             raise CreativeUnavailable(f'صحنهٔ {index+1} عنوان، طراحی یا زمان اجرایی معتبر ندارد.')
         if asset_indices and beat.source_asset_index not in asset_indices:
             raise CreativeUnavailable(f'صحنهٔ {index+1} باید تصویر تأییدشدهٔ مرتبط انتخاب کند.')
-        if len(beat.narration.split()) > max(3, int(seconds*2)):
-            raise CreativeUnavailable(f'نریشن صحنهٔ {index+1} برای زمان آن طولانی است؛ پیش از تولید باید کوتاه شود.')
         if beat.motion_engine=='motion_so':
             from brain.motion_so import configured
             if not configured():
-                raise CreativeUnavailable('Motion.so در این سرور فعال نیست؛ برنامه به موتور غیرقابل‌اجرا ارجاع داده است.')
+                raise CreativeUnavailable('کلیپ موشن هوشمند در این سرور فعال نیست؛ برنامه به موتور غیرقابل‌اجرا ارجاع داده است.')
         scenes.append(Scene(index=index,description=f'{beat.role}: {beat.visual}',duration_s=seconds,
             text_overlay=beat.title,narration_text=beat.narration,
             media_method='upload' if asset_indices else 'generate',media_prompt=beat.visual,
             source_asset_index=beat.source_asset_index,estimated_cost=0,
             narrative_role=beat.role,visual_type=beat.visual_type,motion_style=beat.motion,
-            motion_engine=beat.motion_engine))
+            motion_engine=beat.motion_engine,script_line=beat.line_id,why_visual=beat.why_visual,emotion=beat.emotion,
+            focus=beat.focus,link_prev=beat.link_prev,reference_trait=beat.reference_trait))
     return Storyboard(prompt=prompt,content_type='reel',language=language,style=style,
         creative_brief=brief or {}, scenes=scenes,total_duration_s=frames/30,
         # Zero is not a price estimate. Studio separately reports unknown cost
         # for generation providers; actual provider cost remains authoritative.
         estimated_total_cost=0, usage={'model':','.join(plan.models),'source':'creative_plan_v2'})
+
+
+def _allocate(total: float, weights: list[float], minimum: list[float]) -> list[float]:
+    """Split ``total`` seconds in proportion to ``weights`` without letting any scene fall below its minimum."""
+    fixed: dict[int, float] = {}
+    for _ in range(len(weights)):
+        free = [i for i in range(len(weights)) if i not in fixed]
+        room = total - sum(fixed.values())
+        share = sum(weights[i] for i in free) or 1.0
+        trial = {i: room*weights[i]/share for i in free}
+        short = [i for i in free if trial[i] < minimum[i]]
+        if not short:
+            return [fixed.get(i, trial.get(i, 0.0)) for i in range(len(weights))]
+        for i in short:
+            fixed[i] = minimum[i]
+    return [fixed[i] for i in range(len(weights))]
 
 
 def bind_talking(plan: CreativePlan, decisions: dict, sentences: list[dict]) -> dict:

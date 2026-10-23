@@ -65,10 +65,14 @@ Return ONLY JSON:
   "hook": "<the first 2-3 seconds: the Persian words and what appears on screen, one or two sentences>",
   "outline": ["<role>: <idea in under 15 words>", "... 4-5 items in order, roles from hook|setup|claim|proof|turn|payoff|cta"],
   "style_hint": "<engine style id when capabilities list styles, else null>",
+  "structure": "<hook_tension_reframe_payoff|problem_agitation_solution|curiosity_gap_reveal|before_after|contrarian_insight|micro_story|emotional_buildup|educational_reveal|product_demonstration|benefit_commercial: pick by goal and content>",
+  "payoff": "<the closing line or image everything builds toward>", "feeling": "<what the viewer feels at the end>",
   "why_it_works": "<one sentence>", "risks": "<one sentence>"}
 ]}
 Rules: be specific to THIS content (name the number, object or contrast), never generic; respect the brief's must_not list;
-no extra commentary, no markdown."""
+the three concepts must differ in hook, message AND ending (and usually in structure), not be one script told three ways;
+look for the unexpected angle a sharp editor would pick, not the obvious one; if a reference style profile is given, every
+concept must be executable in its technique; no extra commentary, no markdown."""
 
 EXPAND = PRINCIPLES + """
 
