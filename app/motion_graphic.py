@@ -29,7 +29,8 @@ _STOP: set[str] = set()
 _BROWSER = threading.Semaphore(1)
 ACTIVE = ("queued", "writing", "checking", "rendering")
 _SCENE_WORKERS = 3
-_STAT_DEFAULTS = {"plan_s": 15.0, "scene_s": 35.0, "check_s": 12.0, "render_per_s": 3.0}
+# Defaults are what the production server measured (4 vCPU, CPU-only Chromium): a 10 s clip checked in 40 s and rendered in 185 s. Real timings replace them.
+_STAT_DEFAULTS = {"plan_s": 15.0, "scene_s": 35.0, "check_s": 40.0, "render_per_s": 18.0}
 _stats_lock = threading.Lock()
 MAX_VERSIONS = 30
 RENDER_TIMEOUT_S = 1200
@@ -475,7 +476,7 @@ def _prepare_and_render(directory: Path, page, brief: str, change: str, used: li
     _note(directory, "render", f"دارم {page.duration:g} ثانیه ویدیو را فریم‌به‌فریم رندر می‌کنم")
     _progress(directory, "rendering", 40, "دارم ویدیو را فریم‌به‌فریم رندر می‌کنم.", stage="rendering", eta=estimate)
     standalone.render(work, output, timeout=RENDER_TIMEOUT_S, on_progress=on_progress, should_cancel=lambda: _cancelled(key))
-    _learn("render_per_s", min(20.0, max(0.3, (time.monotonic() - render_started) / max(page.duration, 1.0))))
+    _learn("render_per_s", min(60.0, max(0.3, (time.monotonic() - render_started) / max(page.duration, 1.0))))
     _note(directory, "render", "رندر تمام شد؛ دارم ویدیو را وارسی می‌کنم", "done")
     problem = verify_video(output, page.duration)
     if problem:

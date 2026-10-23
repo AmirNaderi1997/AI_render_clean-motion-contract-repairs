@@ -15,8 +15,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+import shutil
+
 from .cli import cli_command
 from .renderer import HyperFramesError, _render_cli, summarize_failure
+
+
+def ensure_browser() -> None:
+    """HyperFrames looks for its own headless Chrome; a server that ships Chromium (REMOTION_BROWSER_EXECUTABLE / chromium) is pointed at it."""
+    if os.environ.get("HYPERFRAMES_BROWSER_PATH"):
+        return
+    for candidate in (os.environ.get("REMOTION_BROWSER_EXECUTABLE"), shutil.which("chromium"), shutil.which("google-chrome"), shutil.which("chromium-browser")):
+        if candidate and Path(candidate).is_file():
+            os.environ["HYPERFRAMES_BROWSER_PATH"] = candidate
+            return
 
 
 @dataclass
@@ -54,6 +66,7 @@ def _findings(report: dict) -> tuple[list[str], list[str], list[str]]:
 
 def check(project: Path, *, timeout: int = 240, should_cancel: Optional[Callable[[], bool]] = None) -> CheckResult:
     """Run ``hyperframes check``. A check that cannot finish in time is reported as "not run": rendering still validates what matters."""
+    ensure_browser()
     started = time.time()
     process = subprocess.Popen([*cli_command(), "check", "."], cwd=project, env={**os.environ, "NO_COLOR": "1"}, text=True,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
@@ -87,5 +100,6 @@ def check(project: Path, *, timeout: int = 240, should_cancel: Optional[Callable
 
 def render(project: Path, output: Path, *, timeout: int = 900, on_progress: Optional[Callable[[int], None]] = None,
            should_cancel: Optional[Callable[[], bool]] = None) -> Path:
+    ensure_browser()
     output.parent.mkdir(parents=True, exist_ok=True)
     return _render_cli(project, output, timeout=timeout, on_progress=on_progress, should_cancel=should_cancel)
