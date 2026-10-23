@@ -7,6 +7,7 @@ import { useFullscreen } from "../components/useFullscreen";
 import { displayTitle } from "../format";
 import { renderView } from "./model";
 import {MotionScenes} from './MotionScenes';
+import { ProjectEditor as LocalizeSettings } from "../Localize";
 import { PlanReview } from "./PlanReview";
 import { currentVersion, planPhase } from "./plan";
 import { TimelineView } from "./TimelineView";
@@ -142,7 +143,8 @@ function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () =
       <button type="button" aria-pressed={shown === "timeline"} onClick={() => setView("timeline")}>تایم‌لاین</button>
     </div> : null}
     {shown === "timeline" ? <TimelineView project={project} onChanged={onSaved} currentOutput={projectOutputUrl(project)}/> : null}
-    {shown === "timeline" ? null : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved}/>
+    {shown === "timeline" ? null : project.engine === "localize" && project.external_ref ? <LocalizeSettings key={project.external_ref} id={project.external_ref} onChanged={onSaved} embedded/>
+      : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved}/>
       : <header><h2>Refine this video</h2><p>Ask for caption, pacing, colour or audio changes in the chat. Controls appear here when the current engine supports them.</p></header>}
     {shown === "timeline" ? null : <>
     {project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}
@@ -154,6 +156,35 @@ function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () =
   </div>;
 }
 
+/**
+ * Fullscreen for the whole workspace (Preview or Edit tab, not just the video). The panel is stretched over the page
+ * with CSS, which works everywhere (embedded browsers and iPhones refuse the Fullscreen API); the browser's own
+ * fullscreen is requested on top of it when it is available.
+ */
+function usePanelFullscreen() {
+  const node = React.useRef<HTMLElement | null>(null);
+  const [active, setActive] = React.useState(false);
+  const native = React.useRef(false);
+  React.useEffect(() => {
+    if (!active) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setActive(false); };
+    const onChange = () => { if (native.current && !document.fullscreenElement) { native.current = false; setActive(false); } };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => { window.removeEventListener("keydown", onKey); document.removeEventListener("fullscreenchange", onChange); };
+  }, [active]);
+  const toggle = React.useCallback(async () => {
+    if (active) {
+      setActive(false);
+      if (document.fullscreenElement) { native.current = false; try { await document.exitFullscreen(); } catch { /* already out */ } }
+      return;
+    }
+    setActive(true);
+    try { if (node.current?.requestFullscreen) { await node.current.requestFullscreen(); native.current = true; } } catch { /* the CSS layout is enough */ }
+  }, [active]);
+  return { node, active, toggle };
+}
+
 export function Workspace({ conversation, project, projects, onSelectProject, tab, onTab, sourceAttachment, onCancel, onSaved, onCollapse, showTabs, panelRef, resizer }: {
   conversation: StudioConversation | null; project?: StudioProject; projects: StudioProject[]; onSelectProject: (id: string) => void;
   tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; sourceAttachment?: string; onCancel: () => void; onSaved: () => void;
@@ -162,7 +193,13 @@ export function Workspace({ conversation, project, projects, onSelectProject, ta
   resizer?: React.ReactNode;
 }) {
   const meta = statusMeta(project);
-  return <section className="workspace" ref={panelRef} aria-label="Video workspace">
+  const panel = usePanelFullscreen();
+  const setNode = React.useCallback((element: HTMLElement | null) => {
+    panel.node.current = element;
+    if (typeof panelRef === "function") panelRef(element);
+    else if (panelRef) (panelRef as React.MutableRefObject<HTMLElement | null>).current = element;
+  }, [panelRef, panel.node]);
+  return <section className="workspace" ref={setNode} data-max={panel.active || undefined} aria-label="Video workspace">
     {resizer}
     <header className="ws-head">
       {showTabs ? <div className="tabs-bar" role="tablist" aria-label="Workspace">
@@ -173,7 +210,9 @@ export function Workspace({ conversation, project, projects, onSelectProject, ta
       </div> : <h2 className="ws-title-solo">{tab === "preview" ? "Preview" : "Edit"}</h2>}
       <span className="grow"/>
       {projects.length > 1 ? <select className="input ws-select" aria-label="Project" value={project?.id} onChange={event => onSelectProject(event.target.value)}>{projects.map(item => <option key={item.id} value={item.id}>{displayTitle(item.title, 32)}</option>)}</select> : null}
-      {onCollapse ? <button className="icon-btn" onClick={onCollapse} aria-label="Hide workspace" data-tip="Hide workspace"><Icon name="panelRight" size={19}/></button> : null}
+      <button className="icon-btn" onClick={() => void panel.toggle()} aria-pressed={panel.active} aria-label={panel.active ? "Exit full screen" : "Full screen"}
+        data-tip={panel.active ? "Exit full screen" : "Full screen"}><Icon name={panel.active ? "fullscreenExit" : "fullscreen"} size={19}/></button>
+      {onCollapse && !panel.active ? <button className="icon-btn" onClick={onCollapse} aria-label="Hide workspace" data-tip="Hide workspace"><Icon name="panelRight" size={19}/></button> : null}
     </header>
     {project ? <div className="ws-titlebar"><h2 className="bidi wrap-safe" dir="auto" title={project.title}>{displayTitle(project.title, 80)}</h2><span className="badge" data-tone={meta.tone === "neutral" ? undefined : meta.tone}><i/>{meta.label}</span></div> : null}
     <div className="ws-body">

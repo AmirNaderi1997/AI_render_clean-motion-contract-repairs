@@ -344,6 +344,23 @@ def test_music_and_mix_edits_become_a_new_version_and_validate(studio):
     assert s.calls["start"] == 0
 
 
+def test_cold_open_key_moment_effect_and_zoom_edits_reach_the_render_settings(studio):
+    s = studio
+    run(s.o.sync_conversation(s.c["id"], "u"))
+    v1 = creative_plan.current(project(s)["state"])
+    look = v1["content"]["look"]
+    assert {"cold_open", "key_moment_effect", "zoom_enabled", "zoom_base", "zoom_close", "moments"} <= set(look)
+    run(s.o.edit_plan(s.p["id"], "u", v1["id"], {"cold_open": False, "key_moment_effect": "title_only", "zoom_enabled": False,
+                                                "zoom_base": 120, "zoom_close": 999, "cold_open_sentence": 3}))
+    got = s.engine["render_settings"]
+    assert got["first_key_moment_enabled"] is False and got["first_key_moment_sentence"] == 3
+    assert got["key_moment_effect"] == "title_only" and got["zoom"]["enabled"] is False
+    assert got["zoom"]["base_scale"] == 120 and got["zoom"]["close_scale"] == 220      # clamped to the supported range
+    v2 = creative_plan.current(project(s)["state"])
+    with pytest.raises(creative_plan.PlanError):
+        run(s.o.edit_plan(s.p["id"], "u", v2["id"], {"key_moment_effect": "sparkles"}))
+
+
 def test_picture_edit_becomes_a_new_version_and_costs_nothing_until_approved(studio, monkeypatch):
     s = studio
     monkeypatch.setattr(s.o, "_validate_broll_edits", lambda job, edits: None)

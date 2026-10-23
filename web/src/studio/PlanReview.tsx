@@ -9,6 +9,7 @@ const LOOKS: [string, string][] = [["default", "پیش‌فرض سبک"], ["natu
 const ACCENTS = ["#F5B800", "#FFFFFF", "#A8CF80", "#FF6B4A", "#4DA3FF"];
 const FONTS: [string, string][] = [["default", "Ray (فونت سبک)"], ["Vazirmatn", "وزیرمتن"]];
 const PICTURE_SOURCE: Record<string, string> = { upload: "فایل شما", library: "کتابخانه", ai: "ساخته‌شده", ai_planned: "ساخته می‌شود", motion_so: "Motion.so", card: "کارت متنی" };
+const KEY_EFFECTS: [string, string][] = [["grayscale_title", "سیاه‌وسفید + تیتر"], ["title_only", "فقط تیتر"], ["grayscale", "فقط سیاه‌وسفید"], ["none", "بدون افکت"]];
 const LOGO_MOTIONS: [string, string][] = [["pop", "پاپ"], ["fade", "محو"], ["slide", "حرکت نرم"]];
 
 /** A style preview: one frame of the upload drawn with the style's own text, boxes and colours (engine/style_frames.py). */
@@ -154,6 +155,20 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
       <div className="field"><label htmlFor="plan-zoom">زوم روی گوینده: {value("zoom", plan.look.zoom)}٪</label>
         <input id="plan-zoom" type="range" min={0} max={200} step={10} disabled={!editable} value={value("zoom", plan.look.zoom)} onChange={event => set({ zoom: Number(event.target.value) })}/></div>
       <label className="plan-toggle"><input type="checkbox" disabled={!editable} checked={value("key_moments", plan.look.key_moments)} onChange={event => set({ key_moments: event.target.checked })}/>تأکید بصری روی لحظه‌های کلیدی</label>
+      <div className="field"><span className="field-label">افکت لحظه‌های کلیدی</span>
+        <div className="segmented" role="group" aria-label="نوع افکت">{KEY_EFFECTS.map(([key, label]) => <button key={key} type="button" disabled={!editable || !value("key_moments", plan.look.key_moments)}
+          aria-pressed={value("key_moment_effect", plan.look.key_moment_effect) === key} onClick={() => set({ key_moment_effect: key })}>{label}</button>)}</div></div>
+      <label className="plan-toggle"><input type="checkbox" disabled={!editable} checked={value("cold_open", plan.look.cold_open)} onChange={event => set({ cold_open: event.target.checked })}/>لحظهٔ کلیدی اول (Cold open): تیزر کوتاه قبل از شروع</label>
+      {plan.look.moments.length && value("cold_open", plan.look.cold_open) ? <div className="field"><label htmlFor="plan-cold">انتخاب لحظهٔ اول</label>
+        <select id="plan-cold" className="input" disabled={!editable} value={String(value("cold_open_sentence", plan.look.cold_open_sentence) ?? "")} onChange={event => set({ cold_open_sentence: event.target.value === "" ? null : Number(event.target.value) })}>
+          <option value="">پیشنهاد هوش مصنوعی</option>{plan.look.moments.map((m, i) => <option key={`${m.sentence}-${i}`} value={m.sentence}>{i + 1}. {m.title}</option>)}</select></div> : null}
+      <label className="plan-toggle"><input type="checkbox" disabled={!editable} checked={value("zoom_enabled", plan.look.zoom_enabled)} onChange={event => set({ zoom_enabled: event.target.checked })}/>زوم‌های دوربین روی گوینده</label>
+      {value("zoom_enabled", plan.look.zoom_enabled) ? <div className="plan-grid">
+        <div className="field"><label htmlFor="plan-zbase">زوم قاب اصلی: {value("zoom_base", plan.look.zoom_base)}٪</label>
+          <input id="plan-zbase" type="range" min={100} max={180} step={5} disabled={!editable} value={value("zoom_base", plan.look.zoom_base)} onChange={event => set({ zoom_base: Number(event.target.value) })}/></div>
+        <div className="field"><label htmlFor="plan-zclose">زوم قاب نزدیک: {value("zoom_close", plan.look.zoom_close)}٪</label>
+          <input id="plan-zclose" type="range" min={100} max={220} step={5} disabled={!editable} value={value("zoom_close", plan.look.zoom_close)} onChange={event => set({ zoom_close: Number(event.target.value) })}/></div>
+      </div> : null}
     </Section>
 
     <Section title="هویت و برند" hint="این موارد در پروفایل شما ذخیره می‌شوند تا در پروژه‌های بعدی دوباره پرسیده نشوند.">

@@ -131,7 +131,14 @@ def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, 
         "look": {"preset": look_of(grade), "grade": grade, "accent_color": settings.get("title_color") or "#F5B800",
                  "caption_font": settings.get("caption_font") or "default",
                  "zoom": (settings.get("zoom") or {}).get("amount", 100),
-                 "key_moments": bool(settings.get("key_moments_enabled", True))},
+                 "key_moments": bool(settings.get("key_moments_enabled", True)),
+                 "key_moment_effect": settings.get("key_moment_effect", "grayscale_title"),
+                 "cold_open": bool(settings.get("first_key_moment_enabled", True)),
+                 "cold_open_sentence": settings.get("first_key_moment_sentence"),
+                 "zoom_enabled": bool((settings.get("zoom") or {}).get("enabled", True)),
+                 "zoom_base": (settings.get("zoom") or {}).get("base_scale", 100),
+                 "zoom_close": (settings.get("zoom") or {}).get("close_scale", 140),
+                 "moments": [{"sentence": m["sentence"], "title": m["title"]} for m in status.get("timeline") or []][:40]},
         "captions": info["captions"], "motion": info["motion"], "broll": info["broll"], "pictures": pictures,
         "audio": {"music": (status.get("music") or "").rsplit("/", 1)[-1], "music_path": status.get("music") or "",
                   "mix": _music_mix(style, settings), "voice": "صدای اصلی گوینده (بدون نریشن جدید)",
@@ -207,7 +214,7 @@ def approve(state: dict, version_id: str) -> dict:
 
 EDITABLE = {"hook", "hook_highlight", "look", "accent_color", "caption_font", "zoom", "key_moments",
             "logo_enabled", "logo_motion", "name", "tagline", "cta", "concept_id", "style", "timeline_edits", "broll_edits",
-            "music", "music_mix"}
+            "music", "music_mix", "cold_open", "cold_open_sentence", "key_moment_effect", "zoom_enabled", "zoom_base", "zoom_close"}
 
 
 def _music_mix(style: str, settings: dict) -> dict:
@@ -268,6 +275,33 @@ def talking_edits(content: dict, edits: dict, status: dict) -> dict:
     if "key_moments" in edits:
         settings["key_moments_enabled"] = bool(edits["key_moments"]); touched = True
         applied.append("لحظه‌های کلیدی " + ("روشن" if edits["key_moments"] else "خاموش"))
+    if "cold_open" in edits:
+        settings["first_key_moment_enabled"] = bool(edits["cold_open"]); touched = True
+        applied.append("لحظهٔ کلیدی اول (Cold open) " + ("روشن" if edits["cold_open"] else "خاموش"))
+    if "cold_open_sentence" in edits:
+        raw = edits["cold_open_sentence"]
+        try:
+            settings["first_key_moment_sentence"] = None if raw in (None, "") else max(0, min(9999, int(raw)))
+        except (TypeError, ValueError):
+            raise PlanError("جملهٔ لحظهٔ کلیدی اول باید عدد باشد.")
+        touched = True
+        applied.append("انتخاب لحظهٔ کلیدی اول" if settings["first_key_moment_sentence"] is not None else "لحظهٔ کلیدی اول: پیشنهاد هوش مصنوعی")
+    if "key_moment_effect" in edits:
+        if edits["key_moment_effect"] not in {"grayscale_title", "title_only", "grayscale", "none"}:
+            raise PlanError("نوع افکت لحظه‌های کلیدی معتبر نیست.")
+        settings["key_moment_effect"] = edits["key_moment_effect"]; touched = True
+        applied.append("افکت لحظه‌های کلیدی عوض شد")
+    if "zoom_enabled" in edits:
+        settings.setdefault("zoom", {})["enabled"] = bool(edits["zoom_enabled"]); touched = True
+        applied.append("زوم‌های دوربین " + ("روشن" if edits["zoom_enabled"] else "خاموش"))
+    for field, key, low, high, label in (("zoom_base", "base_scale", 100, 180, "زوم قاب اصلی"), ("zoom_close", "close_scale", 100, 220, "زوم قاب نزدیک")):
+        if field in edits:
+            try:
+                value = max(low, min(high, int(edits[field])))
+            except (TypeError, ValueError):
+                raise PlanError(f"{label} باید عدد باشد.")
+            settings.setdefault("zoom", {})[key] = value; touched = True
+            applied.append(f"{label} {value}٪")
     if "logo_enabled" in edits or "logo_motion" in edits:
         logo = dict(settings.get("outro_logo") or {"enabled": True, "motion": "pop"})
         if "logo_enabled" in edits:

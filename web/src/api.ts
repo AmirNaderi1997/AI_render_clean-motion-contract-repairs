@@ -184,7 +184,9 @@ export interface PlanContent {
   structure: { role: string; intent: string; visual: string; sentence: number | null; at: string; text: string }[];
   duration_s: number;
   style: { id: string; label: string; summary: string; complexity: string };
-  look: { preset: string; grade: Record<string, number>; accent_color: string; caption_font: string; zoom: number; key_moments: boolean };
+  look: { preset: string; grade: Record<string, number>; accent_color: string; caption_font: string; zoom: number; key_moments: boolean;
+  key_moment_effect: string; cold_open: boolean; cold_open_sentence: number | null; zoom_enabled: boolean; zoom_base: number; zoom_close: number;
+  moments: { sentence: number; title: string }[] };
   captions: string; motion: string; broll: string; pictures: { sentence: number; title: string; source: string; new: boolean }[];
   audio: { music: string; voice: string; sfx: string };
   brand: { name: string; tagline: string; cta: string; logo: { enabled: boolean; motion: string; has_logo: boolean } };
@@ -204,6 +206,7 @@ export type PlanEdits = Partial<{
   key_moments: boolean; logo_enabled: boolean; logo_motion: string; name: string; tagline: string; cta: string;
   concept_id: string; style: string; timeline_edits: PlanContent["timeline_edits"]; broll_edits: PlanContent["broll_edits"];
   music: string; music_mix: Partial<MusicMix>;
+  cold_open: boolean; cold_open_sentence: number | null; key_moment_effect: string; zoom_enabled: boolean; zoom_base: number; zoom_close: number;
 }>;
 /** The music bed's mix: level under the voice (dB), fades (seconds) and automatic lowering while someone speaks. */
 export interface MusicMix { volume_db: number; fade_in: number; fade_out: number; duck: boolean }

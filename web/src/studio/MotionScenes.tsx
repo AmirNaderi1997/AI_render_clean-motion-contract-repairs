@@ -31,6 +31,8 @@ export function MotionScenes({jobId,onSaved}:{jobId:string;onSaved:()=>void}) {
     catch(e){setError(friendlyError(e,'place this clip on the timeline'));}
     finally{setBusy(false);}
   }
+  // Only where a Motion clip can actually be placed (motion projects and talking style 2); nothing for other videos.
+  if (!state || !state.timeline_supported) return null;
   return <details className="sb"><summary>Motion.so · motion clips</summary>
     <p className="eg-muted">Silent charts, diagrams and visual scenes. EditorGPT keeps narration and captions. MP4 has no guaranteed transparent background. Remote cancellation is not supported.</p>
     {state&&!state.configured?<p>Motion is not configured on this server.</p>:null}
