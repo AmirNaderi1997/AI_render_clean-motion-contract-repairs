@@ -434,6 +434,51 @@ def _creative_direction(conversation_id: str, text: str, facts: dict | None, ass
     return plan
 
 
+def _short(value, limit: int = 170) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "…"
+
+
+def _idea_message(plan) -> str:
+    """What the director understood and which idea it chose: the result of the creative step, said once."""
+    brief, chosen = plan.brief, plan.chosen
+    lines = ["**برداشت من از درخواست**"]
+    for label, value in (("موضوع", brief.topic), ("پیام اصلی", brief.core_message), ("مخاطب", brief.audience), ("هدف", brief.goal), ("لحن", brief.tone)):
+        if value:
+            lines.append(f"• {label}: {_short(value, 140)}")
+    idea = [f"**ایدهٔ انتخاب‌شده: «{chosen.name}»**", _short(chosen.angle, 260)]
+    for label, value in (("شروع", chosen.hook), ("زبان بصری", chosen.visual_language), ("ریتم", chosen.pacing), ("چرا کار می‌کند", chosen.why_it_works)):
+        if value:
+            idea.append(f"{label}: {_short(value, 200)}")
+    others = [c.name for c in plan.concepts if c.id != chosen.id and c.name]
+    blocks = ["\n".join(lines), "\n".join(idea)]
+    if others:
+        blocks.append("ایده‌های دیگری که سنجیدم: " + "، ".join(f"«{name}»" for name in others[:4]))
+    return "\n\n".join(blocks)
+
+
+def _scenario_message(storyboard: dict, duration: int, *, motion_scenes: int = 0, estimate: float | None = None) -> str:
+    """The scenario the user is asked to approve: every scene with its narration, on-screen text and picture idea."""
+    scenes = storyboard.get("scenes", [])
+    total = storyboard.get("total_duration_s", duration)
+    blocks = [f"**سناریوی پیشنهادی** — {len(scenes)} صحنه، حدود {total:g} ثانیه"]
+    for number, scene in enumerate(scenes, 1):
+        rows = [f"**صحنهٔ {number} · {scene.get('duration_s', 0):g} ثانیه**"]
+        if scene.get("narration_text"):
+            rows.append(f"نریشن: «{_short(scene['narration_text'], 220)}»")
+        if scene.get("text_overlay"):
+            rows.append(f"متن روی تصویر: {_short(scene['text_overlay'], 90)}")
+        visual = scene.get("media_prompt") or scene.get("description")
+        if visual:
+            kind = {"upload": "فایل شما", "library": "کتابخانه"}.get(scene.get("media_method"), "ساخته‌شده با هوش مصنوعی")
+            rows.append(f"تصویر ({kind}): {_short(visual, 170)}")
+        blocks.append("\n".join(rows))
+    cost = ("هزینه: هر کلیپ موشن جداگانه اعتبار مصرف می‌کند و رقم دقیق مشخص نیست." if motion_scenes
+            else f"برآورد هزینهٔ تولید: ${estimate:.2f}" if estimate else "هزینهٔ مدل جدیدی برای تصویرها ثبت نشده است.")
+    blocks.append(f"{cost}\nبا تأیید، تصویرها، نریشن و رندر نهایی ساخته می‌شود. هر صحنه را در تب Edit عوض کنید یا همین‌جا بگویید چه تغییری بدهم.")
+    return "\n\n".join(blocks)
+
+
 def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
                    text: str, attachments: list[dict]) -> None:
     page = facts = None
@@ -450,7 +495,6 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
         source_message = ('در حال خواندن مقالهٔ ویکی‌پدیا و بررسی متن و منابع تصویری مرتبط با موضوع هستم.' if wiki else
                           'در حال بررسی صفحهٔ منبع هستم تا موضوع، اطلاعات و تصاویر مرتبط با درخواستت را مشخص کنم.')
         _emit(conversation_id, "tool.started", tool="inspect_url", message=source_message)
-        _emit(conversation_id, 'agent.narration', narration_id=f'source:{message_id}', message=source_message)
         directory = Path(attachments[0]["path"]).parent if attachments else Path(jobstore.JOBS_ROOT) / "studio" / user_key / conversation_id
         directory.mkdir(parents=True, exist_ok=True)
         page = execute("inspect_url", {"url": links[0], "output_dir": str(directory)})
@@ -465,6 +509,8 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
     duration_match = re.search(r"(\d{1,3})\s*(?:ثانیه|second|sec)", text.lower().translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹','0123456789')))
     duration = min(90, max(5, int(duration_match.group(1)))) if duration_match else 30
     plan = _creative_direction(conversation_id, text, facts, assets, duration)
+    if plan:
+        _assistant(conversation_id, user_key, _idea_message(plan))
     prompt = _motion_prompt(text, page, facts, duration, plan)
     provider = _provider() if not assets else "local_fixture"
     _emit(conversation_id, "tool.started", tool="create_storyboard", message="در حال ساخت سناریو و استوری‌بورد قابل‌ویرایش هستم.")
@@ -488,9 +534,9 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
         {"job_id": result["external_ref"], "provider": provider},
         idempotency_key(conversation_id, message_id, "generate_motion_video", {"job": result["external_ref"]}), estimate))
     run(repo.update_project(project["id"], user_key, status="awaiting_confirmation"))
-    _assistant(conversation_id, user_key,
-        f"استوری‌بورد آماده است: {len(result['storyboard'].get('scenes', []))} صحنه، حدود {result['storyboard'].get('total_duration_s', duration):g} ثانیه. "
-        "قبل از تولید دارایی‌ها، نریشن و رندر سنگین آن را تأیید یا اصلاح کنید.")
+    _assistant(conversation_id, user_key, _scenario_message(
+        result["storyboard"], duration, estimate=estimate,
+        motion_scenes=sum(s.get('motion_engine') == 'motion_so' for s in result['storyboard'].get('scenes', []))))
     if using_motion:
         count=sum(s.get('motion_engine')=='motion_so' for s in result['storyboard'].get('scenes',[]))
         _assistant(conversation_id,user_key,f'کلیپ موشن هوشمند برای {count} صحنه انتخاب شده است؛ هر کلیپ جداگانه اعتبار مصرف می‌کند. تأیید شما اجازه ارسال شرح صحنه و تصاویر مرجع همان صحنه به سرویس موشن را می‌دهد؛ هزینه دقیق از API قابل محاسبه نیست. نریشن و زیرنویس را EditorGPT می‌سازد. هیچ تلاش مجدد خودکاری انجام نمی‌شود.')
