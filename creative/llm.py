@@ -30,6 +30,10 @@ MAX_COOLDOWN_WAIT_S = 60
 
 
 def _transient_network(exc: Exception) -> bool:
+    # The gateway wraps a dropped connection as a retryable GatewayError. A *timeout* is not retried: it would only repeat the wait.
+    if getattr(exc, "retryable", False) and cooldown_seconds(exc) is None and \
+            any(word in str(exc) for word in ("ConnectError", "RemoteProtocolError", "disconnected")):
+        return True
     try:
         import httpx
     except ImportError:

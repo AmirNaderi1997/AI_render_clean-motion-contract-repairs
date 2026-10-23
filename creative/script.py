@@ -236,11 +236,13 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
                                "speech_s": measured["total_speech_s"], "structure": draft.structure})
         out_of_time = time.monotonic() - started > budget_s
         if review.verdict == "ship" or attempt == rewrites or out_of_time:
+            report.stopped = "shipped" if review.verdict == "ship" else "time" if out_of_time else "cap"
             break
         try:
             candidate = rewrite(draft, review, brief, concept, reference, source, caps, duration_s, measured, outro_s=outro_s, used=used)
         except CreativeUnavailable as exc:
             log.warning("script rewrite unavailable: %s", exc)
+            report.stopped = "unavailable"
             break
         asked = [item for item in review.must_fix if item not in measured["problems"]]       # what the critic itself wants changed
         if similarity(script_text(candidate), script_text(draft)) > 0.8 and (asked or review.change):
@@ -278,11 +280,13 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
 def to_beats(draft: ScriptDraft, duration_s: float) -> list[Beat]:
     """The executable storyboard contract: each beat points at its script line and carries why it exists."""
     beats = []
+    raw = [max(speech.speech_seconds(line.narration) + 0.35, 1.2) for line in draft.lines]
+    mean = sum(raw) / len(raw) if raw else 1.0              # relative weights (mean 1): Beat accepts 0..10, seconds would overflow it
     for index, line in enumerate(draft.lines, 1):
         beats.append(Beat(
             role=line.role, intent=line.hear, visual=line.see, motion=line.motion, title=line.title, narration=line.narration,
             source_asset_index=line.source_asset_index, visual_type=line.visual_type, items=line.items,
-            duration_weight=max(speech.speech_seconds(line.narration) + 0.35, 1.2), motion_engine=line.motion_engine,
+            duration_weight=min(10.0, max(0.2, raw[index - 1] / mean)), motion_engine=line.motion_engine,
             line_id=line.id or f"L{index}", why_visual=line.why_visual, emotion=line.emotion, focus=line.focus,
             link_prev=line.link_prev, reference_trait=line.reference_trait))
     return beats

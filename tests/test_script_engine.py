@@ -109,7 +109,9 @@ def test_critic_outage_does_not_hide_measured_problems(monkeypatch):
 def test_beats_carry_the_visual_first_contract():
     beats = script.to_beats(GOOD, 15)
     assert [b.line_id for b in beats] == ["L1", "L2", "L3"] and beats[0].why_visual and beats[0].focus and beats[1].link_prev
-    assert beats[0].duration_weight >= speech.speech_seconds(beats[0].narration)
+    longer = max(beats, key=lambda b: speech.speech_seconds(b.narration))
+    shorter = min(beats, key=lambda b: speech.speech_seconds(b.narration))
+    assert longer.duration_weight >= shorter.duration_weight
 
 
 def test_dropped_connection_is_retried_not_fatal(monkeypatch):
@@ -140,7 +142,7 @@ def test_a_rewrite_that_only_fixes_a_measured_problem_is_accepted(monkeypatch):
 def test_unresolved_critic_objections_stay_in_the_report(monkeypatch):
     bad = scores(5, verdict="rewrite", must_fix=["پایان مبهم است"], change=["ending"])
     result, report = run(Fake([GOOD, GOOD], [bad, bad]), monkeypatch)
-    assert report.review.verdict == "rewrite" and "پایان مبهم است" in report.review.must_fix
+    assert report.review.verdict == "rewrite" and "پایان مبهم است" in report.review.must_fix and report.stopped == "cap"
 
 
 def test_a_script_still_over_budget_after_the_critic_rounds_is_tightened_without_another_critic_call(monkeypatch):
@@ -151,3 +153,9 @@ def test_a_script_still_over_budget_after_the_critic_rounds_is_tightened_without
     result, report = run(fake, monkeypatch)
     assert result is shorter and report.timing_ok and fake.calls == {"write": 2, "review": 1}
     assert any(item.get("tighten") for item in report.history)
+
+
+def test_beat_weights_stay_within_the_schema_for_long_videos():
+    long_draft = draft(*["ابزار برش می‌زند؛ چشم انتخاب می‌کند و ماشین فقط سریع‌تر می‌شود، همین."] * 8)
+    weights = [b.duration_weight for b in script.to_beats(long_draft, 120)]
+    assert all(0.2 <= w <= 10 for w in weights) and abs(sum(weights) / len(weights) - 1) < 0.01

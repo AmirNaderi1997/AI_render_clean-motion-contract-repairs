@@ -554,6 +554,11 @@ def _idea_message(plan) -> str:
     return "\n\n".join(blocks)
 
 
+_STRUCTURE_FA = {"hook_tension_reframe_payoff": "هوک، تنش، بازچارچوب‌بندی، نتیجه", "problem_agitation_solution": "مسئله، تشدید، راه‌حل",
+                 "curiosity_gap_reveal": "شکاف کنجکاوی و افشا", "before_after": "قبل و بعد", "contrarian_insight": "نگاه خلاف‌انتظار",
+                 "micro_story": "داستان کوتاه", "emotional_buildup": "اوج‌گیری احساسی", "educational_reveal": "آموزش با افشای تدریجی",
+                 "product_demonstration": "نمایش محصول", "benefit_commercial": "تبلیغ مبتنی بر منفعت"}
+_STOPPED_FA = {"cap": "سقف دورهای بازنویسی تمام شد", "time": "سقف زمانی تمام شد", "unavailable": "سرویس بازنویسی پاسخ نداد"}
 _CRITERION_FA = {"hook_strength": "قدرت هوک", "originality": "تازگی ایده", "clarity": "روشنی", "emotional_impact": "اثر احساسی",
                  "audience_relevance": "ارتباط با مخاطب", "narrative_coherence": "انسجام روایت", "curiosity": "کنجکاوی",
                  "memorability": "ماندگاری", "natural_persian": "فارسی گفتاری", "visual_potential": "ظرفیت بصری", "timing": "زمان‌بندی",
@@ -562,7 +567,7 @@ _CRITERION_FA = {"hook_strength": "قدرت هوک", "originality": "تازگی 
 
 def _script_report_text(report) -> str:
     """How the script was reached, with the critic's own evidence; no decorative total score."""
-    lines = [f"**نقد مستقل سناریو** — ساختار «{report.structure or '—'}»، {report.attempts} دور نگارش و نقد"]
+    lines = [f"**نقد مستقل سناریو** — ساختار «{_STRUCTURE_FA.get(report.structure, report.structure or '—')}»، {report.attempts} دور نگارش و نقد"]
     lines.append(f"زمان نریشن (برآورد فارسی): حدود {report.speech_seconds:g} ثانیه از ظرفیت {report.budget_seconds:g} ثانیه"
                  + ("" if report.timing_ok else " ⚠ بیشتر از ظرفیت است"))
     review = report.review
@@ -575,7 +580,7 @@ def _script_report_text(report) -> str:
         if review.summary:
             lines.append(review.summary)
     if review and review.verdict == "rewrite" and review.must_fix:
-        lines.append("منتقد هنوز این موارد را باز می‌داند (سقف دورهای بازنویسی تمام شد): " + "؛ ".join(_short(x, 140) for x in review.must_fix[:3]))
+        lines.append(f"منتقد هنوز این موارد را باز می‌داند ({_STOPPED_FA.get(report.stopped, 'پایان دورها')}): " + "؛ ".join(_short(x, 140) for x in review.must_fix[:3]))
     if report.deterministic:
         lines.append("هشدارها: " + "؛ ".join(report.deterministic[:3]))
     return "\n".join(lines)
@@ -587,14 +592,15 @@ def _scenario_message(storyboard: dict, duration: int, *, motion_scenes: int = 0
     total = storyboard.get("total_duration_s", duration)
     blocks = [f"**سناریوی پیشنهادی** — {len(scenes)} صحنه، حدود {total:g} ثانیه"]
     for number, scene in enumerate(scenes, 1):
-        rows = [f"**صحنهٔ {number} · {scene.get('duration_s', 0):g} ثانیه**"]
+        rows = [f"**صحنهٔ {number} · {round(float(scene.get('duration_s', 0)), 1):g} ثانیه**"]
         if scene.get("narration_text"):
             rows.append(f"نریشن: «{_short(scene['narration_text'], 220)}»")
         if scene.get("text_overlay"):
             rows.append(f"متن روی تصویر: {_short(scene['text_overlay'], 90)}")
         visual = scene.get("media_prompt") or scene.get("description")
         if visual:
-            kind = {"upload": "فایل شما", "library": "کتابخانه"}.get(scene.get("media_method"), "ساخته‌شده با هوش مصنوعی")
+            graphic = scene.get("visual_type") in {"kinetic_type", "stat", "comparison", "steps", "chat", "map_route", "spec_callout", "before_after"}
+            kind = {"upload": "فایل شما", "library": "کتابخانه"}.get(scene.get("media_method"), "گرافیک و تایپوگرافی متحرک" if graphic else "ساخته‌شده با هوش مصنوعی")
             rows.append(f"تصویر ({kind}): {_short(visual, 170)}")
         if scene.get("why_visual"):
             rows.append(f"چرا این تصویر: {_short(scene['why_visual'], 140)}")
