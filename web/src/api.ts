@@ -175,6 +175,13 @@ export interface StudioConversation {
 }
 export interface StudioEvent { id: number; seq: number; type: string; data: Record<string, any>; created_at: string }
 
+/** Motion graphics made in chat (app/motion_graphic.py). */
+export interface MotionVersion { n: number; created_at: number; change: string; notes: string[]; title: string; summary: string; format: "vertical" | "horizontal" | "square"; duration: number; width: number; height: number; }
+export interface MotionGraphic {
+  id: string; conversation_id: string; status: "queued" | "writing" | "checking" | "rendering" | "needs_input" | "completed" | "failed"; stage: string;
+  progress: number; message: string; questions: string[]; error: string | null; request: string; versions: MotionVersion[]; current: number; active: boolean; updated_at: number; log: { key: string; text: string; state: "active" | "done" | "note"; at: number }[]; eta_s: number | null; eta_at: number | null;
+}
+
 /** Long-video content discovery (app/long_video.py). */
 export type CandidateStatus = "discovered" | "selected" | "editing" | "rendering" | "completed" | "failed";
 export interface DiscoveryCandidate {
@@ -1149,6 +1156,14 @@ export const api = {
   async editLocalizeCaptions(id: string, ops: TimelineOp[]): Promise<void> {
     await j(await authFetch(`${BASE}/studio/projects/${id}/localize-captions`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ ops }) }));
   },
+  async stopConversation(id: string): Promise<{ stopped: string[] }> { return j(await authFetch(`${BASE}/studio/conversations/${id}/stop`, { method: "POST" })); },
+  async motionView(id: string): Promise<MotionGraphic> { return j(await authFetch(`${BASE}/studio/motion/${id}`)); },
+  async motionRetry(id: string): Promise<void> { await j(await authFetch(`${BASE}/studio/motion/${id}/retry`, { method: "POST" })); },
+  async motionStop(id: string): Promise<void> { await j(await authFetch(`${BASE}/studio/motion/${id}/stop`, { method: "POST" })); },
+  async motionRevise(id: string, change: string): Promise<void> {
+    await j(await authFetch(`${BASE}/studio/motion/${id}/revise`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ change }) }));
+  },
+  motionMediaUrl(id: string, kind: "video" | "thumb" | "source", version?: number): string { return `${BASE}/studio/motion/${id}/${kind}${version ? `?v=${version}` : ""}`; },
   async conversationDiscovery(conversationId: string): Promise<{ analysis: DiscoveryAnalysis | null }> {
     return j(await authFetch(`${BASE}/studio/conversations/${conversationId}/discovery`));
   },

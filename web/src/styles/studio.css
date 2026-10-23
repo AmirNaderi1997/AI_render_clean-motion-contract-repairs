@@ -460,3 +460,39 @@ button.act-row:hover { color: var(--text-2); }
 .chat-image-toolbar button:hover { background: #333; }
 .chat-image-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .chat-image-scroll img { display: block; max-width: none; height: auto; margin-inline: auto; }
+
+/* ── Motion graphics made in chat ───────────────────────────────────────────── */
+.mg { display: grid; gap: var(--space-3); min-width: 0; }
+.mg-steps { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0; padding: 0; list-style: none; font-size: 13px; color: var(--text-3); }
+.mg-steps li { display: flex; align-items: center; gap: 6px; }
+.mg-steps i { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong, var(--border)); }
+.mg-steps li[data-state="done"] { color: var(--text-2); }
+.mg-steps li[data-state="done"] i { background: var(--success, #2f9e63); }
+.mg-steps li[data-state="active"] { color: var(--text); font-weight: 600; }
+.mg-steps li[data-state="active"] i { background: var(--ink); animation: mg-pulse 1.1s ease-in-out infinite; }
+@keyframes mg-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .mg-steps li[data-state="active"] i { animation: none; } }
+.mg-progress { display: grid; gap: 8px; }
+.mg-message { font-size: 13px; color: var(--text-2); margin: 0; }
+.mg-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mg-result { display: grid; grid-template-columns: minmax(180px, 280px) 1fr; gap: var(--space-4); align-items: start; }
+.mg-result .mg-player[data-format="horizontal"] { grid-column: 1 / -1; max-width: 560px; }
+.mg-result:has(.mg-player[data-format="horizontal"]) { grid-template-columns: 1fr; }
+.mg-player { width: 100%; background: #000; border-radius: var(--radius-lg); overflow: hidden; }
+.mg-player video { width: 100%; height: 100%; display: block; object-fit: contain; }
+.mg-info { display: grid; gap: 8px; min-width: 0; }
+.mg-info h3 { font-size: 15px; font-weight: 600; margin: 0; }
+.mg-meta, .mg-change { font-size: 13px; color: var(--text-3); margin: 0; }
+.mg-versions { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
+.mg-notes { font-size: 12px; color: var(--text-3); }
+.mg-notes ul { margin: 6px 0 0; padding-inline-start: 18px; display: grid; gap: 4px; }
+@media (max-width: 640px) { .mg-result { grid-template-columns: 1fr; } .mg-player { max-width: 300px; } }
+.mg-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; color: var(--text-3); }
+.mg-log li { display: flex; align-items: flex-start; gap: 8px; line-height: 1.6; }
+.mg-log i { flex: none; width: 8px; height: 8px; margin-top: 8px; border-radius: 50%; background: var(--border-strong, var(--border)); }
+.mg-log li[data-state="done"] { color: var(--text-2); }
+.mg-log li[data-state="done"] i { background: var(--success, #2f9e63); }
+.mg-log li[data-state="active"] { color: var(--text); }
+.mg-log li[data-state="active"] i { background: var(--ink); animation: mg-pulse 1.1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .mg-log li[data-state="active"] i { animation: none; } }
+.mg-eta { margin: 0; font-size: 13px; font-weight: 600; color: var(--text-2); font-variant-numeric: tabular-nums; }

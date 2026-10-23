@@ -5,6 +5,7 @@ import { Icon } from "../components/Icon";
 import { ActivityBlock, ThinkingRow } from "./Activity";
 import { RenderCard } from "./RenderCard";
 import { DiscoveryPanel } from "./Discovery";
+import { MotionGraphicCard } from "./MotionGraphic";
 import { RichText } from "./RichText";
 import { TimelineItem } from "./model";
 import { ImagePreview } from "./ImagePreview";
@@ -51,6 +52,7 @@ export function Thread({ items, conversation, projects, localFiles, thinking, co
             </div>
           : <div className="assistant"><span className="assistant-mark" aria-hidden="true"><Icon name="spark" size={13}/></span><div className="assistant-body"><RichText text={item.content} linkTitles={linkTitles}/><Attachments conversationId={conversation?.id} ids={item.attachments} autoOpen/></div></div>}
       </li>;
+      if (item.kind === "motion") return <li key={item.id} className="thread-aux"><MotionGraphicCard motionId={item.motionId} events={events}/></li>;
       if (item.kind === "discovery") return <li key={item.id} className="thread-aux thread-wide"><DiscoveryPanel analysisId={item.analysisId} events={events}/></li>;
       if (item.kind === "activity") return <li key={item.id} className="thread-aux"><ActivityBlock steps={item.steps} live={item.live} retryHref={retryHref}/></li>;
       if (item.kind === "render") {

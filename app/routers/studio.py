@@ -6,7 +6,7 @@ import copy
 import json
 import re
 import shutil
-from typing import Literal
+from typing import Literal, Optional
 from pathlib import Path
 
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
@@ -1088,3 +1088,91 @@ async def discovery_preview(request: Request, analysis_id: str, candidate_id: st
     analysis, cand = _candidate(directory, candidate_id)
     path = await asyncio.to_thread(long_video.preview, directory, cand, Path(analysis["source_path"]))
     return FileResponse(path, media_type="video/mp4")
+
+
+# -- Motion graphics -----------------------------------------------------------------------------------
+
+def _motion_dir(request: Request, motion_id: str):
+    from app import motion_graphic
+    try:
+        return motion_graphic.locate(motion_id, _user(request))
+    except KeyError:
+        raise HTTPException(404, "motion graphic not found")
+
+
+class MotionChange(BaseModel):
+    change: str = Field(min_length=2, max_length=3000)
+
+
+@router.post("/conversations/{conversation_id}/stop")
+async def stop_conversation(request: Request, conversation_id: str):
+    """The Stop button: cancel whatever this chat is working on."""
+    from app.studio_orchestrator import request_stop
+    try:
+        return await asyncio.to_thread(request_stop, conversation_id, _user(request))
+    except KeyError:
+        raise HTTPException(404, "conversation not found")
+
+
+@router.get("/conversations/{conversation_id}/motion")
+async def conversation_motion(request: Request, conversation_id: str):
+    from app import motion_graphic
+    try:
+        conversation = await repo.get_conversation(conversation_id, _user(request))
+    except KeyError:
+        raise HTTPException(404, "conversation not found")
+    pointer = (conversation.get("state") or {}).get("motion")
+    if not pointer:
+        return {"motion": None}
+    return {"motion": await asyncio.to_thread(motion_graphic.view, _motion_dir(request, pointer["motion_id"]))}
+
+
+@router.get("/motion/{motion_id}")
+async def motion_view(request: Request, motion_id: str):
+    from app import motion_graphic
+    return await asyncio.to_thread(motion_graphic.view, _motion_dir(request, motion_id))
+
+
+@router.get("/motion/{motion_id}/{kind}")
+async def motion_media(request: Request, motion_id: str, kind: str, v: Optional[int] = None):
+    from app import motion_graphic
+    if kind not in {"video", "thumb", "source"}:
+        raise HTTPException(404, "unknown file")
+    try:
+        path = await asyncio.to_thread(motion_graphic.media_path, _motion_dir(request, motion_id), kind, v)
+    except KeyError:
+        raise HTTPException(404, "file not ready")
+    media_type = {"video": "video/mp4", "thumb": "image/jpeg", "source": "text/html"}[kind]
+    headers = {"Cache-Control": "private, max-age=3600"}
+    if kind in {"video", "source"}:
+        headers["Content-Disposition"] = f'inline; filename="motion-graphic.{"mp4" if kind == "video" else "html"}"'
+    return FileResponse(path, media_type=media_type, headers=headers)
+
+
+@router.post("/motion/{motion_id}/stop")
+async def motion_stop(request: Request, motion_id: str):
+    from app import motion_graphic
+    motion_graphic.stop(_motion_dir(request, motion_id))
+    return {"ok": True}
+
+
+@router.post("/motion/{motion_id}/retry")
+async def motion_retry(request: Request, motion_id: str):
+    from app import motion_graphic
+    directory = _motion_dir(request, motion_id)
+    record = await asyncio.to_thread(motion_graphic.load, directory)
+    if record["status"] in motion_graphic.ACTIVE:
+        raise HTTPException(409, "already running")
+    await asyncio.to_thread(motion_graphic.start, directory, change=record.get("pending_change") or "")
+    return {"ok": True}
+
+
+@router.post("/motion/{motion_id}/revise")
+async def motion_revise(request: Request, motion_id: str, body: MotionChange):
+    from app import motion_graphic
+    directory = _motion_dir(request, motion_id)
+    record = await asyncio.to_thread(motion_graphic.load, directory)
+    if record["status"] in motion_graphic.ACTIVE:
+        raise HTTPException(409, "already running")
+    await asyncio.to_thread(motion_graphic.revise, directory, body.change)
+    return {"ok": True}

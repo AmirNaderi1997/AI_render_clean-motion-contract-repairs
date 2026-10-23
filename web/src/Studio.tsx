@@ -8,6 +8,7 @@ import { useTopbarTitle } from "./components/ShellContext";
 import { displayTitle, parseTime, relativeTime } from "./format";
 import { friendlyError } from "./ui";
 import { Resizer, usePanelWidth } from "./components/Resizer";
+import { useMotionActive } from "./studio/MotionGraphic";
 import { Composer, PendingFile } from "./studio/Composer";
 import { ManualQuestion } from "./studio/ManualQuestion";
 import { Thread, LocalFileInfo } from "./studio/Thread";
@@ -193,8 +194,9 @@ export default function Studio() {
   const sourceAttachment = current?.state?.attachment_ids?.[0];
   const messages = conversation?.messages || [];
   const lastUserMessage = [...messages].reverse().find(message => message.role === 'user');
-  const processing = isProcessing({ sending, messages, events, project: current, now });
-  const items = React.useMemo(() => buildTimeline({ messages, events, projects, pending, processing, discoveryId: conversation?.state?.discovery?.analysis_id }), [messages, events, projects, pending, processing, conversation?.state?.discovery?.analysis_id]);
+  const motionActive = useMotionActive(conversation?.state?.motion?.motion_id, events);
+  const processing = isProcessing({ sending, messages, events, project: current, now }) || motionActive;
+  const items = React.useMemo(() => buildTimeline({ messages, events, projects, pending, processing, discoveryId: conversation?.state?.discovery?.analysis_id, motionId: conversation?.state?.motion?.motion_id }), [messages, events, projects, pending, processing, conversation?.state?.discovery?.analysis_id, conversation?.state?.motion?.motion_id]);
   const step = activeStep(items);
   // A live render card is its own progress indicator; otherwise show what the assistant is doing.
   const renderLive = items.some(item => item.kind === "render" && ["queued", "rendering", "finalizing"].includes(renderView(projects.find(p => p.id === item.projectId)).phase));
@@ -204,7 +206,7 @@ export default function Studio() {
   useTopbarTitle(showConversation ? title : "");
   const announcement = step ? `${step.label}` : thinking ? `${thinking}` : processing ? "Working" : "";
   const sourceUrl = conversation && sourceAttachment ? api.studioAttachmentUrl(conversation.id, sourceAttachment) : undefined;
-  const canStop = current?.status === "running";
+  const canStop = processing && Boolean(conversationId);
 
   // ── scrolling: stick to bottom unless the reader scrolled up ──
   const onScroll = () => { const node = scrollRef.current; if (node) setStuck(node.scrollHeight - node.scrollTop - node.clientHeight < 140); };
@@ -280,7 +282,7 @@ export default function Studio() {
     } finally { setSending(false); }
   }
   const retryMessage = () => { if (lastSendRef.current) void send(undefined, lastSendRef.current); };
-  const stop = () => { if (current) void api.cancelStudioProject(current.id).then(() => refresh()).catch(e => setError(friendlyError(e, "cancel"))); };
+  const stop = () => { if (conversationId) void api.stopConversation(conversationId).then(() => refresh()).catch(e => setError(friendlyError(e, "stop"))); };
 
   function startVoiceInput() {
     const Speech = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;

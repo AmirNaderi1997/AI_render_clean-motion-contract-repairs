@@ -29,7 +29,8 @@ export type TimelineItem =
   | { kind: "activity"; id: string; steps: ActivityStep[]; live: boolean }
   | { kind: "render"; id: string; projectId: string; startedAt: number }
   | { kind: "question"; id: string; question: string; choices: QuestionChoice[]; seq: number; style: boolean }
-  | { kind: "discovery"; id: string; analysisId: string };
+  | { kind: "discovery"; id: string; analysisId: string }
+  | { kind: "motion"; id: string; motionId: string };
 
 export interface QuestionChoice { label: string; /** What to send as the user's answer. */ value: string }
 /** Backend choices are either plain strings or { id, label } objects (talking styles). */
@@ -162,9 +163,11 @@ export interface TimelineInput {
   processing: boolean;
   /** The long-video analysis the conversation already owns (from its saved state), shown even when its events are older than the page. */
   discoveryId?: string;
+  /** The motion graphic the conversation already owns (from its saved state). */
+  motionId?: string;
 }
 
-export function buildTimeline({ messages, events, projects, pending, processing, discoveryId }: TimelineInput): TimelineItem[] {
+export function buildTimeline({ messages, events, projects, pending, processing, discoveryId, motionId }: TimelineInput): TimelineItem[] {
   const streamedIds = new Set(events.filter(e => e.type.startsWith('assistant.response.') && e.data.message_id != null).map(e => String(e.data.message_id)));
   type Entry = { t: number; order: number; tie: number; message?: StudioMessage; event?: StudioEvent };
   const entries: Entry[] = [
@@ -214,6 +217,11 @@ export function buildTimeline({ messages, events, projects, pending, processing,
       }
       continue;
     }
+    if (event.type === "motion.created") {
+      flush();
+      if (!items.some(item => item.kind === "motion")) items.push({ kind: "motion", id: `mg-${event.data.motion_id}`, motionId: String(event.data.motion_id) });
+      continue;
+    }
     if (event.type === "discovery.created") {
       flush();
       if (!items.some(item => item.kind === "discovery")) items.push({ kind: "discovery", id: `dv-${event.data.analysis_id}`, analysisId: String(event.data.analysis_id) });
@@ -259,6 +267,7 @@ export function buildTimeline({ messages, events, projects, pending, processing,
   }
   flush();
   if (discoveryId && !items.some(item => item.kind === "discovery")) items.push({ kind: "discovery", id: `dv-${discoveryId}`, analysisId: discoveryId });
+  if (motionId && !items.some(item => item.kind === "motion")) items.push({ kind: "motion", id: `mg-${motionId}`, motionId });
 
   // A render card for any project that is rendering or finished but whose events were not seen
   // in this session (e.g. a project opened from history).
@@ -292,6 +301,10 @@ export function buildTimeline({ messages, events, projects, pending, processing,
     return !items.slice(items.indexOf(item) + 1).some(next => next.kind === "message" && next.role === "user");
   });
 
+  // The motion graphic's progress and result belong to the latest message: they stay at the end however many messages follow.
+  const motion = filtered.filter(item => item.kind === "motion");
+  if (motion.length) { const rest = filtered.filter(item => item.kind !== "motion"); filtered.length = 0; filtered.push(...rest, ...motion); }
+
   if (pending) filtered.push({ kind: "message", id: pending.id, role: "user", content: pending.content, attachments: pending.attachments, createdAt: pending.createdAt, pending: !pending.failed, failed: pending.failed });
   void lastUserIndex;
   return filtered;
@@ -310,7 +323,7 @@ export function isProcessing(args: { sending: boolean; messages: StudioMessage[]
   if (!last || last.role !== "user") return false;
   const sentAt = parseTime(last.created_at);
   const after = events.filter(event => parseTime(event.created_at) >= sentAt - 1000);
-  if (after.some(event => event.type === "tool.failed" || event.type === "question.required")) return false;
+  if (after.some(event => event.type === "tool.failed" || event.type === "question.required" || event.type === "message.stopped")) return false;
   const latest = Math.max(sentAt, ...after.map(event => parseTime(event.created_at)));
   // No heartbeat for 3 minutes: stop claiming the assistant is working.
   return now - latest < 3 * 60 * 1000;

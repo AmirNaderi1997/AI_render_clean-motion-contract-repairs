@@ -103,6 +103,10 @@ TASKS = {
     # Social-reference analysis (creative/reference.py): frame-by-frame review and the overall style description.
     "reference_frame_review": _task("Social Reference · Frame Review", "vision", VISION, "video_understanding"),
     "reference_style_analysis": _task("Social Reference · Style Analysis", "vision", VISION, "video_understanding"),
+    # Motion graphics from chat (creative/motion_graphic.py): the designer writes the whole clip, the repair route fixes what the checks report.
+    "motion_graphic_planner": _task("Motion Graphic · Planner", "chat", STORY, "editing_agent"),
+    "motion_graphic_designer": _task("Motion Graphic · Scene Designer", "chat", POWER, "editing_agent"),
+    "motion_graphic_repair": _task("Motion Graphic · Repair", "chat", STORY, "editing_agent"),
     # Script engine (creative/script.py): writer, independent critic, rewrite.
     "script_writer": _task("Script Engine · Writer", "chat", POWER, "editing_agent"),
     "script_critic": _task("Script Engine · Critic", "chat", POWER, "editing_agent"),

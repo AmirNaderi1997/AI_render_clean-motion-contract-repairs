@@ -230,8 +230,7 @@ def _post(url: str, headers: dict, body: dict, timeout: float) -> httpx.Response
         return client.post(url, headers=headers, json=body)
 
 
-def call(provider: dict, messages: list[dict], *, model: str, tokens: int, temperature=None, timeout: float = 90, extra=None) -> dict:
-    """One request to one provider. Returns an OpenAI-shaped chat response or raises DirectError."""
+def _prepare(provider: dict, messages: list[dict], *, model: str, tokens: int, temperature, extra, stream: bool):
     key = key_for(provider["id"])
     if not key:
         raise DirectError("No API key configured")
@@ -244,10 +243,17 @@ def call(provider: dict, messages: list[dict], *, model: str, tokens: int, tempe
         if extra and (extra.get("tools") or extra.get("response_format")):
             raise DirectError("Gemini native format does not carry tools or structured output")
         headers["x-goog-api-key"] = key
-        url, body = f"{base}/models/{model}:generateContent", _to_gemini(messages, tokens, temperature)
-    else:
-        headers["Authorization"] = f"{PROVIDERS[provider['id']].get('auth', 'Bearer')} {key}"
-        url, body = f"{base}/chat/completions", adapters.payload("chat", model, messages, tokens=tokens, temperature=temperature, extra=extra)
+        return key, f"{base}/models/{model}:generateContent", headers, _to_gemini(messages, tokens, temperature)
+    headers["Authorization"] = f"{PROVIDERS[provider['id']].get('auth', 'Bearer')} {key}"
+    body = adapters.payload("chat", model, messages, tokens=tokens, temperature=temperature, extra=extra)
+    if stream:
+        body = {**body, "stream": True}
+    return key, f"{base}/chat/completions", headers, body
+
+
+def call(provider: dict, messages: list[dict], *, model: str, tokens: int, temperature=None, timeout: float = 90, extra=None) -> dict:
+    """One request to one provider. Returns an OpenAI-shaped chat response or raises DirectError."""
+    key, url, headers, body = _prepare(provider, messages, model=model, tokens=tokens, temperature=temperature, extra=extra, stream=False)
     try:
         response = _post(url, headers, body, timeout)
     except httpx.TimeoutException as exc:
@@ -261,6 +267,50 @@ def call(provider: dict, messages: list[dict], *, model: str, tokens: int, tempe
     except ValueError as exc:
         raise DirectError("Provider returned invalid JSON", 502) from exc
     return _from_gemini(data, model) if provider["format"] == "gemini" else data
+
+
+def stream_call(provider: dict, messages: list[dict], *, model: str, tokens: int, temperature=None, timeout: float = 60):
+    """Real token streaming from one provider (OpenAI-compatible SSE). The native Gemini format has no stream here: its whole answer is yielded once."""
+    if provider["format"] == "gemini":
+        yield adapters.text("chat", call(provider, messages, model=model, tokens=tokens, temperature=temperature, timeout=timeout))
+        return
+    from .http_ssl import ssl_context
+    key, url, headers, body = _prepare(provider, messages, model=model, tokens=tokens, temperature=temperature, extra=None, stream=True)
+    started = time.monotonic()
+    try:
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(timeout, 10)), verify=ssl_context(), follow_redirects=False) as client:
+            with client.stream("POST", url, headers=headers, json=body) as response:
+                if not response.is_success:
+                    response.read()
+                    raise DirectError(f"HTTP {response.status_code}: {_scrub(response.text, key)}", response.status_code)
+                done = False
+                for line in response.iter_lines():
+                    if time.monotonic() - started > timeout:
+                        raise DirectError("stream deadline exceeded", 504)
+                    if not line.startswith("data:"):
+                        continue
+                    value = line[5:].strip()
+                    if value == "[DONE]":
+                        done = True
+                        break
+                    try:
+                        chunk = json.loads(value)
+                    except ValueError:
+                        continue
+                    if chunk.get("error"):
+                        raise DirectError("provider reported a stream error", 502)
+                    choices = chunk.get("choices") or []
+                    delta = (choices[0].get("delta") or {}).get("content") if choices else None
+                    if delta:
+                        yield delta
+                    if choices and choices[0].get("finish_reason"):
+                        done = True
+                if not done:
+                    raise DirectError("stream ended before completion", 502)
+    except httpx.TimeoutException as exc:
+        raise DirectError(type(exc).__name__, 504) from exc
+    except httpx.HTTPError as exc:
+        raise DirectError(type(exc).__name__, 502) from exc
 
 
 def _scrub(text: str, key: str, limit: int = 240) -> str:
@@ -284,11 +334,22 @@ def model_for(provider: dict, candidates: list[str]) -> str:
     return model
 
 
+_REJECTED: dict[str, float] = {}      # provider id -> monotonic time until which a rejected key is not tried again
+REJECTED_COOLDOWN_S = 600
+
+
+def _note_failure(provider: dict, exc: "DirectError") -> None:
+    """A key the provider rejected (401/403) will not start working by itself: do not spend a round trip on it for a while."""
+    if getattr(exc, "status", None) in (401, 403):
+        _REJECTED[provider["id"]] = time.monotonic() + REJECTED_COOLDOWN_S
+
+
 def usable(providers: list[dict] | None = None, *, google_first: bool = False) -> list[dict]:
     cfg = config()
     if not cfg["enabled"]:
         return []
-    found = [p for p in (providers or cfg["providers"]) if p["enabled"] and key_for(p["id"])]
+    now = time.monotonic()
+    found = [p for p in (providers or cfg["providers"]) if p["enabled"] and key_for(p["id"]) and _REJECTED.get(p["id"], 0) <= now]
     if google_first:
         # Gemini/Google models are asked of Google itself before any reseller.
         found.sort(key=lambda p: 0 if p["id"] == "gemini" else 1)
@@ -296,20 +357,119 @@ def usable(providers: list[dict] | None = None, *, google_first: bool = False) -
 
 
 def try_fallback(messages: list[dict], *, candidates: list[str], tokens: int, temperature, timeout: float, extra,
-                 attempts: list[dict]) -> tuple[dict, str, str] | None:
+                 attempts: list[dict], validate=None) -> tuple[dict, str, str] | None:
     """Walk enabled providers with keys, in order. Returns (response, provider_id, model) or None. Appends to `attempts`."""
     for provider in usable(google_first=any(str(c).startswith("google:") for c in candidates[:1])):
         model = model_for(provider, candidates)
         started = time.monotonic()
         try:
             response = call(provider, messages, model=model, tokens=tokens, temperature=temperature, timeout=min(timeout, 120), extra=extra)
+            if validate is not None:
+                # Structured callers (JSON plans): an answer that does not parse is no answer; ask the next provider instead.
+                try:
+                    validate(adapters.text("chat", response))
+                except (ValueError, TypeError, KeyError):
+                    attempts.append({"model": f"direct:{provider['id']}:{model}", "http_status": 200, "error": "invalid structured output",
+                                     "latency_ms": round((time.monotonic() - started) * 1000)})
+                    continue
             attempts.append({"model": f"direct:{provider['id']}:{model}", "http_status": 200, "latency_ms": round((time.monotonic() - started) * 1000)})
             return response, provider["id"], model
         except DirectError as exc:
+            _note_failure(provider, exc)
             log.warning("direct fallback %s failed: %s", provider["id"], str(exc)[:160])
             attempts.append({"model": f"direct:{provider['id']}:{model}", "http_status": exc.status, "error": str(exc)[:240],
                              "latency_ms": round((time.monotonic() - started) * 1000)})
     return None
+
+
+def _stream_attempts(candidates: list[str]) -> list[tuple[dict, str]]:
+    """(provider, model) pairs in priority order: the route's own models first (as the route lists them), then each usable provider's default."""
+    providers = {p["id"]: p for p in usable(google_first=any(str(c).startswith("google:") for c in candidates[:1]))}
+    by_group = {PROVIDERS[pid]["group"]: pid for pid in PROVIDERS if PROVIDERS[pid].get("group")}
+    pairs: list[tuple[dict, str]] = []
+    for candidate in candidates:
+        candidate = str(candidate)
+        if candidate.startswith("custom:") and "#" in candidate:
+            raw, _, group = candidate[len("custom:"):].rpartition("#")
+            provider = providers.get(by_group.get(group, ""))
+            if provider and raw:
+                pairs.append((provider, raw))
+        elif candidate.startswith("google:") and "gemini" in providers:
+            provider = providers["gemini"]
+            raw = candidate.partition(":")[2]
+            pairs.append((provider, raw if provider["format"] == "gemini" else f"google/{raw}"))
+    for provider in providers.values():
+        pairs.append((provider, model_for(provider, [])))
+    seen, unique = set(), []
+    for provider, model in pairs:
+        if (provider["id"], model) not in seen:
+            seen.add((provider["id"], model))
+            unique.append((provider, model))
+    return unique
+
+
+def stream_fallback(messages: list[dict], *, candidates: list[str], tokens: int, temperature=None, timeout: float = 60, hedge_after: float = 2.5):
+    """Stream the answer from the direct providers, fast: the first attempt starts at once, the next one joins when no text has arrived after
+    ``hedge_after`` seconds (the slow one keeps running), and the first attempt to produce text wins; the others are dropped. A winner is never mixed
+    with another provider. Raises DirectError when no attempt produced anything."""
+    import queue
+    attempts = _stream_attempts(candidates)
+    if not attempts:
+        raise DirectError("no direct provider is configured")
+    events: "queue.Queue" = queue.Queue()
+    state = {"winner": None}
+
+    def work(index: int, provider: dict, model: str) -> None:
+        try:
+            for piece in stream_call(provider, messages, model=model, tokens=tokens, temperature=temperature, timeout=timeout):
+                if state["winner"] not in (None, index):
+                    return                                            # another attempt already won: let go of this stream
+                events.put((index, "piece", piece))
+            events.put((index, "done", None))
+        except DirectError as exc:
+            _note_failure(provider, exc)
+            log.warning("direct stream %s (%s) failed: %s", provider["id"], model, str(exc)[:160])
+            events.put((index, "error", exc))
+
+    started = 0
+    last_start = 0.0
+    alive: set[int] = set()
+    last_error: DirectError | None = None
+
+    def launch() -> None:
+        nonlocal started, last_start
+        provider, model = attempts[started]
+        alive.add(started)
+        threading.Thread(target=work, args=(started, provider, model), daemon=True, name=f"direct-stream-{provider['id']}").start()
+        started += 1
+        last_start = time.monotonic()
+
+    launch()
+    while True:
+        if state["winner"] is None and started < len(attempts) and (not alive or time.monotonic() - last_start >= hedge_after):
+            launch()
+        try:
+            index, kind, value = events.get(timeout=0.1)
+        except queue.Empty:
+            if not alive and started >= len(attempts):
+                raise last_error or DirectError("no direct provider answered")
+            continue
+        if kind == "piece":
+            if state["winner"] is None:
+                state["winner"] = index
+            if state["winner"] == index:
+                yield value
+        elif kind == "done":
+            alive.discard(index)
+            if state["winner"] == index:
+                return
+            if state["winner"] is None:
+                last_error = DirectError("provider answered with no text", 200)
+        else:
+            alive.discard(index)
+            last_error = value
+            if state["winner"] == index:
+                raise value                                           # failed after it started speaking: the answer cannot be completed elsewhere
 
 
 def probe(provider_id: str) -> dict:

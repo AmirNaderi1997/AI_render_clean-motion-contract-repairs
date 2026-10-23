@@ -1,0 +1,10 @@
+/* Motion-graphic kit: base layout only. No transforms, transitions or animations here: all motion comes from the timeline. */
+html, body { margin: 0; padding: 0; background: #000; }
+#root { position: relative; width: 100%; height: 100%; overflow: hidden; font-family: Ray, Vazir, sans-serif; direction: rtl; }
+#stage { position: absolute; inset: 0; overflow: hidden; }
+.hm-scene { position: absolute; inset: 0; overflow: hidden; direction: rtl; text-align: right; }
+.hm-scene * { box-sizing: border-box; }
+.hm-mask { display: inline-block; overflow: hidden; vertical-align: top; padding: .12em 0 .22em; margin: -.12em 0 -.22em; }
+.hm-rise { display: inline-block; }
+.hm-band { position: absolute; inset: 0; pointer-events: none; }
+.hm-word { display: inline-block; }
