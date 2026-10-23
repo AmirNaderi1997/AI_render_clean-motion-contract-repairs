@@ -25,13 +25,50 @@ def qualified_id(provider: str, model_id: str) -> str:
     return f"custom:{model_id}#{item['group']}" if item["group"] else item["prefix"] + model_id
 
 
+# Operator priority: Jarvis first, then Sarovi, then ArvanCloud, then OpenAI. Gemini/Google models are the one exception:
+# Google itself is asked first for those. Anything unrecognised (``auto``, legacy ids) goes last.
+PRIORITY = ("jarvis", "sarovi", "arvancloud", "openai")
+
+
+def provider_of(model_id: str) -> str:
+    """Provider of a registered model id (``custom:<raw>#<group>`` / ``google:<raw>``); ``""`` when it cannot be told."""
+    if model_id.startswith("google:"):
+        return "google"
+    if model_id.startswith("custom:") and "#" in model_id:
+        group = model_id.rsplit("#", 1)[1]
+        for name, item in PROVIDERS.items():
+            if item.get("group") == group:
+                return name
+    return ""
+
+
+def rank(model_id: str) -> int:
+    provider = provider_of(model_id)
+    if provider == "google":
+        return -1
+    return PRIORITY.index(provider) if provider in PRIORITY else len(PRIORITY)
+
+
+def prioritize(model_ids: list[str]) -> list[str]:
+    """Stable reorder by the operator priority; models of the same provider keep the order the operator gave them."""
+    return [mid for _, mid in sorted(enumerate(model_ids), key=lambda pair: (rank(pair[1]), pair[0]))]
+
+
+def ordered(pairs):
+    """Same ordering for ``(provider, model_id)`` pairs (used by the policy below)."""
+    def key(item):
+        provider = item[1][0]
+        return (-1 if provider == "google" else PRIORITY.index(provider) if provider in PRIORITY else len(PRIORITY), item[0])
+    return [pair for _, pair in sorted(enumerate(pairs), key=key)]
+
+
 # Cross-provider versions may differ; never pretend Opus 5.5 exists on Arvan.
-POWER = [("jarvis", "CLAUDE_OPUS_5_5"), ("arvancloud", "Claude-Opus-4.7")]
-STORY = [("jarvis", "CLAUDE_SONNET_5_5"), ("arvancloud", "Claude-Sonnet-4.6")]
-LIGHT = [("google", "gemini-3.5-flash"), ("arvancloud", "DeepSeek-V4-Flash"),
-         ("arvancloud", "GLM-5.3-Flash"), ("jarvis", "DEEPSEEK_V4_FLASH")]
-VISION = [("jarvis", "GPT_5_6_SOL"), ("google", "gemini-3.1-pro-preview"),
-          ("arvancloud", "GPT-5.6-Sol")]
+POWER = ordered([("jarvis", "CLAUDE_OPUS_5_5"), ("arvancloud", "Claude-Opus-4.7")])
+STORY = ordered([("jarvis", "CLAUDE_SONNET_5_5"), ("arvancloud", "Claude-Sonnet-4.6")])
+LIGHT = ordered([("google", "gemini-3.5-flash"), ("arvancloud", "DeepSeek-V4-Flash"),
+                 ("arvancloud", "GLM-5.3-Flash"), ("jarvis", "DEEPSEEK_V4_FLASH")])
+VISION = ordered([("jarvis", "GPT_5_6_SOL"), ("google", "gemini-3.1-pro-preview"),
+                  ("arvancloud", "GPT-5.6-Sol")])
 
 
 def _task(title, capability, pairs, parent):
@@ -57,6 +94,17 @@ TASKS = {
     "creative_motion": _task("Creative Motion Designer", "chat", POWER, "editing_agent"),
     "segment_analysis": _task("Segment Analysis", "chat", LIGHT, "editing_agent"),
     "transcript_correction": _task("Transcript Correction", "chat", LIGHT, "subtitles"),
+    # Long-video discovery (creative/discovery.py): one card per stage so each can be tuned on its own.
+    "long_video_enhance": _task("Long Video · Transcript Enhancement", "chat", LIGHT, "subtitles"),
+    "long_video_outline": _task("Long Video · Topic Outline", "chat", STORY, "editing_agent"),
+    "long_video_clip_finder": _task("Long Video · Clip Finder", "chat", POWER, "editing_agent"),
+    "long_video_clip_validator": _task("Long Video · Clip Validator", "chat", POWER, "editing_agent"),
+    # Social-reference analysis (creative/reference.py): frame-by-frame review and the overall style description.
+    "reference_frame_review": _task("Social Reference · Frame Review", "vision", VISION, "video_understanding"),
+    "reference_style_analysis": _task("Social Reference · Style Analysis", "vision", VISION, "video_understanding"),
+    # Script engine (creative/script.py): writer, independent critic, rewrite.
+    "script_writer": _task("Script Engine · Writer", "chat", POWER, "editing_agent"),
+    "script_critic": _task("Script Engine · Critic", "chat", POWER, "editing_agent"),
     "translation": _task("Translation", "chat", STORY, "subtitles"),
     "subtitle_formatting": _task("Subtitle Formatting", "chat", LIGHT, "subtitles"),
     "script_generation": _task("Script Generation", "chat", STORY, "editing_agent"),

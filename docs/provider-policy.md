@@ -22,3 +22,10 @@ Gemini through a Vercel proxy. Implemented in `brain/lm_direct.py` only. Keys ar
 Direct fallbacks* (write-only, stored 0600) or via `DIRECT_<PROVIDER>_API_KEY`; Arvan/OpenAI/Gemini keys already in
 `.env` are reused. A master switch and per-provider switches live in the same tab. Media routes (images, speech,
 video) keep their own provider paths; direct fallback never applies to them.
+
+
+## Priority and per-feature routes
+
+Order everywhere: **Jarvis → Sarovi → ArvanCloud → OpenAI**; Gemini/Google models are asked of Google itself first. LM API (`lmapi.rafiei.co`) is tried first, then the direct fallbacks in the same order (*Direct fallbacks* tab, master switch on).
+
+New AI stages have their own route card at the end of *AI Models & Logs → Routing*: Long Video (Transcript Enhancement, Topic Outline, Clip Finder, Clip Validator), Social Reference (Frame Review, Style Analysis) and Script Engine (Writer, Critic). New routes are seeded in priority order; **Apply priority to all routes** reorders existing chat/vision routes the same way (order only; nothing is added, enabled or removed). Sarovi text-model ids are not in the shared catalog: add them in the routing tab and press the button again.

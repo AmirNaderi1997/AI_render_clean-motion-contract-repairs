@@ -93,12 +93,20 @@ def defaults():
                 "models": ["auto"], "endpoint": "embeddings" if key == "embeddings" else "chat",
                 "timeout": 120, "max_retries": 1, "temperature": None, "max_tokens": 16000,
                 "streaming": False, "automatic_fallback": True, "specialized_fallback": specialized}
-    from .lm_tasks import TASKS
+    from .lm_tasks import TASKS, prioritize
+    pending = [key for key in TASKS if key not in existing and key not in new]
+    if pending:
+        register_task_models()          # preferred models must exist in the catalog before a route can list them
+    catalog = store.records("models") if pending else {}
     for key, spec in TASKS.items():
         if key not in existing and key not in new:
             parent = {**existing, **new}[spec["parent"]]
+            # Operator priority (Jarvis, Sarovi, Arvan; Google first for Gemini) ahead of whatever the parent route uses.
+            # A preferred model that has not passed its capability test is skipped at execution time, so this is safe.
+            preferred = prioritize([p["id"] for p in spec["preferences"] if p["id"] in catalog])
+            models = (preferred + [m for m in parent["models"] if m not in preferred])[:8]
             new[key] = {**parent, "id":key, "title":spec["title"], "capability":spec["capability"],
-                        "models":list(parent["models"]), "task_id":key}
+                        "models":models, "task_id":key}
     if new: store.save("routes", new)
     return {**existing, **new}
 

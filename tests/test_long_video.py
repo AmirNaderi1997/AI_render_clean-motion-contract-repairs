@@ -208,13 +208,13 @@ def test_correction_falls_back_to_a_steadier_route_and_stops_at_its_deadline():
     calls = []
     def ask(schema, system, user, route=None, **kw):
         calls.append(route)
-        if route == "transcript_correction":
+        if route == "long_video_enhance":
             raise RuntimeError("503 high demand")
         data = json.loads(user)
         return discovery.EnhancedBatch(items=[{"id": s["id"], "text": s["text"]} for s in data["segments"]])
     segments = [{"id": f"s{i}", "start": i, "end": i + 1, "text": f"متن شمارهٔ {i}", "words": []} for i in range(20)]
     out = discovery.enhance_segments(segments, ask=ask)
-    assert all("not_enhanced" not in s["flags"] for s in out) and "creative_revision" in calls and calls[0] == "transcript_correction"
+    assert all("not_enhanced" not in s["flags"] for s in out) and "creative_revision" in calls and calls[0] == "long_video_enhance"
     late = discovery.enhance_segments(segments, ask=ask, deadline=0.0)          # a deadline in the past: nothing is asked
     assert all("not_enhanced" in s["flags"] and s["enhanced_text"] == s["text"] for s in late)
 

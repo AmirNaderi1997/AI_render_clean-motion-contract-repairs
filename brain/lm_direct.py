@@ -32,10 +32,10 @@ from . import lm_adapters as adapters
 log = logging.getLogger(__name__)
 _lock = threading.Lock()
 
-# Priority order is the order of this list. Models are defaults; routes naming a model of the same provider win.
+# Priority order is the order of this list: Jarvis, Sarovi, Arvan, OpenAI, Gemini (Gemini is moved first for Google/Gemini models, see `usable`). Models are defaults; routes naming a model of the same provider win.
 PROVIDERS: dict[str, dict[str, Any]] = {
-    "sarovi": {"title": "Sarovi", "base_url": "https://api.sarovi.ir/v1", "model": "gpt-4.1-mini", "format": "openai", "group": "sarovi-all-models"},
     "jarvis": {"title": "Jarvis", "base_url": "https://api.jarvis.you/v1", "model": "CLAUDE_SONNET_5_5", "format": "openai", "group": "jarvis-all-models"},
+    "sarovi": {"title": "Sarovi", "base_url": "https://api.sarovi.ir/v1", "model": "gpt-4.1-mini", "format": "openai", "group": "sarovi-all-models"},
     "arvan": {"title": "ArvanCloud", "base_url": "https://aiapi.rafiei.co/v1", "model": "GPT-5.6-Sol", "format": "openai", "group": "arvancloud-all-models", "auth": "apikey"},
     "openai": {"title": "OpenAI", "base_url": "https://api.openai.com/v1", "model": "gpt-4.1-mini", "format": "openai", "group": "openai-all-models"},
     "gemini": {"title": "Gemini (via Vercel proxy)", "base_url": "https://ai-gateway.vercel.sh/v1", "model": "gemini-3.5-flash", "format": "openai", "group": None},
@@ -162,6 +162,13 @@ def save_config(enabled: bool, providers: list[dict], stt: dict | None = None) -
     return status()
 
 
+def apply_priority() -> dict:
+    """Reset the direct-fallback order to Jarvis, Sarovi, Arvan, OpenAI, Gemini, keeping every override and the master switch."""
+    cfg = config()
+    ranked = sorted(cfg["providers"], key=lambda p: list(PROVIDERS).index(p["id"]))
+    return save_config(cfg["enabled"], ranked, cfg["stt"])
+
+
 def set_secret(name: str, value: str | None) -> None:
     """`name` is a provider id (API key) or "<id>:header" (extra header value). Empty value deletes it."""
     provider = name.split(":")[0]
@@ -277,17 +284,21 @@ def model_for(provider: dict, candidates: list[str]) -> str:
     return model
 
 
-def usable(providers: list[dict] | None = None) -> list[dict]:
+def usable(providers: list[dict] | None = None, *, google_first: bool = False) -> list[dict]:
     cfg = config()
     if not cfg["enabled"]:
         return []
-    return [p for p in (providers or cfg["providers"]) if p["enabled"] and key_for(p["id"])]
+    found = [p for p in (providers or cfg["providers"]) if p["enabled"] and key_for(p["id"])]
+    if google_first:
+        # Gemini/Google models are asked of Google itself before any reseller.
+        found.sort(key=lambda p: 0 if p["id"] == "gemini" else 1)
+    return found
 
 
 def try_fallback(messages: list[dict], *, candidates: list[str], tokens: int, temperature, timeout: float, extra,
                  attempts: list[dict]) -> tuple[dict, str, str] | None:
     """Walk enabled providers with keys, in order. Returns (response, provider_id, model) or None. Appends to `attempts`."""
-    for provider in usable():
+    for provider in usable(google_first=any(str(c).startswith("google:") for c in candidates[:1])):
         model = model_for(provider, candidates)
         started = time.monotonic()
         try:

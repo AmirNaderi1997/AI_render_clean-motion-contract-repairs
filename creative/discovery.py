@@ -26,7 +26,8 @@ log = logging.getLogger(__name__)
 WINDOW_S = 420.0              # transcript shown to the model per window
 WINDOW_OVERLAP_S = 45.0
 ENHANCE_BATCH = 14            # segments per enhancement call: small, so one provider error costs little and a retry is cheap
-ENHANCE_ROUTES = ("transcript_correction", "creative_revision")     # the light model first, a steadier one when it fails
+OUTLINE_ROUTE, FINDER_ROUTE, VALIDATOR_ROUTE = "long_video_outline", "long_video_clip_finder", "long_video_clip_validator"
+ENHANCE_ROUTES = ("long_video_enhance", "creative_revision")     # the light model first, a steadier one when it fails
 MIN_CLIP_S, MAX_CLIP_S = 10.0, 150.0
 CATEGORIES = ("آموزشی", "داستان", "انگیزشی", "نکتهٔ کاربردی", "دیدگاه تند", "مثال و تجربه", "پرسش و پاسخ", "طنز", "تحلیل", "سایر")
 FILLERS = ("خب", "خوب", "ببینید", "ببین", "یعنی", "حالا", "بله", "آره", "می‌گم", "میگم")
@@ -231,7 +232,7 @@ def build_outline(segments: list[dict], ask: Optional[Callable] = None, on_progr
     for number, window in enumerate(windows(segments)):
         body = "\n".join(f"[{clock(s['start'])}] {text_of(s)}" for s in window)
         try:
-            maps.append(ask(WindowTopics, OUTLINE_WINDOW, body, route=llm.DIRECTOR_ROUTE, tokens=3500, attempts=3).topics)
+            maps.append(ask(WindowTopics, OUTLINE_WINDOW, body, route=OUTLINE_ROUTE, tokens=3500, attempts=3).topics)
         except Exception as exc:
             log.warning("outline window failed: %s", exc)
             maps.append([Topic(title="بخش بدون تحلیل", start=window[0]["start"], end=window[-1]["end"])])
@@ -243,7 +244,7 @@ def build_outline(segments: list[dict], ask: Optional[Callable] = None, on_progr
         return merged
     try:
         return ask(Outline, OUTLINE_MERGE, llm.dumps({"windows": [[t.model_dump() for t in m] for m in maps],
-                                                      "duration_s": segments[-1]["end"]}), route=llm.DIRECTOR_ROUTE, tokens=6000, attempts=3)
+                                                      "duration_s": segments[-1]["end"]}), route=OUTLINE_ROUTE, tokens=6000, attempts=3)
     except Exception as exc:
         log.warning("outline merge failed, concatenating windows: %s", exc)
         return Outline(topics=[Topic(**t) for t in flat])
@@ -324,7 +325,7 @@ def find_in_window(window: list[dict], index: dict[str, int], outline: Outline, 
                + f"\n\nWINDOW {clock(window[0]['start'])}-{clock(window[-1]['end'])}\n{render_window(window, index)}")
     if focus:
         request = f"THE USER ASKED SPECIFICALLY FOR: {focus}\nOnly offer clips that fit this request.\n\n" + request
-    return ask(CandidateBatch, FIND, request, route=llm.DIRECTOR_ROUTE, tokens=7000, attempts=3).candidates
+    return ask(CandidateBatch, FIND, request, route=FINDER_ROUTE, tokens=7000, attempts=3).candidates
 
 
 # ── validate ────────────────────────────────────────────────────────────────────────────────────────
@@ -390,7 +391,7 @@ def validate_candidates(candidates: list[dict], segments: list[dict], outline: O
                             "transcript": [f"S{i} {text_of(segments[i])}" for i in range(lo, hi + 1)][:60]})
         try:
             result = ask(VerdictBatch, VALIDATE, llm.dumps({"outline": outline.model_dump(exclude={'topics'}), "candidates": payload}),
-                         route=llm.CRITIC_ROUTE, tokens=5000, attempts=3)
+                         route=VALIDATOR_ROUTE, tokens=5000, attempts=3)
             for verdict in result.verdicts:
                 verdicts[verdict.index] = verdict
         except Exception as exc:
