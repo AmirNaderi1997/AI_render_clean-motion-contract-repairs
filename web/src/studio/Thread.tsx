@@ -7,6 +7,7 @@ import { RenderCard } from "./RenderCard";
 import { DiscoveryPanel } from "./Discovery";
 import { RichText } from "./RichText";
 import { TimelineItem } from "./model";
+import { ImagePreview } from "./ImagePreview";
 
 export interface LocalFileInfo { name: string; type: string; url: string }
 
@@ -23,12 +24,12 @@ function RemoteAttachment({ conversationId, id, index, autoOpen }: { conversatio
   }, [url]);
   if (!open) return <button className="attach-chip attach-button" onClick={() => setOpen(true)}><span className="attach-icon"><Icon name="paperclip" size={16}/></span><span className="attach-meta"><b>Attachment {index + 1}</b><small>Tap to preview</small></span></button>;
   if (!url || !kind) return <div className="attach-chip"><span className="spinner"/><span className="attach-meta"><small>Loading preview…</small></span></div>;
-  return <div className="attach-preview">{kind === "image" ? <img src={url} alt={`Attachment ${index + 1}`}/> : kind === "audio" ? <audio src={url} controls/> : <video src={url} controls playsInline preload="metadata"/>}</div>;
+  return <div className="attach-preview">{kind === "image" ? <ImagePreview src={url} alt={`Attachment ${index + 1}`}/> : kind === "audio" ? <audio src={url} controls/> : <video src={url} controls playsInline preload="metadata"/>}</div>;
 }
 
 function Attachments({ conversationId, ids, local, autoOpen }: { conversationId?: string; ids: string[]; local?: LocalFileInfo[]; autoOpen?: boolean }) {
   if (local?.length) return <div className="msg-files">{local.map((file, index) => file.type.startsWith("image/")
-    ? <div className="attach-preview" key={index}><img src={file.url} alt={file.name}/></div>
+    ? <div className="attach-preview" key={index}><ImagePreview src={file.url} alt={file.name}/></div>
     : <div className="attach-chip" key={index}><span className="attach-icon"><Icon name={file.type.startsWith("video/") ? "video" : "music"} size={16}/></span><span className="attach-meta"><b className="wrap-safe">{file.name}</b></span></div>)}</div>;
   if (!ids.length || !conversationId) return null;
   return <div className="msg-files">{ids.map((id, index) => <RemoteAttachment key={id} conversationId={conversationId} id={id} index={index} autoOpen={autoOpen}/>)}</div>;

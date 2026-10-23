@@ -165,9 +165,10 @@ export interface TimelineInput {
 }
 
 export function buildTimeline({ messages, events, projects, pending, processing, discoveryId }: TimelineInput): TimelineItem[] {
+  const streamedIds = new Set(events.filter(e => e.type.startsWith('assistant.response.') && e.data.message_id != null).map(e => String(e.data.message_id)));
   type Entry = { t: number; order: number; tie: number; message?: StudioMessage; event?: StudioEvent };
   const entries: Entry[] = [
-    ...messages.map(message => ({ t: parseTime(message.created_at), order: 0, tie: Number(message.id) || 0, message })),
+    ...messages.filter(message => !(message.role === 'assistant' && streamedIds.has(String(message.id)))).map(message => ({ t: parseTime(message.created_at), order: 0, tie: Number(message.id) || 0, message })),
     ...events.map(event => ({ t: parseTime(event.created_at), order: 1, tie: event.seq, event })),
   ].sort((a, b) => a.t - b.t || a.order - b.order || a.tie - b.tie);
 
@@ -191,7 +192,17 @@ export function buildTimeline({ messages, events, projects, pending, processing,
       continue;
     }
     const event = entry.event!;
+    if (event.type.startsWith('assistant.response.')) {
+      const id = `response:${event.data.response_id}`;
+      const content = String(event.data.text || '');
+      const previous = items.find(item => item.kind === 'message' && item.id === id);
+      if (previous?.kind === 'message') previous.content = content;
+      else if (content) { flush(); items.push({kind:'message',id,role:'assistant',content,attachments:[],createdAt:entry.t}); }
+      continue;
+    }
     if (event.type === 'agent.narration') {
+      // Retain the audit history but no longer display the old canned receipt.
+      if (String(event.data.narration_id || '').startsWith('received:')) continue;
       const id = `narration:${event.data.narration_id || event.seq}`;
       const content = String(event.data.message || '').trim();
       if (!content) continue;

@@ -77,6 +77,7 @@ def _task(title, capability, pairs, parent):
 
 
 TASKS = {
+    "conversation_response": _task("Conversation · Immediate Response", "chat", LIGHT, "general_chat"),
     "intent_classification": _task("Intent Classification", "chat", LIGHT, "editing_agent"),
     "general_chat": _task("General Chat", "chat", LIGHT, "general_chat"),
     "edit_planning": _task("Edit Planning", "chat", POWER, "editing_agent"),

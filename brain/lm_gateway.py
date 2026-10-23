@@ -331,29 +331,31 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
         _slots.release()
 
 
-def stream_chat(route, messages, model_override=None, probe=False):
+def stream_chat(route, messages, model_override=None, probe=False, *, tokens=None, timeout_seconds=None):
     cfg = defaults()[route]; models = store.records("models")
     candidates = [model_override] if model_override else cfg["models"]
     if not cfg["enabled"] or not gateway_settings()["enabled"]: raise GatewayError("Route disabled", 503)
     if not probe and not cfg["streaming"]: raise GatewayError("Streaming disabled on route", 422)
     started = time.monotonic(); attempts = []; emitted = False; last = None
+    budget = min(300, max(1, timeout_seconds)) if timeout_seconds is not None else 300
     if not _slots.acquire(timeout=2): raise GatewayError("AI request queue is busy", 429)
     try:
         for mid in candidates[:8] if cfg["automatic_fallback"] else candidates[:1]:
+            if time.monotonic()-started >= budget: break
             if not model_allowed(mid): continue
             model = models.get(mid, {})
             if not model.get("enabled") or not model.get("available",True) or (not probe and not {"chat","streaming"}.issubset(capabilities(model))): continue
-            body = adapters.payload("chat", mid, messages, tokens=min(256 if probe else cfg["max_tokens"], 16000), stream=True)
+            body = adapters.payload("chat", mid, messages, tokens=min(256 if probe else (tokens or cfg["max_tokens"]), cfg["max_tokens"], 16000), stream=True)
             result = {}; hdr = {}; chunks = []
             try:
-                with _client(cfg["timeout"]) as client:
+                with _client(min(cfg["timeout"],max(1,budget-(time.monotonic()-started)))) as client:
                     with client.stream("POST", _url("chat/completions"), headers=headers(), json=body) as response:
                         hdr = dict(response.headers)
                         if not response.is_success:
                             raise GatewayError(f"LM stream HTTP {response.status_code}", response.status_code, response.status_code in {429,500,502,503,504})
                         completed = False
                         for line in response.iter_lines():
-                            if time.monotonic()-started > 300: raise GatewayError("Stream deadline exceeded", 504)
+                            if time.monotonic()-started > budget: raise GatewayError("Stream deadline exceeded", 504)
                             if not line.startswith("data:"): continue
                             value = line[5:].strip()
                             if value == "[DONE]": completed = True; break
@@ -472,18 +474,24 @@ def transcription(audio, language=None, *, provider=None):
 
 
 @observe_request
-def speech(route, text, voice):
+def speech(route, text, voice, *, language="", context=""):
     """Verified binary media contract; exactly one submission, including on 429."""
     cfg = defaults().get(route)
     if not cfg or not cfg.get('enabled') or not gateway_settings()['enabled']:
         raise GatewayError('Speech routing is disabled',503)
     catalog=store.records('models'); started=time.monotonic(); attempts=[]
-    candidates=cfg['models'][:1]
+    from .speech_policy import gateway_choice
+    try:
+        mid, body = gateway_choice(cfg, catalog, text, voice, context, language)
+    except ValueError as exc:
+        _audit(_record(route,'speech',next(iter(cfg.get('models', [])), ''),started,attempts,
+                       error=exc,request={'input':text,'language':language,'casting':'rejected-before-submission'}))
+        raise
+    candidates=[mid]
     for mid in candidates:
         item=catalog.get(mid,{})
         if not model_allowed(mid) or not item.get('enabled') or not item.get('available',True) or 'speech' not in capabilities(item):
             continue
-        body={'model':mid,'input':text,'voice':voice,'response_format':'mp3'}
         try:
             from .media_policy import response_timeout,request_headers as media_headers,require_gateway_safety
             timeout=response_timeout('speech',cfg['timeout'],body)

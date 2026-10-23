@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/api/elevenlabs/:path*", "destination": "/api/elevenlabs?path=:path*" }
+  ],
+  "functions": {
+    "api/proxy.js": { "maxDuration": 60 },
+    "api/gemini.js": { "maxDuration": 60 },
+    "api/elevenlabs.js": { "maxDuration": 300 },
+    "api/analyze-video.js": { "maxDuration": 300 },
+    "api/novinhub-upload.js": { "maxDuration": 300 }
+  }
+}

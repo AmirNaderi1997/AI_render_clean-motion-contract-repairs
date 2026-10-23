@@ -448,3 +448,15 @@ button.act-row:hover { color: var(--text-2); }
 .dv-edit { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
 .dv-more { display: flex; flex-wrap: wrap; gap: 8px; }
 .dv-more .input { flex: 1 1 240px; }
+.attach-image-open { display: block; border: 0; padding: 0; background: transparent; cursor: zoom-in; }
+.attach-image-open:focus-visible { outline: 2px solid currentColor; outline-offset: -3px; }
+.chat-image-dialog { width: min(1100px, 96vw); max-width: 96vw; height: 92dvh; max-height: 92dvh; padding: 0; border: 1px solid #555; border-radius: 14px; background: #171717; color: #fff; }
+.chat-image-dialog::backdrop { background: rgb(0 0 0 / 85%); }
+.chat-image-viewer { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.chat-image-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; flex: none; }
+.chat-image-toolbar label { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.chat-image-toolbar input { width: min(140px, 25vw); }
+.chat-image-toolbar button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; }
+.chat-image-toolbar button:hover { background: #333; }
+.chat-image-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.chat-image-scroll img { display: block; max-width: none; height: auto; margin-inline: auto; }

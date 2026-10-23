@@ -344,6 +344,17 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         signature = hashlib.sha256(json.dumps(sb_data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         checkpoint_path = gen_dir / "generation_checkpoint.json"
         checkpoint = _load_checkpoint(checkpoint_path, signature, provider_name)
+        # Validate casting before generating any paid visuals. A missing Persian
+        # voice must not be discovered only after all images have been charged.
+        voice_provider = _voice_provider()
+        from .localize import tts_model
+        from .speech_policy import identity as casting_identity
+        casting_context = f"{content_type} {storyboard.style} {sb_data.get('title', '')} {storyboard.creative_brief}"
+        spoken_script = " ".join(s.narration_text or "" for s in storyboard.scenes)
+        voice_signature = (casting_identity(spoken_script,
+                           _default_elevenlabs_voice(storyboard.language), tts_model(),
+                           language=storyboard.language, context=casting_context)
+                           if spoken_script.strip() else "no-narration")
         from creative.reuse import media_identity, reusable, fingerprint
         media_pool=list(checkpoint.get('media',[]))
         cached_media = {
@@ -432,14 +443,6 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
 
         narration_segments: list[dict] = []
         warnings: list[str] = []
-        voice_provider = _voice_provider()
-        from .localize import tts_model
-        # Use Localize's ElevenLabs identity and Vercel relay for every generated voice.
-        voice_settings = (
-            f"fa={_default_elevenlabs_voice('fa')}:"
-            f"en={_default_elevenlabs_voice('en')}:model={tts_model()}"
-        )
-        voice_signature = f"{voice_provider}:{voice_settings}"
         if checkpoint.get("voice_signature") != voice_signature:
             checkpoint["narration"] = []
         checkpoint["voice_signature"] = voice_signature
@@ -468,7 +471,8 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                         if not voice_kwargs["voice_id"]:
                             raise ValueError("Set an ElevenLabs voice ID for generated narration.")
                         tts_result = generate_narration(
-                            scene.narration_text, gen_dir, provider="elevenlabs", **voice_kwargs,
+                            scene.narration_text, gen_dir, provider="elevenlabs", language=storyboard.language,
+                            context=casting_context, **voice_kwargs,
                         )
                         record = {
                             "scene_index": scene.index,

@@ -483,7 +483,8 @@ def _trim_silence(src: Path, dst: Path) -> Path:
 
 def _clip_path(text: str, provider: str, out_dir: Path) -> Path:
     provider = "elevenlabs"
-    voice = f"{tts_voice()}|{tts_model()}"
+    from .speech_policy import identity
+    voice = identity(text, tts_voice(), tts_model(), language="fa", context="narration educational")
     digest = hashlib.sha256(f"{provider}|{voice}|{speakable(text)}".encode()).hexdigest()[:16]
     return out_dir / f"line_{provider}_{digest}"
 
@@ -500,19 +501,8 @@ def synthesize(text: str, out_dir: Path, provider: str = "elevenlabs") -> tuple[
     cached = _cached_clip(text, provider, out_dir)
     if cached:
         return cached, audio_duration(cached)
-    attempts = 6
-    for attempt in range(attempts):
-        try:
-            return _synthesize_once(text, out_dir, provider)
-        except Exception as exc:  # flaky networks drop provider connections
-            message = str(exc)
-            if attempt == attempts - 1 or "quota" in message.lower() or "402" in message:
-                raise
-            # Back off on upstream rate limits.
-            delay = 8 * (attempt + 1) if "429" in message else 2 * (attempt + 1)
-            log.warning("voice attempt %d failed (%s); retrying in %ss", attempt + 1, message, delay)
-            time.sleep(delay)
-    raise AssertionError("unreachable")
+    # A timeout may have spent credit upstream; never resubmit automatically.
+    return _synthesize_once(text, out_dir, provider)
 
 
 def _synthesize_once(text: str, out_dir: Path, provider: str) -> tuple[Path, float]:
@@ -521,7 +511,7 @@ def _synthesize_once(text: str, out_dir: Path, provider: str) -> tuple[Path, flo
     from brain.tts import _generate_elevenlabs
 
     raw = final.with_name(final.stem + "_raw.mp3")
-    _generate_elevenlabs(spoken, str(raw), tts_voice(), tts_model())
+    _generate_elevenlabs(spoken, str(raw), tts_voice(), tts_model(), language="fa", context="narration educational")
     _trim_silence(raw, final)
     return final, audio_duration(final)
 
@@ -552,7 +542,9 @@ def narration_script(texts: list[str]) -> tuple[str, list[tuple[int, int]]]:
 
 
 def _narration_paths(full: str, out_dir: Path) -> tuple[Path, Path]:
-    digest = hashlib.sha256(f"{tts_voice()}|{tts_model()}|{full}".encode()).hexdigest()[:16]
+    from .speech_policy import eleven_cast
+    voice, model = eleven_cast(full, tts_voice(), tts_model(), language="fa", context="narration educational")
+    digest = hashlib.sha256(f"casting-v1|{voice}|{model}|{full}".encode()).hexdigest()[:16]
     base = out_dir / f"narration_{digest}"
     return base.with_suffix(".mp3"), base.with_suffix(".json")
 
@@ -570,10 +562,12 @@ def _elevenlabs_with_timestamps(text: str) -> tuple[bytes, dict]:
     key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
     if not key:
         raise RuntimeError("ElevenLabs API key is not set")
+    from .speech_policy import eleven_cast
+    voice, model = eleven_cast(text, tts_voice(), tts_model(), language="fa", context="narration educational")
     response = httpx.post(
-        elevenlabs_url(f"v1/text-to-speech/{tts_voice()}/with-timestamps"),
+        elevenlabs_url(f"v1/text-to-speech/{voice}/with-timestamps"),
         headers={"xi-api-key": key},
-        json={"text": text, "model_id": tts_model()},
+        json={"text": text, "model_id": model, "language_code": "fa"},
         timeout=httpx.Timeout(300.0, connect=20.0),
     )
     if response.status_code == 403:
@@ -617,16 +611,7 @@ def synthesize_narration(texts: list[str], out_dir: Path) -> list[tuple[Path, fl
     full, spans = narration_script(texts)
     audio, timing = _narration_paths(full, out_dir)
     if not (audio.is_file() and timing.is_file()):
-        for attempt in range(4):
-            try:
-                data, alignment = _elevenlabs_with_timestamps(full)
-                break
-            except Exception as exc:
-                message = str(exc).lower()
-                if attempt == 3 or "quota" in message or "403" in message:
-                    raise
-                log.warning("narration attempt %d failed (%s); retrying", attempt + 1, exc)
-                time.sleep(3 * (attempt + 1))
+        data, alignment = _elevenlabs_with_timestamps(full)
         audio.write_bytes(data)
         timing.write_text(json.dumps(alignment, ensure_ascii=False))
     alignment = json.loads(timing.read_text())

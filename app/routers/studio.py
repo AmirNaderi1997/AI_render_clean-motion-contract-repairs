@@ -48,7 +48,7 @@ def _public_project(project: dict) -> dict:
     state["source_assets"] = [{"index": index, "name": Path(str(item)).name} for index, item in enumerate(assets)]
     inspection = state.get("url_inspection")
     if isinstance(inspection, dict):
-        for image in inspection.get("images") or []:
+        for image in (inspection.get("images") or []) + (inspection.get("screenshots") or []):
             if isinstance(image, dict):
                 image.pop("file", None)
     result["state"] = state
@@ -255,11 +255,6 @@ async def send_message(request: Request, conversation_id: str, body: MessageCrea
             selected = next((c for c in spec['choices'] if c['value'] == display), None)
             if selected: display = spec['title'] + ': ' + selected['label']
         message = await repo.add_message(conversation_id, user_key, "user", display, body.attachment_ids)
-        if not body.manual_question_id:
-            await repo.emit(conversation_id, 'agent.narration', {
-                'narration_id': f'received:{message["id"]}',
-                'message': 'درخواستت را گرفتم. فایل‌ها و وضعیت همین پروژه را بررسی می‌کنم تا قدم بعدی را مشخص کنم.'},
-                source_event_id=f'received:{message["id"]}')
     except KeyError:
         raise HTTPException(404, "conversation or attachment not found")
     dispatch_message(conversation_id, user_key, message["id"], body.content.strip(), body.attachment_ids, body.manual_question_id)

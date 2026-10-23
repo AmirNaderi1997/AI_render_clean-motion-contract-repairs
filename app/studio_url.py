@@ -1,7 +1,7 @@
 """Safe public-page inspection for Studio motion-video projects.
 
-No page JavaScript is executed.  Every navigation and downloaded image is
-resolved again and checked against public IP space to prevent DNS/redirect SSRF.
+Static HTML first; empty application shells use an isolated browser whose
+requests all pass through this public-address/redirect-validated fetcher.
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _fetch(url: str, *, max_bytes: int, accept: str,
-           headers: dict[str, str] | None = None) -> tuple[bytes, str, str]:
+           headers: dict[str, str] | None = None, timeout: float = 20, allow_http_error: bool = False) -> tuple[bytes, str, str]:
     # The python.org macOS runtime does not always inherit the system Keychain
     # roots. Use certifi's maintained CA bundle while keeping verification and
     # hostname checks fully enabled (never fall back to an unverified context).
@@ -64,7 +64,7 @@ def _fetch(url: str, *, max_bytes: int, accept: str,
         request_headers = {"User-Agent": USER_AGENT, "Accept": accept, **(headers or {})}
         request = urllib.request.Request(current, headers=request_headers)
         try:
-            response = opener.open(request, timeout=20)
+            response = opener.open(request, timeout=timeout)
         except urllib.error.HTTPError as exc:
             if exc.code in {301, 302, 303, 307, 308}:
                 target = exc.headers.get("Location")
@@ -72,7 +72,9 @@ def _fetch(url: str, *, max_bytes: int, accept: str,
                     raise ValueError("The page returned an invalid redirect") from exc
                 current = _public_url(urllib.parse.urljoin(current, target))
                 continue
-            raise ValueError(f"The page returned HTTP {exc.code}") from exc
+            if not allow_http_error:
+                raise ValueError(f"The page returned HTTP {exc.code}") from exc
+            response = exc  # Browser evidence may show a real blocked/error page, never a fabricated success.
         content_type = (response.headers.get_content_type() or "").lower()
         declared = response.headers.get("Content-Length")
         if declared and int(declared) > max_bytes:
@@ -224,7 +226,11 @@ def _spa_product(parser: PageParser, base: str) -> dict | None:
 
 
 def inspect_page(url: str, output_dir: Path) -> dict:
-    html, final_url, content_type = _fetch(url, max_bytes=MAX_HTML, accept="text/html,application/xhtml+xml")
+    try:
+        html, final_url, content_type = _fetch(url, max_bytes=MAX_HTML, accept="text/html,application/xhtml+xml")
+    except ValueError as exc:
+        if 'page returned HTTP' not in str(exc): raise
+        html, final_url, content_type = b'', _public_url(url), 'text/html'
     if "html" not in content_type:
         raise ValueError("The URL did not return an HTML page")
     parser = PageParser()
@@ -248,6 +254,18 @@ def inspect_page(url: str, output_dir: Path) -> dict:
             }
             parser.structured.append({key: value for key, value in normalized_product.items() if value not in (None, "", [])})
             parser.text.extend(str(value) for value in (name, description) if value)
+    screenshots = []
+    browser_error = None
+    if sum(len(t) for t in parser.text) < 80 and not _structured_products(parser.structured):
+        from .public_page_browser import render_page
+        try:
+            rendered = render_page(base, output_dir / 'page_screenshots')
+            screenshots = rendered.get('screenshots', [])
+            parser.title = rendered.get('title') or parser.title
+            parser.text.extend(line.strip() for line in rendered.get('content', '').splitlines() if len(line.strip()) >= 2)
+            parser.images.extend(rendered.get('images', []))
+        except (OSError, ValueError) as exc:
+            browser_error = str(exc)[:300]
     # Product evidence outranks site-wide social previews (often a screenshot
     # of the SaaS homepage rather than the requested product).
     candidates = []
@@ -308,8 +326,8 @@ def inspect_page(url: str, output_dir: Path) -> dict:
     products = []
     for document in parser.structured:
         products.extend(_structured_products(document))
-    if not text and not products:
-        raise ValueError("The page did not expose enough readable product content; upload product images or a description")
+    if not text and not products and not screenshots:
+        raise ValueError("متن صفحه قابل استخراج نبود و گرفتن اسکرین‌شات هم کامل نشد: " + (browser_error or 'صفحه محتوای قابل‌خواندن نداشت'))
     return {
         "url": final_url,
         "host": urllib.parse.urlsplit(final_url).hostname,
@@ -318,4 +336,6 @@ def inspect_page(url: str, output_dir: Path) -> dict:
         "content": text,
         "structured_products": products[:10],
         "images": images,
+        "screenshots": screenshots,
+        "extraction": "browser" if screenshots else "html",
     }

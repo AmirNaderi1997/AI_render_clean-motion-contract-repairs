@@ -8,6 +8,25 @@ const msg = (id, role, s, content = "x") => ({ id, role, content, attachments: [
 const ev = (seq, type, s, data = {}) => ({ id: seq, seq, type, data, created_at: at(s) });
 const project = (state = {}, status = "running") => ({ id: "p1", conversation_id: "c", engine: "motion", title: "T", status, current_version: 1, state, created_at: at(0), updated_at: at(0) });
 
+test('real model deltas update one bubble and reconcile with the saved message', () => {
+  const events=[ev(1,'assistant.response.started',1,{response_id:'r1'}),
+    ev(2,'assistant.response.delta',2,{response_id:'r1',text:'سلام'}),
+    ev(3,'assistant.response.delta',3,{response_id:'r1',text:'سلام، لینک دوره را بررسی می‌کنم.'})];
+  let items=buildTimeline({messages:[msg(1,'user',0)],events,projects:[],processing:true});
+  assert.equal(items.filter(i=>i.kind==='message' && i.role==='assistant').length,1);
+  assert.equal(items.at(-1).content,'سلام، لینک دوره را بررسی می‌کنم.');
+  items=buildTimeline({messages:[msg(1,'user',0),msg(2,'assistant',4,'سلام، لینک دوره را بررسی می‌کنم.')],
+    events:[...events,ev(4,'assistant.response.completed',4,{response_id:'r1',message_id:2,text:'سلام، لینک دوره را بررسی می‌کنم.'})],projects:[],processing:false});
+  assert.equal(items.filter(i=>i.kind==='message' && i.role==='assistant').length,1);
+});
+
+test('legacy canned receipts are hidden without deleting other narration', () => {
+  const items=buildTimeline({messages:[],events:[ev(1,'agent.narration',1,{narration_id:'received:1',message:'canned'}),
+    ev(2,'agent.narration',2,{narration_id:'real-step',message:'Actual engine update'})],projects:[],processing:false});
+  assert.equal(items.length,1);
+  assert.equal(items[0].content,'Actual engine update');
+});
+
 test('uploaded logo approval gate is actionable without waiting for a heartbeat', () => {
   const args = {sending:false, messages:[msg(1,'user',1,'attached')],
     events:[ev(1,'message.started',2)], now:T0+3000,

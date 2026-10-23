@@ -6,6 +6,7 @@ import json
 import threading
 import time
 from collections import Counter, defaultdict
+from typing import Literal
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse, FileResponse
@@ -68,6 +69,45 @@ class SettingsUpdate(Strict):
     enabled: bool
     capture_messages: bool
     log_char_limit: int = Field(ge=256, le=12000)
+
+
+class SpeechVoice(Strict):
+    voice_id: str = Field(min_length=1, max_length=160)
+    provider: Literal["elevenlabs", "google"]
+    languages: list[str] = Field(min_length=1, max_length=150)
+    labels: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class SpeechModel(Strict):
+    speech_provider: Literal["elevenlabs", "google"]
+    supported_languages: list[str] = Field(min_length=1, max_length=150)
+    voices: list[SpeechVoice] = Field(default_factory=list, max_length=200)
+
+
+class SpeechCasting(Strict):
+    voices: list[SpeechVoice] = Field(default_factory=list, max_length=200)
+    models: dict[str, SpeechModel] = Field(default_factory=dict)
+
+
+@router.get("/speech-casting")
+def speech_casting():
+    return store.records("settings").get("speech_casting", {"voices": [], "models": {}})
+
+
+@router.put("/speech-casting")
+def save_speech_casting(body: SpeechCasting):
+    catalog = store.records("models")
+    for mid, profile in body.models.items():
+        row = catalog.get(mid, {})
+        if "speech" not in row.get("verified", []):
+            raise HTTPException(422, "Register and verify the speech model before configuring its voices")
+        if any(v.provider != profile.speech_provider for v in profile.voices):
+            raise HTTPException(422, "Voice provider must match the speech model")
+    # Only public voice metadata; credentials never belong in a profile.
+    value = body.model_dump()
+    store.save("settings", {"speech_casting": value})
+    return value
 
 
 def public_model(value):

@@ -43,11 +43,13 @@ def _configured_provider(provider: str | None = None) -> str:
 @observe_specialized("audio", "elevenlabs-vercel-relay")
 def _generate_elevenlabs(
     text: str, output_path: str, voice_id: str = "", model_id: str = "",
+    *, language: str = "", context: str = "",
 ) -> None:
     """Generate one MP3 through ElevenLabs with a bounded network timeout."""
     from . import lm_gateway
     if lm_gateway.configured():
-        Path(output_path).write_bytes(lm_gateway.speech('narration',text,voice_id or os.environ.get('ELEVENLABS_VOICE_ID','')))
+        extra = {"language": language, "context": context} if language or context else {}
+        Path(output_path).write_bytes(lm_gateway.speech('narration',text,voice_id or os.environ.get('ELEVENLABS_VOICE_ID',''), **extra))
         return
     api_key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
     voice_id = voice_id.strip() or os.environ.get("ELEVENLABS_VOICE_ID", "").strip()
@@ -56,6 +58,8 @@ def _generate_elevenlabs(
     ).strip()
     if not api_key or not voice_id:
         raise RuntimeError("ElevenLabs is not configured with API key and voice ID")
+    from .speech_policy import eleven_cast, persian
+    voice_id, model_id = eleven_cast(text, voice_id, model_id, language=language, context=context)
     try:
         import httpx
         from brain.elevenlabs_transport import url as elevenlabs_url
@@ -63,12 +67,12 @@ def _generate_elevenlabs(
         response = httpx.post(
             elevenlabs_url(f"v1/text-to-speech/{voice_id}"),
             headers={"xi-api-key": api_key, "accept": "audio/mpeg"},
-            json={"text": text, "model_id": model_id},
+            json={"text": text, "model_id": model_id, **({"language_code": "fa"} if persian(text, language) else {})},
             # Short connect timeout to fail fast, longer read timeout because
             # ElevenLabs only responds after synthesizing the whole clip.
             timeout=httpx.Timeout(
-                float(os.environ.get("ELEVENLABS_READ_TIMEOUT", "60")),
-                connect=float(os.environ.get("ELEVENLABS_CONNECT_TIMEOUT", _ELEVENLABS_TIMEOUT_SECONDS)),
+                max(_ELEVENLABS_TIMEOUT_SECONDS, float(os.environ.get("ELEVENLABS_READ_TIMEOUT", "200")), 60 + len(text)/6),
+                connect=float(os.environ.get("ELEVENLABS_CONNECT_TIMEOUT", "20")),
             ),
         )
         response.raise_for_status()
@@ -98,6 +102,8 @@ def generate_narration(
     rate: str = "+0%",
     provider: str | None = None,
     fallback_voice_id: str = "",
+    language: str = "",
+    context: str = "",
 ) -> TTSResult:
     """Generate narration using the requested provider without silent substitution."""
     if not text.strip():
@@ -113,7 +119,8 @@ def generate_narration(
     out_file = output_dir / f"narration_{uuid.uuid4().hex[:12]}.mp3"
     from .localize import tts_voice, tts_model
     try:
-        _generate_elevenlabs(text, str(out_file), voice_id=voice_id or tts_voice(), model_id=model_id or tts_model())
+        extra = {"language": language, "context": context} if language or context else {}
+        _generate_elevenlabs(text, str(out_file), voice_id=voice_id or tts_voice(), model_id=model_id or tts_model(), **extra)
     except Exception:
         out_file.unlink(missing_ok=True)
         raise
