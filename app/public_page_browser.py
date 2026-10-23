@@ -11,6 +11,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 
+FORWARD_HEADERS = {'apikey', 'authorization', 'x-client-info', 'accept', 'accept-language', 'accept-profile', 'content-profile', 'prefer', 'range', 'x-supabase-api-version'}
+
+
 def render_page(url: str, output: Path) -> dict:
     from .studio_url import _fetch, _public_url, MAX_SCRIPT
     url = _public_url(url)
@@ -21,7 +24,7 @@ def render_page(url: str, output: Path) -> dict:
     if not node or not executable:
         raise ValueError('Browser reader runtime is unavailable')
     child = subprocess.Popen([node,str(root/'scripts/read_public_page.mjs')],stdin=subprocess.PIPE,stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,text=True,env={k:v for k,v in os.environ.items() if k in {'PATH','HOME','TMPDIR','LANG'}})
+        stderr=subprocess.DEVNULL,text=True,env={k:v for k,v in os.environ.items() if k in {'PATH','HOME','TMPDIR','LANG','READER_DEBUG'}})
     messages = queue.Queue(maxsize=100)
     def reader():
         for line in child.stdout:
@@ -37,11 +40,14 @@ def render_page(url: str, output: Path) -> dict:
     reads=total=0
     pool=ThreadPoolExecutor(max_workers=6)
     def fetch_resource(request):
+        # The page's own anonymous data calls (public API keys, content negotiation) must reach its backend exactly as the page made them,
+        # or the app receives an error object instead of its data and renders nothing. Only these headers are passed on.
+        forwarded={k:str(v)[:2000] for k,v in (request.get('headers') or {}).items() if k.lower() in FORWARD_HEADERS}
         try:
-            raw,_,kind=_fetch(request['url'],max_bytes=MAX_SCRIPT,accept=request['accept'],
-                timeout=min(8,max(.1,deadline-time.monotonic())),allow_http_error=True)
-            messages.put((request['id'],raw,kind))
-        except (OSError,ValueError):messages.put((request['id'],None,None))
+            raw,_,kind,status=_fetch(request['url'],max_bytes=MAX_SCRIPT,accept=request['accept'],headers=forwarded or None,
+                timeout=min(8,max(.1,deadline-time.monotonic())),allow_http_error=True,with_status=True)
+            messages.put((request['id'],raw,kind,status))
+        except (OSError,ValueError):messages.put((request['id'],None,None,None))
     try:
         write({'config':{'root':str(root),'url':url,'executable':executable}})
         while time.monotonic()<deadline:
@@ -49,11 +55,11 @@ def render_page(url: str, output: Path) -> dict:
             except queue.Empty: break
             if line is None: break
             if isinstance(line,tuple):
-                rid,raw,kind=line
+                rid,raw,kind,status=line
                 if raw is None or total+len(raw)>24*1024*1024:write({'id':rid,'error':True})
                 else:
                     total+=len(raw)
-                    write({'id':rid,'body':base64.b64encode(raw).decode(),'content_type':kind})
+                    write({'id':rid,'body':base64.b64encode(raw).decode(),'content_type':kind,'status':status})
                 continue
             data=json.loads(line)
             if 'request' in data:

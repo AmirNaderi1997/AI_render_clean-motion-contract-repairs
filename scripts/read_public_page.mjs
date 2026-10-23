@@ -2,6 +2,8 @@
 // HTTP read, public-IP/redirect validation, byte limits and the overall deadline.
 import readline from 'node:readline';
 import {createRequire} from 'node:module';
+import {appendFileSync} from 'node:fs';
+const debug=(text)=>{ if(process.env.READER_DEBUG) try{appendFileSync(process.env.READER_DEBUG,text+'\n');}catch{} };
 const lines=readline.createInterface({input:process.stdin});
 const waiting=new Map(); let configure, sequence=0;
 const configReady=new Promise(resolve=>configure=resolve);
@@ -27,15 +29,18 @@ try {
   if(context.routeWebSocket) await context.routeWebSocket('**/*',socket=>socket.close());
   await context.route('**/*',async route=>{
     const r=route.request();
-    if(r.method()!=='GET' || !/^https?:\/\//i.test(r.url()) || !['document','script','stylesheet','xhr','fetch','image'].includes(r.resourceType())) return route.abort();
+    if(r.method()!=='GET' || !/^https?:\/\//i.test(r.url()) || !['document','script','stylesheet','xhr','fetch','image'].includes(r.resourceType())) { debug('ABORT '+r.method()+' '+r.resourceType()+' '+r.url().slice(0,120)); return route.abort(); }
     const id=++sequence;
     const answer=new Promise(resolve=>waiting.set(id,resolve));
-    send({request:{id,url:r.url(),accept:r.headers().accept || '*/*'}});
+    send({request:{id,url:r.url(),accept:r.headers().accept || '*/*',headers:r.headers()}});
     const value=await answer;
-    if(value.error) return route.abort();
-    await route.fulfill({status:200,contentType:value.content_type,body:Buffer.from(value.body,'base64')}).catch(()=>{});
+    if(value.error) { debug('FETCHFAIL '+r.resourceType()+' '+r.url().slice(0,120)); return route.abort(); }
+    // CORS: the page's own scripts and API calls are served by this reader, so a cross-origin response must be readable by the page that asked for it.
+    await route.fulfill({status:Number.isInteger(value.status)&&value.status>=100&&value.status<=599?value.status:200,contentType:value.content_type,headers:{'access-control-allow-origin':'*','access-control-allow-headers':'*','access-control-allow-methods':'GET'},body:Buffer.from(value.body,'base64')}).catch(()=>{});
   });
   const page=await context.newPage();
+  page.on('console',m=>debug('CONSOLE '+m.type()+' '+m.text().slice(0,200)));
+  page.on('pageerror',e=>debug('PAGEERROR '+String(e).slice(0,300)));
   await page.goto(config.url,{waitUntil:'domcontentloaded',timeout:25000});
   await page.waitForFunction(()=>((document.querySelector('main')||document.body)?.innerText||'').trim().length>120,{},{timeout:10000}).catch(()=>{});
   // Trigger lazy content throughout the page before a TRUE full-page capture.

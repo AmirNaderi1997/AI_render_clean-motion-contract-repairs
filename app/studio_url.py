@@ -50,7 +50,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _fetch(url: str, *, max_bytes: int, accept: str,
-           headers: dict[str, str] | None = None, timeout: float = 20, allow_http_error: bool = False) -> tuple[bytes, str, str]:
+           headers: dict[str, str] | None = None, timeout: float = 20, allow_http_error: bool = False, with_status: bool = False):
     # The python.org macOS runtime does not always inherit the system Keychain
     # roots. Use certifi's maintained CA bundle while keeping verification and
     # hostname checks fully enabled (never fall back to an unverified context).
@@ -76,13 +76,14 @@ def _fetch(url: str, *, max_bytes: int, accept: str,
                 raise ValueError(f"The page returned HTTP {exc.code}") from exc
             response = exc  # Browser evidence may show a real blocked/error page, never a fabricated success.
         content_type = (response.headers.get_content_type() or "").lower()
+        status = int(getattr(response, "status", None) or getattr(response, "code", 200) or 200)
         declared = response.headers.get("Content-Length")
         if declared and int(declared) > max_bytes:
             raise ValueError("The remote resource is too large")
         data = response.read(max_bytes + 1)
         if len(data) > max_bytes:
             raise ValueError("The remote resource is too large")
-        return data, current, content_type
+        return (data, current, content_type, status) if with_status else (data, current, content_type)
     raise ValueError("The page redirected too many times")
 
 

@@ -13,6 +13,7 @@ from brain.lm_gateway import GatewayError
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
+    direct._REJECTED.clear()
     monkeypatch.setattr(direct.settings, "JOBS_DIR", str(tmp_path))
     for name in list(os.environ):
         if name.startswith("DIRECT_"):
@@ -183,3 +184,139 @@ def test_gateway_uses_direct_fallback_only_after_lm_api_fails(monkeypatch):
     direct.save_config(False, [{"id": "jarvis", "base_url": "https://api.jarvis.you/v1", "model": "X"}])
     with pytest.raises(GatewayError):
         gateway.complete("editing_agent", [{"role": "user", "content": "hi"}])
+
+
+def test_structured_callers_use_direct_providers_but_only_valid_answers_count(monkeypatch):
+    import json
+    from brain import lm_gateway as gateway
+    calls = []
+
+    def fake_post(url, headers, body, timeout):
+        calls.append(url)
+        # The first provider answers with prose, the second with real JSON.
+        return httpx.Response(200, json=ok("sorry, no json" if "jarvis" in url else '{"a": 1}'))
+
+    monkeypatch.setattr(direct, "_post", fake_post)
+    direct.set_secret("jarvis", "j-key-00000000"); direct.set_secret("sarovi", "s-key-00000000")
+    attempts = []
+    found = direct.try_fallback([{"role": "user", "content": "x"}], candidates=[], tokens=50, temperature=None, timeout=30, extra=None, attempts=attempts, validate=json.loads)
+    assert found and found[1] == "sarovi" and len(calls) == 2
+    assert [a.get("error") for a in attempts] == ["invalid structured output", None]
+
+
+def _stream_route(monkeypatch, *, streaming, models):
+    cfg = {"enabled": True, "endpoint": "chat", "models": models, "automatic_fallback": True, "max_retries": 0, "timeout": 30,
+           "temperature": None, "max_tokens": 1000, "streaming": streaming}
+    monkeypatch.setattr(gateway, "defaults", lambda: {"conversation_response": cfg})
+    monkeypatch.setattr(gateway, "gateway_settings", lambda: {"enabled": True, "capture_messages": False, "log_char_limit": 100})
+    monkeypatch.setattr(gateway, "_audit", lambda record: None)
+
+
+def _sse(*pieces):
+    lines = [f'data: {json.dumps({"choices": [{"delta": {"content": p}}]})}' for p in pieces]
+    lines.append('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}')
+    lines.append("data: [DONE]")
+    return "\n".join(lines) + "\n"
+
+
+class _FakeStream:
+    def __init__(self, status, body):
+        self.status_code, self.is_success, self._body = status, 200 <= status < 300, body
+        self.text = body
+
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self): return None
+    def iter_lines(self): return iter(self._body.splitlines())
+
+
+def test_the_first_reply_streams_for_real_from_direct_providers_when_the_route_cannot_stream(monkeypatch):
+    _stream_route(monkeypatch, streaming=False, models=["custom:CLAUDE_SONNET_5_5#jarvis-all-models"])
+    seen = []
+
+    class Client:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+        def stream(self, method, url, headers=None, json=None):
+            seen.append((url, json.get("stream")))
+            return _FakeStream(200, _sse("سلام", " دنیا"))
+
+    monkeypatch.setattr(direct.httpx, "Client", Client)
+    direct.set_secret("jarvis", "j-key-00000000")
+    pieces = list(gateway.stream_chat("conversation_response", [{"role": "user", "content": "x"}], tokens=50, timeout_seconds=10))
+    assert pieces == ["سلام", " دنیا"] and seen == [("https://api.jarvis.you/v1/chat/completions", True)]
+
+
+def test_a_failed_provider_is_skipped_before_any_text_but_never_mixed_into_an_answer(monkeypatch):
+    _stream_route(monkeypatch, streaming=False, models=["x"])
+    answers = {"jarvis": _FakeStream(503, "busy"), "sarovi": _FakeStream(200, _sse("از", " ساروی"))}
+
+    class Client:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def stream(self, method, url, headers=None, json=None):
+            return answers["jarvis" if "jarvis" in url else "sarovi"]
+
+    monkeypatch.setattr(direct.httpx, "Client", Client)
+    direct.set_secret("jarvis", "j-key-00000000"); direct.set_secret("sarovi", "s-key-00000000")
+    assert "".join(gateway.stream_chat("conversation_response", [{"role": "user", "content": "x"}])) == "از ساروی"
+
+
+def test_without_any_direct_provider_the_original_reason_is_reported(monkeypatch):
+    _stream_route(monkeypatch, streaming=False, models=["x"])
+    with pytest.raises(GatewayError, match="Streaming disabled"):
+        list(gateway.stream_chat("conversation_response", [{"role": "user", "content": "x"}]))
+
+
+def test_a_provider_that_rejected_its_key_is_left_alone_for_a_while(monkeypatch):
+    calls = []
+
+    def post(url, headers, body, timeout):
+        calls.append(url)
+        return httpx.Response(401, text="bad key") if "jarvis" in url else httpx.Response(200, json=ok("fine"))
+
+    monkeypatch.setattr(direct, "_post", post)
+    direct.set_secret("jarvis", "j-key-00000000"); direct.set_secret("sarovi", "s-key-00000000")
+    args = dict(candidates=[], tokens=10, temperature=None, timeout=5, extra=None)
+    assert direct.try_fallback([{"role": "user", "content": "x"}], attempts=[], **args)[1] == "sarovi"
+    calls.clear()
+    assert direct.try_fallback([{"role": "user", "content": "x"}], attempts=[], **args)[1] == "sarovi"
+    assert all("jarvis" not in c for c in calls)
+
+
+def test_a_slow_first_attempt_is_overtaken_by_the_next_one_without_mixing_answers(monkeypatch):
+    import time as _time
+    direct.set_secret("jarvis", "j-key-00000000"); direct.set_secret("sarovi", "s-key-00000000")
+
+    def fake_stream(provider, messages, *, model, tokens, temperature=None, timeout=60):
+        if provider["id"] == "jarvis":
+            _time.sleep(0.6)                      # a model that is slow to its first token
+            yield "از جارویس"
+        else:
+            yield "از"; yield " ساروی"
+
+    monkeypatch.setattr(direct, "stream_call", fake_stream)
+    out = "".join(direct.stream_fallback([{"role": "user", "content": "x"}], candidates=[], tokens=50, hedge_after=0.15))
+    assert out == "از ساروی"                    # the faster attempt won, and nothing from the slow one was added
+
+
+def test_every_attempt_failing_raises_the_last_reason(monkeypatch):
+    direct.set_secret("jarvis", "j-key-00000000")
+
+    def broken(provider, messages, **kw):
+        raise direct.DirectError("HTTP 503: busy", 503)
+        yield
+
+    monkeypatch.setattr(direct, "stream_call", broken)
+    with pytest.raises(direct.DirectError, match="503"):
+        list(direct.stream_fallback([{"role": "user", "content": "x"}], candidates=[], tokens=50, hedge_after=0.05))
+
+
+def test_route_models_are_attempted_in_the_routes_own_order(monkeypatch):
+    direct.set_secret("arvan", "a-key-00000000"); direct.set_secret("sarovi", "s-key-00000000")
+    pairs = direct._stream_attempts(["custom:DeepSeek-V4-Flash#arvancloud-all-models", "custom:GLM-5.3-Flash#arvancloud-all-models"])
+    assert [(p["id"], m) for p, m in pairs][:2] == [("arvan", "DeepSeek-V4-Flash"), ("arvan", "GLM-5.3-Flash")]
+    assert ("sarovi", direct.PROVIDERS["sarovi"]["model"]) in [(p["id"], m) for p, m in pairs]        # then each provider's default

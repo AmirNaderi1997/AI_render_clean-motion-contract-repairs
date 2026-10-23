@@ -40,7 +40,9 @@ export function Composer(props: ComposerProps) {
   }, [text, ref]);
   React.useEffect(() => { if (props.autoFocus) ref.current?.focus({ preventScroll: true }); }, [props.autoFocus, ref]);
 
-  const canSend = !processing && !uploading && (text.trim().length > 0 || files.length > 0);
+  const hasInput = text.trim().length > 0 || files.length > 0;
+  // Working and nothing typed: the button is Stop. As soon as something is typed it is Send again (a message can be sent while work continues).
+  const canSend = !uploading && hasInput;
   const submit = () => { if (canSend) onSend(); };
 
   return <div className={`composer composer-${variant}`}>
@@ -79,7 +81,7 @@ export function Composer(props: ComposerProps) {
         {hasSpeech ? <button type="button" className="icon-btn" aria-pressed={listening} onClick={onListen} aria-label={listening ? "Stop voice input" : "Use voice input"} data-tip="Voice input" data-tip-pos="top"><Icon name="mic" size={19}/></button> : null}
         {props.onManualChange ? <button type="button" className="icon-btn composer-manual" aria-label="Manual mode" aria-pressed={Boolean(props.manual)} disabled={processing}
           onClick={props.onManualChange} data-tip={props.manual ? "Manual · تأیید مرحله‌به‌مرحله" : "Auto · فعال‌کردن حالت دستی"} data-tip-pos="top"><Icon name="hand" size={18}/></button> : null}
-        {processing
+        {processing && !hasInput
           ? onStop
             ? <button type="button" className="icon-btn icon-btn-solid icon-btn-lg composer-send" onClick={onStop} aria-label="Stop" data-tip="Stop" data-tip-pos="top"><Icon name="stop" size={18}/></button>
             : <button type="button" className="icon-btn icon-btn-solid icon-btn-lg composer-send" disabled aria-label="Working…"><span className="spinner composer-spinner"/></button>

@@ -92,6 +92,9 @@ async def lifespan(app: FastAPI):
     resumed = long_video.recover_interrupted()
     if resumed:
         log.warning("resumed %d long-video analysis task(s)", resumed)
+    from app import motion_graphic
+    if motion_graphic.recover_interrupted():
+        log.warning("marked interrupted motion graphic(s) as failed (they can be retried)")
     recovered_talking = recover_interrupted_talking(jobstore.JOBS_ROOT)
     if recovered_talking:
         log.warning("marked %d interrupted talking reel task(s) as failed", recovered_talking)

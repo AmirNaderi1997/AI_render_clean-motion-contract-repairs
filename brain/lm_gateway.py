@@ -229,14 +229,14 @@ def _record(route, endpoint, requested, started, attempts, response=None, hdr=No
         "response_message": safe(response, cfg["log_char_limit"]) if cfg["capture_messages"] else None}
 
 
-def _direct_fallback(route, endpoint, messages, cfg, candidates, tokens, extra, started, attempts, probe):
+def _direct_fallback(route, endpoint, messages, cfg, candidates, tokens, extra, started, attempts, probe, validate=None):
     """LM API failed: answer from a directly configured provider (see brain/lm_direct.py). Chat only."""
     if probe or endpoint != "chat":
         return None
     from . import lm_direct
     try:
         found = lm_direct.try_fallback(messages, candidates=list(candidates), tokens=min(tokens or cfg["max_tokens"], cfg["max_tokens"]),
-                                       temperature=cfg["temperature"], timeout=cfg["timeout"], extra=extra, attempts=attempts)
+                                       temperature=cfg["temperature"], timeout=cfg["timeout"], extra=extra, attempts=attempts, validate=validate)
     except Exception:
         log.exception("direct fallback crashed")
         return None
@@ -317,7 +317,8 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
                     # Long Retry-After/quota cooldowns are not slept inside editor workers.
                     if attempt < retries: time.sleep(min(2**attempt, 2))
             if error and not error.retryable: break
-        direct = None if validate_response else _direct_fallback(route, endpoint, messages, cfg, candidates, tokens, extra, started, attempts, probe)
+        # Structured (JSON) callers get the direct providers too, but only answers that pass their own validator count.
+        direct = _direct_fallback(route, endpoint, messages, cfg, candidates, tokens, extra, started, attempts, probe, validate_response)
         if direct:
             return direct
         if error and str(error) == 'Model returned invalid structured output':
@@ -332,10 +333,44 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
 
 
 def stream_chat(route, messages, model_override=None, probe=False, *, tokens=None, timeout_seconds=None):
+    """Stream a chat answer. LM API first (when the route has verified streaming); when that is off, or fails before the first token,
+    the direct providers stream it for real (priority Jarvis, Sarovi, Arvan, ...; Google first for Gemini models)."""
+    cfg = defaults()[route]
+    if not cfg["enabled"] or not gateway_settings()["enabled"]: raise GatewayError("Route disabled", 503)
+    candidates = [model_override] if model_override else cfg["models"]
+    emitted = False; error = None
+    if cfg["streaming"] or probe:
+        try:
+            for piece in _lm_stream(route, messages, model_override, probe, tokens=tokens, timeout_seconds=timeout_seconds):
+                emitted = True
+                yield piece
+            return
+        except Exception as exc:
+            if emitted or probe: raise
+            error = exc
+    else:
+        error = GatewayError("Streaming disabled on route", 422)
+    from . import lm_direct
+    started = time.monotonic(); text = []
+    try:
+        budget = min(300, max(1, timeout_seconds)) if timeout_seconds is not None else 120
+        for piece in lm_direct.stream_fallback(messages, candidates=list(candidates), tokens=min(max((tokens or 0) * 3, 1500), cfg["max_tokens"]),
+                                               temperature=cfg["temperature"], timeout=budget):
+            text.append(piece)
+            yield piece
+    except lm_direct.DirectError:
+        if text: raise
+        raise error                     # nothing could stream: report why the LM route could not
+    record = _record(route, "chat", candidates[0] if candidates else "", started, [{"model": "direct:stream", "http_status": 200}],
+                     {"output_text": "".join(text)}, {}, request=messages)
+    record.update(routed_via="direct:stream")
+    _audit(record)
+
+
+def _lm_stream(route, messages, model_override=None, probe=False, *, tokens=None, timeout_seconds=None):
     cfg = defaults()[route]; models = store.records("models")
     candidates = [model_override] if model_override else cfg["models"]
     if not cfg["enabled"] or not gateway_settings()["enabled"]: raise GatewayError("Route disabled", 503)
-    if not probe and not cfg["streaming"]: raise GatewayError("Streaming disabled on route", 422)
     started = time.monotonic(); attempts = []; emitted = False; last = None
     budget = min(300, max(1, timeout_seconds)) if timeout_seconds is not None else 300
     if not _slots.acquire(timeout=2): raise GatewayError("AI request queue is busy", 429)
@@ -375,7 +410,8 @@ def stream_chat(route, messages, model_override=None, probe=False, *, tokens=Non
                 return
             except (GatewayError, httpx.TimeoutException, httpx.NetworkError) as exc:
                 last = exc; attempts.append({"model": mid, "http_status": getattr(exc, "status", 504), "error": safe(str(exc), 300)})
-                if emitted or not getattr(exc, "retryable", isinstance(exc, httpx.TransportError)): raise
+                if emitted: raise
+                if not getattr(exc, "retryable", isinstance(exc, httpx.TransportError)): break
         raise last or GatewayError("No streaming-verified model available", 422)
     except BaseException as exc:
         _audit(_record(route, "chat", candidates[0], started, attempts, error=exc, request=messages))
