@@ -9,6 +9,13 @@ from creative.schemas import CreativeUnavailable
 pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg required")
 
 
+@pytest.fixture(autouse=True)
+def _no_real_relay(monkeypatch):
+    """A developer's .env may point at the real relay; unit tests must never use it unless they set their own."""
+    monkeypatch.delenv("SOCIAL_RELAY_URL", raising=False)
+    monkeypatch.delenv("SOCIAL_RELAY_SECRET", raising=False)
+
+
 @pytest.fixture(scope="module")
 def clip(tmp_path_factory):
     """1.0 s red, 2.0 s blue, 0.8 s green, 1.2 s white: four shots and three real cuts."""
@@ -99,6 +106,8 @@ def test_direct_download_plumbing_with_yt_dlp(clip, tmp_path, monkeypatch):
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     monkeypatch.setattr(reference, "HOSTS", {"127.0.0.1"})
+    monkeypatch.delenv("SOCIAL_RELAY_URL", raising=False)      # this test is about the local downloader, not the relay
+    monkeypatch.delenv("SOCIAL_RELAY_SECRET", raising=False)
     try:
         path = reference.fetch(f"http://127.0.0.1:{server.server_port}/{clip.name}", tmp_path / "dl")
     finally:
