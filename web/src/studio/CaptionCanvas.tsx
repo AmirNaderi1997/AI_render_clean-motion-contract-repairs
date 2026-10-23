@@ -13,6 +13,8 @@ interface Props {
   onDraft: (look: Look) => void;
   onCommit: (look: Look) => void;  // pointer released: ready to save
   disabled?: boolean;
+  /** Drawn over a caption-free video: the boxes are the captions themselves, not outlines of burned-in ones. */
+  live?: boolean;
 }
 
 /**
@@ -20,7 +22,7 @@ interface Props {
  * 1080x1920 frame. Drag to move, drag the corner to resize. The text is only a stand-in (the browser does not have the
  * style's font); the position and size are the real ones the render will use.
  */
-export function CaptionCanvas({ boxRef, captions, time, selectedId, draft, onSelect, onDraft, onCommit, disabled }: Props) {
+export function CaptionCanvas({ boxRef, captions, time, selectedId, draft, onSelect, onDraft, onCommit, disabled, live }: Props) {
   const [size, setSize] = React.useState({ w: 0, h: 0 });
   const drag = React.useRef<{ mode: "move" | "resize"; x: number; y: number; look: Look; rect: number } | null>(null);
   React.useLayoutEffect(() => {
@@ -65,7 +67,7 @@ export function CaptionCanvas({ boxRef, captions, time, selectedId, draft, onSel
     onCommit(state.mode === "move" ? moveLook(frame, state.look, dx, dy, displayed.width) : resizeLook(state.look, state.rect, dx, displayed.width));
   };
 
-  return <div className="cc" style={{ left: displayed.left, top: displayed.top, width: displayed.width, height: displayed.height }} aria-label="ویرایش زیرنویس روی تصویر">
+  return <div className="cc" data-live={live || undefined} style={{ left: displayed.left, top: displayed.top, width: displayed.width, height: displayed.height }} aria-label="ویرایش زیرنویس روی تصویر">
     {shown.map(item => {
       const screen = toScreen(rectOf(item), { left: 0, top: 0, width: displayed.width });
       const active = item.id === selected?.id;
@@ -77,7 +79,7 @@ export function CaptionCanvas({ boxRef, captions, time, selectedId, draft, onSel
         role="button" tabIndex={0} aria-label={`زیرنویس: ${item.text}`} aria-pressed={active}
         onPointerDown={event => down(event, item, "move")} onPointerMove={event => move(event, item)} onPointerUp={event => up(event, item)}
         onKeyDown={event => { if (event.key === "Enter" || event.key === " ") onSelect(item.id); }}>
-        <span dir="auto">{item.text}</span>
+        <span dir="auto" data-boxed={(live && frame.boxed) || undefined}>{item.text}</span>
         {active && !disabled ? <i className="cc-handle" aria-label="تغییر اندازه"
           onPointerDown={event => down(event, item, "resize")} onPointerMove={event => move(event, item)} onPointerUp={event => up(event, item)}/> : null}
       </div>;

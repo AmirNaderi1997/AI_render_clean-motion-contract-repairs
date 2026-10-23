@@ -342,6 +342,12 @@ button.act-row:hover { color: var(--text-2); }
 .cc-box[data-active] { border-color: var(--ink, #fff); border-style: solid; background: rgba(0, 0, 0, .3); box-shadow: 0 0 0 1px rgba(0, 0, 0, .6); cursor: grabbing; }
 .cc-box[data-locked] { cursor: not-allowed; opacity: .7; }
 .cc-box span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-inline: 4px; }
+.cc[data-live] .cc-box { border-color: transparent; background: transparent;
+  text-shadow: 0 0 2px #000, 0 0 2px #000, 0 2px 4px rgba(0, 0, 0, .9); }
+.cc[data-live] .cc-box:hover { border-color: rgba(255, 255, 255, .6); }
+.cc[data-live] .cc-box[data-active] { border-color: #fff; }
+.cc[data-live] .cc-box span { overflow: visible; text-overflow: clip; }
+.cc[data-live] .cc-box span[data-boxed] { background: rgba(0, 0, 0, .78); border-radius: 999px; padding: 2px 10px; text-shadow: none; }
 .cc-handle { position: absolute; inset-inline-end: -7px; inset-block-end: -7px; width: 16px; height: 16px; border-radius: 4px; background: #fff; border: 2px solid #111;
   cursor: nwse-resize; touch-action: none; }
 .tl-look { display: grid; gap: 8px; padding-block: 4px; }

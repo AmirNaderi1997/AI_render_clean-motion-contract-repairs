@@ -729,3 +729,35 @@ async def library_pictures(request: Request):
     from app import talking_reel
     return [{'path': item['path'], 'name': item.get('filename') or Path(item['path']).name, 'tags': (item.get('tags') or [])[:6]}
             for item in talking_reel._library_pictures()][:200]
+
+
+# -- Editing preview (the plan rendered without captions) -------------------------------------------
+
+async def _talking_job(request: Request, project_id: str):
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    job = jobstore.get(project.get('external_ref')) if project['engine'] == 'talking' else None
+    if not job: raise HTTPException(404, 'talking project not found')
+    return job
+
+
+@router.post('/projects/{project_id}/clean-base')
+async def start_clean_base(request: Request, project_id: str):
+    """Start (once) the caption-free render the timeline edits captions on; returns its status."""
+    import asyncio
+    from app import clean_base
+    job = await _talking_job(request, project_id)
+    return await asyncio.to_thread(clean_base.ensure, job.dir, job.dir / 'raw' / job.raw_name)
+
+
+@router.get('/projects/{project_id}/clean-base')
+async def clean_base_status(request: Request, project_id: str, key: str | None = None):
+    """Status as JSON; with ``key`` the video file itself."""
+    import asyncio
+    from app import clean_base
+    job = await _talking_job(request, project_id)
+    if key:
+        path = clean_base.path_for(job.dir, key)
+        if not path: raise HTTPException(404, 'preview is not ready')
+        return FileResponse(path, media_type='video/mp4')
+    return await asyncio.to_thread(clean_base.status, job.dir, job.dir / 'raw' / job.raw_name)

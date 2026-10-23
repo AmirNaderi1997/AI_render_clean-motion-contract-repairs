@@ -1,5 +1,5 @@
 import React from "react";
-import { api, DocElement, LibraryPicture, ProjectDocument, StudioProject } from "../api";
+import { api, CleanBase, DocElement, LibraryPicture, ProjectDocument, StudioProject } from "../api";
 import { currentVersion, planPhase } from "./plan";
 import { CaptionCanvas } from "./CaptionCanvas";
 import { Look, lookIsEmpty } from "./canvas";
@@ -125,6 +125,7 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
   const [time, setTime] = React.useState(0);
   const [latestFile, setLatestFile] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState<Look>({});
+  const [base, setBase] = React.useState<CleanBase | null>(null);
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const laneRef = React.useRef<HTMLDivElement>(null);
 
@@ -138,14 +139,29 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
     return () => { active = false; };
   }, [project.id, project.current_version, project.updated_at]);
 
+  // The caption-free preview: captions are drawn live on it, so the one being edited is the one that is shown.
+  React.useEffect(() => {
+    if (project.engine !== "talking") return;
+    let active = true, timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = (first: boolean) => (first ? api.startStudioCleanBase(project.id) : api.studioCleanBase(project.id)).then(value => {
+      if (!active) return;
+      setBase(value);
+      if (value.state === "building" || value.state === "missing") timer = setTimeout(() => poll(false), 4000);
+    }).catch(() => { if (active) setBase({ state: "unsupported" }); });
+    poll(true);
+    return () => { active = false; if (timer) clearTimeout(timer); };
+  }, [project.id, project.engine, project.current_version]);
+
   if (error) return <div className="notice" role="status" dir="rtl">{error}</div>;
   if (!doc) return <div className="tl-loading" role="status"><span className="spinner"/>در حال ساخت تایم‌لاین…</div>;
 
   // Talking keeps every render as a numbered file; the other engines expose their latest export.
   const output = project.engine === "talking"
     ? (latestFile ? `${api.studioOutputUrl(project.id)}?file=${encodeURIComponent(latestFile)}` : undefined) : currentOutput;
-  const notice = syncNotice(doc, Boolean(output));
-  const synced = Boolean(output) && playerMatches(doc);
+  const live = base?.state === "ready" && Boolean(base.key);
+  const preview = live ? api.studioCleanBaseUrl(project.id, base!.key!) : output;
+  const notice = live ? null : syncNotice(doc, Boolean(output));
+  const synced = live || (Boolean(output) && playerMatches(doc));
   const width = Math.max(1, doc.duration * zoom);
   const element = findElement(doc, selected);
   const captionElements = doc.tracks.filter(t => t.id === "captions").flatMap(t => t.elements);
@@ -164,16 +180,19 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
   };
 
   return <div className="tl" dir="rtl">
-    {output ? <div className="tl-player">
+    {preview ? <div className="tl-player">
       <div className="tl-stage">
-        <AuthenticatedMedia as="video" ref={videoRef} controls playsInline preload="metadata" src={output}
+        <AuthenticatedMedia as="video" ref={videoRef} controls playsInline preload="metadata" src={preview}
           onTimeUpdate={(event: React.SyntheticEvent<HTMLVideoElement>) => { if (synced) setTime(event.currentTarget.currentTime); }}/>
-        <CaptionCanvas boxRef={videoRef} captions={captionElements} time={time} selectedId={selected} draft={draft}
+        <CaptionCanvas live={live} boxRef={videoRef} captions={captionElements} time={time} selectedId={selected} draft={draft}
           disabled={editingLocked} onSelect={id => { const item = captionElements.find(e => e.id === id); if (item && item.id !== selected) pick(item); }}
           onDraft={setDraft} onCommit={setDraft}/>
       </div>
     </div> : null}
-    {notice === "no-video" ? <div className="notice" role="status">ویدیو هنوز رندر نشده؛ تایم‌لاین نشان می‌دهد چه چیزی ساخته می‌شود.</div>
+    {base && (base.state === "building" || base.state === "missing") ? <div className="notice" role="status"><span className="spinner"/> در حال ساخت پیش‌نمایش ویرایش (ویدیو بدون زیرنویس)… تا آماده شدن، آخرین ویدیوی رندرشده نمایش داده می‌شود.</div>
+      : live ? <div className="notice" role="status">پیش‌نمایش ویرایش: زیرنویس‌ها روی ویدیوی بدون زیرنویس زنده کشیده می‌شوند؛ همان زیرنویسی که جابه‌جا می‌کنید همان است که رندر می‌شود.</div>
+      : base?.state === "failed" ? <div className="notice" data-tone="warning" role="status">ساخت پیش‌نمایش ویرایش ناموفق بود؛ ویرایش روی قاب با ویدیوی رندرشده انجام می‌شود.</div> : null}
+    {notice === "no-video" && !live ? <div className="notice" role="status">ویدیو هنوز رندر نشده؛ تایم‌لاین نشان می‌دهد چه چیزی ساخته می‌شود.</div>
       : notice === "different-version" ? <div className="notice" data-tone="warning" role="status">
           این تایم‌لاین نسخهٔ {doc.basis.plan_version ?? "فعلی"} برنامه است{doc.basis.rendered_version ? `؛ ویدیوی بالا از نسخهٔ ${doc.basis.rendered_version} رندر شده` : "؛ ویدیوی بالا از نسخهٔ دیگری رندر شده"} و زمان‌ها ممکن است با آن یکی نباشند.
         </div>

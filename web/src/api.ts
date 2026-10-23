@@ -211,6 +211,9 @@ export interface DocElement {
   props: Record<string, any>; edit: { via: ("plan" | "chat" | "timeline" | "advanced")[]; note: string };
 }
 export interface DocTrack { id: string; kind: string; label: string; elements: DocElement[] }
+/** The plan rendered without captions: what the timeline edits captions on (see app/clean_base.py). */
+export interface CleanBase { state: "ready" | "building" | "missing" | "failed" | "unsupported"; key?: string; reason?: string }
+
 export interface ProjectDocument {
   schema: number; engine: string; style: string; canvas: { width: number; height: number; fps: number };
   duration: number; content_duration: number; tracks: DocTrack[];
@@ -1122,6 +1125,13 @@ export const api = {
   async studioDocument(id: string): Promise<ProjectDocument> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/document`));
   },
+  async startStudioCleanBase(id: string): Promise<CleanBase> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/clean-base`, { method: "POST" }));
+  },
+  async studioCleanBase(id: string): Promise<CleanBase> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/clean-base`));
+  },
+  studioCleanBaseUrl(id: string, key: string): string { return `${BASE}/studio/projects/${id}/clean-base?key=${encodeURIComponent(key)}`; },
   studioPlanFrameUrl(id: string, frame: string): string { return `${BASE}/studio/projects/${id}/plan/frames/${frame}`; },
   async getBrandProfile(): Promise<BrandProfile> {
     return j(await authFetch(`${BASE}/studio/profile`));
