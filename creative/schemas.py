@@ -307,6 +307,7 @@ class ReferenceProfile(_Model):
     sound: str = ""
     overall_feel: str = ""
     frames_used: int = 0
+    frame_table: list[dict] = Field(default_factory=list)   # per sampled frame: {t, shot, text, change}; what was seen, frame by frame
 
     @field_validator("reason", "source", "typography", "composition", "motion_language", "transitions", "visual_density",
                      "hook_structure", "narrative_structure", "sound", "overall_feel", mode="before")

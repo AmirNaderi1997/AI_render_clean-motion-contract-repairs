@@ -109,8 +109,8 @@ def _provider() -> str:
     return "arvan_image"
 
 
-def _assistant(conversation_id: str, user_key: str, content: str) -> None:
-    run(repo.add_message(conversation_id, user_key, "assistant", content))
+def _assistant(conversation_id: str, user_key: str, content: str, attachments: list[str] | None = None) -> None:
+    run(repo.add_message(conversation_id, user_key, "assistant", content, attachments or None))
 
 
 def _emit(conversation_id: str, event_type: str, **data: Any) -> None:
@@ -498,19 +498,37 @@ def _analyze_reference(conversation_id: str, user_key: str, source: str):
     from creative import reference as reference_analysis
     from tempfile import TemporaryDirectory
     _emit(conversation_id, "tool.started", tool="reference_analysis",
-          message="دارم ویدیوی رفرنس را واقعاً تحلیل می‌کنم: نماها، ریتم، رنگ و تایپوگرافی.")
+          message="دارم ویدیوی رفرنس را فریم‌به‌فریم بررسی می‌کنم: برش‌ها، ریتم، رنگ و تایپوگرافی.")
+    folder = Path(jobstore.JOBS_ROOT) / "studio" / user_key / conversation_id / "reference"
     with TemporaryDirectory(prefix="studio-reference-") as temporary:
-        profile = reference_analysis.analyze(source, Path(temporary))
+        profile = reference_analysis.analyze(source, Path(temporary), table_dir=folder)
     if profile.usable:
         _emit(conversation_id, "tool.completed", tool="reference_analysis",
-              message=f"رفرنس تحلیل شد: {profile.shot_count} نما، میانگین {profile.avg_shot_s:g} ثانیه برای هر نما.")
+              message=f"رفرنس تحلیل شد: {profile.shot_count} نما، {len(profile.frame_table)} فریم بررسی شد.")
         _assistant(conversation_id, user_key, _reference_message(profile))
+        image = folder / "frame-table.jpg"
+        if image.is_file() and profile.frame_table:
+            attachment = run(repo.create_attachment(conversation_id, user_key, kind="image", filename="جدول-بررسی-فریم-ها.jpg",
+                                                    path=str(image), mime_type="image/jpeg", size_bytes=image.stat().st_size,
+                                                    metadata={"role": "reference_frame_table"}))
+            _assistant(conversation_id, user_key, _frame_table_message(profile), [attachment["id"]])
     else:
         _emit(conversation_id, "tool.completed", tool="reference_analysis", message="رفرنس تحلیل نشد.")
         _assistant(conversation_id, user_key,
                    f"**رفرنس را نتوانستم ببینم.** {profile.reason}\n\nتا آن موقع فقط بر اساس موضوع و توضیحات خودت پیش می‌روم "
                    "و ادعا نمی‌کنم که سبک رفرنس رعایت شده است.")
     return profile
+
+
+def _frame_table_message(profile) -> str:
+    """The frame-by-frame review as text, next to the picture of the same frames."""
+    lines = [f"**جدول بررسی فریم‌به‌فریم رفرنس** — {len(profile.frame_table)} فریم از {profile.shot_count} نما "
+             "(قاب قرمز یعنی برش به نمای تازه)"]
+    for row in profile.frame_table:
+        detail = row.get("text") or "توصیف این فریم انجام نشد"
+        change = f" ← تغییر: {row['change']}" if row.get("change") else ""
+        lines.append(f"• ثانیهٔ {row['t']:.1f} · نمای {row['shot']}: {detail}{change}")
+    return "\n".join(lines)
 
 
 def _reference_message(profile) -> str:

@@ -28,3 +28,4 @@ pydantic-settings>=2.0
 httpx
 requests>=2.31
 cryptography>=43
+yt-dlp>=2026.10

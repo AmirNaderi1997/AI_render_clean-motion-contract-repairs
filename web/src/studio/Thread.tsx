@@ -10,8 +10,8 @@ import { TimelineItem } from "./model";
 export interface LocalFileInfo { name: string; type: string; url: string }
 
 /** Lazy preview for an attachment we only know by id: nothing downloads until asked. */
-function RemoteAttachment({ conversationId, id, index }: { conversationId: string; id: string; index: number }) {
-  const [open, setOpen] = React.useState(false);
+function RemoteAttachment({ conversationId, id, index, autoOpen }: { conversationId: string; id: string; index: number; autoOpen?: boolean }) {
+  const [open, setOpen] = React.useState(Boolean(autoOpen));
   const url = useAuthenticatedMediaUrl(open ? api.studioAttachmentUrl(conversationId, id) : undefined);
   const [kind, setKind] = React.useState<"image" | "video" | "audio" | "">("");
   React.useEffect(() => {
@@ -25,12 +25,12 @@ function RemoteAttachment({ conversationId, id, index }: { conversationId: strin
   return <div className="attach-preview">{kind === "image" ? <img src={url} alt={`Attachment ${index + 1}`}/> : kind === "audio" ? <audio src={url} controls/> : <video src={url} controls playsInline preload="metadata"/>}</div>;
 }
 
-function Attachments({ conversationId, ids, local }: { conversationId?: string; ids: string[]; local?: LocalFileInfo[] }) {
+function Attachments({ conversationId, ids, local, autoOpen }: { conversationId?: string; ids: string[]; local?: LocalFileInfo[]; autoOpen?: boolean }) {
   if (local?.length) return <div className="msg-files">{local.map((file, index) => file.type.startsWith("image/")
     ? <div className="attach-preview" key={index}><img src={file.url} alt={file.name}/></div>
     : <div className="attach-chip" key={index}><span className="attach-icon"><Icon name={file.type.startsWith("video/") ? "video" : "music"} size={16}/></span><span className="attach-meta"><b className="wrap-safe">{file.name}</b></span></div>)}</div>;
   if (!ids.length || !conversationId) return null;
-  return <div className="msg-files">{ids.map((id, index) => <RemoteAttachment key={id} conversationId={conversationId} id={id} index={index}/>)}</div>;
+  return <div className="msg-files">{ids.map((id, index) => <RemoteAttachment key={id} conversationId={conversationId} id={id} index={index} autoOpen={autoOpen}/>)}</div>;
 }
 
 export function Thread({ items, conversation, projects, localFiles, thinking, compactRender, retryHref, onOpenPreview, onEditAgain, onChoice, onRetryMessage, sourceUrl, linkTitles = {} }: {
@@ -47,7 +47,7 @@ export function Thread({ items, conversation, projects, localFiles, thinking, co
               {item.content ? <RichText text={item.content} linkTitles={linkTitles}/> : null}
               {item.failed ? <div className="msg-failed"><Icon name="alert" size={14}/>Not sent <button className="link-btn" onClick={onRetryMessage}>Retry</button></div> : null}
             </div>
-          : <div className="assistant"><span className="assistant-mark" aria-hidden="true"><Icon name="spark" size={13}/></span><div className="assistant-body"><RichText text={item.content} linkTitles={linkTitles}/><Attachments conversationId={conversation?.id} ids={item.attachments}/></div></div>}
+          : <div className="assistant"><span className="assistant-mark" aria-hidden="true"><Icon name="spark" size={13}/></span><div className="assistant-body"><RichText text={item.content} linkTitles={linkTitles}/><Attachments conversationId={conversation?.id} ids={item.attachments} autoOpen/></div></div>}
       </li>;
       if (item.kind === "activity") return <li key={item.id} className="thread-aux"><ActivityBlock steps={item.steps} live={item.live} retryHref={retryHref}/></li>;
       if (item.kind === "render") {
