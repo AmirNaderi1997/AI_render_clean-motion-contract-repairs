@@ -4,7 +4,7 @@ An edit is keyed by the element's stable id (see ``project_document``) and is ap
 after it is built (``talking_reel.plan_render``), so the render and the timeline show the same thing and each
 style keeps its own look. Nothing here edits the AI's decisions: removing an edit restores the original.
 
-Supported today: caption text, caption timing, and hiding a caption. Speaker cuts come from the speech and
+Supported today: caption text, timing, hiding, and the caption's look (position, size, colour). Speaker cuts come from the speech and
 pictures from the plan; they are not editable on the timeline yet.
 """
 from __future__ import annotations
@@ -92,6 +92,12 @@ def clean(raw) -> dict:
                 item[field] = round(value, 2)
         if edit.get("deleted"):
             item["deleted"] = True
+        from engine import caption_looks
+        try:
+            look = caption_looks.clean_look({k: edit.get(k) for k in caption_looks.LOOK_KEYS})
+        except ValueError as exc:
+            raise EditError(f"ظاهر زیرنویس معتبر نیست: {exc}")
+        item.update(look)
         if item:
             out[element_id] = item
     if len(out) > MAX_EDITS:
@@ -106,6 +112,9 @@ def merge_caption(caption: dict, edit: dict | None) -> dict | None:
     if edit.get("deleted"):
         return None
     merged = dict(caption)
+    look = {k: edit[k] for k in ("x", "y", "scale", "color") if k in edit}
+    if look:
+        merged["look"] = look
     if "start" in edit:
         merged["start"] = edit["start"]
     if "end" in edit:

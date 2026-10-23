@@ -889,7 +889,7 @@ async def edit_timeline(project_id: str, user_key: str, version_id: str, ops: li
         # An op is the caption's complete edit: it replaces the stored one, so a field set back to the
         # AI's value stops being an edit. "reset" removes the edit entirely.
         element_id = str(op.get("id") or "")
-        entry = {field: op[field] for field in ("text", "start", "end") if field in op}
+        entry = {field: op[field] for field in ("text", "start", "end", "x", "y", "scale", "color") if field in op}
         if op.get("deleted"):
             entry["deleted"] = True
         if op.get("reset") or not entry:

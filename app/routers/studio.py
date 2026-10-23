@@ -622,6 +622,10 @@ class TimelineOp(BaseModel):
     end: float | None = None
     deleted: bool | None = None
     reset: bool | None = None
+    x: float | None = None
+    y: float | None = None
+    scale: float | None = None
+    color: str | None = Field(default=None, max_length=7)
 
 
 class TimelineEdit(BaseModel):

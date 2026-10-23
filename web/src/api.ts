@@ -192,7 +192,7 @@ export interface PlanContent {
   engines: string[];
   estimate: { render: { low_s: number; high_s: number; samples: number } | null; paid_media: boolean; new_images?: number; note: string };
   concepts: PlanConcept[];
-  timeline_edits: Record<string, { text?: string; start?: number; end?: number; deleted?: boolean }>;
+  timeline_edits: Record<string, { text?: string; start?: number; end?: number; deleted?: boolean; x?: number; y?: number; scale?: number; color?: string }>;
   broll_edits: Record<string, { source: PictureSource; media?: string; library?: string; visual?: string; label?: string }>;
   style_options: { id: string; label: string; summary: string; complexity: string }[];
   frames?: Record<string, string>;
@@ -221,7 +221,7 @@ export interface ProjectDocument {
 export type PictureSource = "upload" | "library" | "ai" | "hidden";
 export interface PictureOp { slot: number; source?: PictureSource; media?: string; library?: string; visual?: string; label?: string; reset?: boolean }
 export interface LibraryPicture { path: string; name: string; tags: string[] }
-export interface TimelineOp { id: string; text?: string; start?: number; end?: number; deleted?: boolean; reset?: boolean }
+export interface TimelineOp { id: string; text?: string; start?: number; end?: number; deleted?: boolean; reset?: boolean; x?: number; y?: number; scale?: number; color?: string }
 export interface BrandProfile {
   name: string; tagline: string; cta: string; accent_color: string; caption_font: string; logo_motion: string;
   answered: string[]; has_logo: boolean; updated_at: number | null;

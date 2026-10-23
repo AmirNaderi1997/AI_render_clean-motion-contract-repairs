@@ -313,6 +313,17 @@ def test_timeline_edit_becomes_a_new_version_awaiting_approval_and_resets_with_r
     assert s.calls["start"] == 0
 
 
+def test_caption_look_edit_passes_through_the_api_model_and_orchestrator(studio, monkeypatch):
+    from app.routers.studio import TimelineOp
+    s = studio
+    monkeypatch.setattr(s.o, "_validate_timeline_edits", lambda job, edits: None)
+    run(s.o.sync_conversation(s.c["id"], "u"))
+    v1 = creative_plan.current(project(s)["state"])["id"]
+    op = TimelineOp(id="caption:s0:0", x=318.9, y=421.4, scale=1.5, color="#ffcc00").model_dump(exclude_none=True)
+    run(s.o.edit_timeline(s.p["id"], "u", v1, [op]))
+    assert s.engine["timeline_edits"] == {"caption:s0:0": {"x": 318.9, "y": 421.4, "scale": 1.5, "color": "#FFCC00"}}
+
+
 def test_picture_edit_becomes_a_new_version_and_costs_nothing_until_approved(studio, monkeypatch):
     s = studio
     monkeypatch.setattr(s.o, "_validate_broll_edits", lambda job, edits: None)

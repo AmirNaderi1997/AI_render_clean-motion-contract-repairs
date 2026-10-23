@@ -255,6 +255,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     ass_text = build_ass(plan, fonts)
     from engine.caption_preferences import caption_font
     ass_text = caption_font(ass_text, settings)
+    from engine.caption_looks import apply as apply_caption_looks
+    ass_text = apply_caption_looks(ass_text, plan.captions)
     title_color = str(settings.get("title_color") or "")
     if re.fullmatch(r"#[0-9A-Fa-f]{6}", title_color):
         ass_text = ass_text.replace(ACCENT_COLOUR, "&H00" + title_color[5:7] + title_color[3:5] + title_color[1:3])

@@ -60,14 +60,18 @@ export function captionForm(element: DocElement): CaptionForm {
   return { text: element.text, start: element.start.toFixed(2), end: element.end.toFixed(2) };
 }
 
-/** The caption's complete edit for the form (and hidden flag); a form equal to the AI's version is a reset. */
-export function captionOp(element: DocElement, form: CaptionForm, deleted = false): TimelineOp {
+/** The caption's complete edit for the form, hidden flag and on-frame look; equal to the AI's version = a reset. */
+export function captionOp(element: DocElement, form: CaptionForm, deleted = false, look: { x?: number; y?: number; scale?: number; color?: string } = {}): TimelineOp {
   const original = element.props.original as { text: string; start: number; end: number };
   const op: TimelineOp = { id: element.id };
   const start = Number(form.start), end = Number(form.end);
   if (form.text.trim() !== original.text) op.text = form.text.trim();
   if (Number.isFinite(start) && Math.abs(start - original.start) > 0.004) op.start = Math.round(start * 100) / 100;
   if (Number.isFinite(end) && Math.abs(end - original.end) > 0.004) op.end = Math.round(end * 100) / 100;
+  if (look.x !== undefined) op.x = look.x;
+  if (look.y !== undefined) op.y = look.y;
+  if (look.scale !== undefined) op.scale = look.scale;
+  if (look.color) op.color = look.color;
   if (deleted) op.deleted = true;
   return Object.keys(op).length === 1 ? { id: element.id, reset: true } : op;
 }

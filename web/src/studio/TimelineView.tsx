@@ -1,6 +1,8 @@
 import React from "react";
 import { api, DocElement, LibraryPicture, ProjectDocument, StudioProject } from "../api";
 import { currentVersion, planPhase } from "./plan";
+import { CaptionCanvas } from "./CaptionCanvas";
+import { Look, lookIsEmpty } from "./canvas";
 import { AuthenticatedMedia } from "../AuthenticatedMedia";
 import { friendlyError } from "../ui";
 import { CaptionForm, PictureForm, TYPE_LABEL, VIA_LABEL, captionForm, captionOp, captionProblem, clock, findElement, pictureForm, pictureOp, pictureProblem, playerMatches, stackRows, syncNotice, ticks } from "./timeline";
@@ -8,7 +10,7 @@ import { CaptionForm, PictureForm, TYPE_LABEL, VIA_LABEL, captionForm, captionOp
 const HEADER = 92;   // px, sticky track labels
 
 /** Caption editor: text, timing and hiding. Every save becomes a new plan version that needs approval. */
-function CaptionEditor({ project, element, duration, onChanged }: { project: StudioProject; element: DocElement; duration: number; onChanged: () => void }) {
+function CaptionEditor({ project, element, duration, onChanged, look, onLook }: { project: StudioProject; element: DocElement; duration: number; onChanged: () => void; look: Look; onLook: (look: Look) => void }) {
   const [form, setForm] = React.useState<CaptionForm>(() => captionForm(element));
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -18,7 +20,10 @@ function CaptionEditor({ project, element, duration, onChanged }: { project: Stu
   const locked = busy || !version || phase === "analyzing" || phase === "rendering";
   const hidden = Boolean(element.props.deleted);
   const problem = captionProblem(form, duration);
-  const changed = JSON.stringify(form) !== JSON.stringify(captionForm(element));
+  const savedLook = (element.props.look as Look | undefined) ?? {};
+  const lookChanged = JSON.stringify(look) !== JSON.stringify(savedLook);
+  const changed = JSON.stringify(form) !== JSON.stringify(captionForm(element)) || lookChanged;
+  const frame = element.props.frame as { x_locked?: boolean } | null | undefined;
   async function send(op: ReturnType<typeof captionOp>) {
     if (!version) return;
     setBusy(true); setError("");
@@ -35,11 +40,19 @@ function CaptionEditor({ project, element, duration, onChanged }: { project: Stu
       <div className="field"><label htmlFor="tl-end">پایان (ثانیه)</label>
         <input id="tl-end" className="input" dir="ltr" inputMode="decimal" disabled={locked || hidden} value={form.end} onChange={event => setForm({ ...form, end: event.target.value })}/></div>
     </div>
+    {frame ? <div className="tl-look">
+      <div className="field"><label htmlFor="tl-scale">اندازه: {Math.round((look.scale ?? 1) * 100)}٪</label>
+        <input id="tl-scale" type="range" min={40} max={300} step={5} disabled={locked || hidden} value={Math.round((look.scale ?? 1) * 100)} onChange={event => onLook({ ...look, scale: Number(event.target.value) / 100 })}/></div>
+      <div className="field"><label htmlFor="tl-color">رنگ متن</label>
+        <input id="tl-color" type="color" disabled={locked || hidden} value={look.color ?? "#FFFFFF"} onChange={event => onLook({ ...look, color: event.target.value.toUpperCase() })}/></div>
+      <small className="field-hint">جای زیرنویس را مستقیم روی تصویر بکشید و از گوشهٔ آن اندازه را عوض کنید.{frame.x_locked ? " در این سبک زیرنویس همیشه وسط افقی می‌ماند و فقط ارتفاعش عوض می‌شود." : ""}</small>
+      {!lookIsEmpty(look) ? <button type="button" className="btn btn-sm btn-secondary" disabled={locked} onClick={() => onLook({})}>برگرداندن جا، اندازه و رنگ</button> : null}
+    </div> : <small className="tl-note">این زیرنویس روی تصویر دیده نمی‌شود (مثلاً زیر هوک است)، پس جا و اندازه‌اش قابل تغییر نیست.</small>}
     {changed && problem ? <small className="field-error">{problem}</small> : null}
     {error ? <div className="notice" data-tone="error" role="alert">{error}</div> : null}
     <div className="action-buttons">
-      {!hidden ? <button className="btn btn-sm" disabled={locked || !changed || Boolean(problem)} onClick={() => void send(captionOp(element, form))}>{busy ? "در حال ذخیره…" : "ذخیرهٔ تغییر"}</button> : null}
-      <button className="btn btn-sm btn-secondary" disabled={locked} onClick={() => void send(captionOp(element, hidden ? captionForm({ ...element, text: element.props.original.text, start: element.props.original.start, end: element.props.original.end }) : form, !hidden))}>{hidden ? "نمایش دوباره" : "پنهان کردن"}</button>
+      {!hidden ? <button className="btn btn-sm" disabled={locked || !changed || Boolean(problem)} onClick={() => void send(captionOp(element, form, false, look))}>{busy ? "در حال ذخیره…" : "ذخیرهٔ تغییر"}</button> : null}
+      <button className="btn btn-sm btn-secondary" disabled={locked} onClick={() => void send(captionOp(element, hidden ? captionForm({ ...element, text: element.props.original.text, start: element.props.original.start, end: element.props.original.end }) : form, !hidden, hidden ? {} : look))}>{hidden ? "نمایش دوباره" : "پنهان کردن"}</button>
       {element.props.edited ? <button className="btn btn-sm btn-secondary" disabled={locked} onClick={() => void send({ id: element.id, reset: true })}>بازگرداندن نسخهٔ اصلی</button> : null}
     </div>
     <small className="tl-note">{phase === "rendering" ? "تا پایان رندر ویرایش قفل است." : "هر تغییر یک نسخهٔ جدید از برنامه می‌سازد و برای دیده‌شدن در ویدیو باید دوباره تأیید شود."}</small>
@@ -111,6 +124,7 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
   const [zoom, setZoom] = React.useState(36);   // px per second
   const [time, setTime] = React.useState(0);
   const [latestFile, setLatestFile] = React.useState<string | null>(null);
+  const [draft, setDraft] = React.useState<Look>({});
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const laneRef = React.useRef<HTMLDivElement>(null);
 
@@ -134,11 +148,16 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
   const synced = Boolean(output) && playerMatches(doc);
   const width = Math.max(1, doc.duration * zoom);
   const element = findElement(doc, selected);
+  const captionElements = doc.tracks.filter(t => t.id === "captions").flatMap(t => t.elements);
+  const editingLocked = planPhase(project) === "analyzing" || planPhase(project) === "rendering";
   const seek = (seconds: number) => {
     setTime(seconds);
     if (synced && videoRef.current) videoRef.current.currentTime = seconds;
   };
-  const pick = (item: DocElement) => { setSelected(item.id); seek(item.start); };
+  const pick = (item: DocElement) => {
+    setSelected(item.id); seek(item.start);
+    setDraft((item.props.look as Look | undefined) ?? {});     // the look being edited starts from what is saved
+  };
   const onRuler = (event: React.MouseEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
     seek(Math.max(0, Math.min(doc.duration, (event.clientX - box.left) / zoom)));
@@ -146,8 +165,13 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
 
   return <div className="tl" dir="rtl">
     {output ? <div className="tl-player">
-      <AuthenticatedMedia as="video" ref={videoRef} controls playsInline preload="metadata" src={output}
-        onTimeUpdate={(event: React.SyntheticEvent<HTMLVideoElement>) => { if (synced) setTime(event.currentTarget.currentTime); }}/>
+      <div className="tl-stage">
+        <AuthenticatedMedia as="video" ref={videoRef} controls playsInline preload="metadata" src={output}
+          onTimeUpdate={(event: React.SyntheticEvent<HTMLVideoElement>) => { if (synced) setTime(event.currentTarget.currentTime); }}/>
+        <CaptionCanvas boxRef={videoRef} captions={captionElements} time={time} selectedId={selected} draft={draft}
+          disabled={editingLocked} onSelect={id => { const item = captionElements.find(e => e.id === id); if (item && item.id !== selected) pick(item); }}
+          onDraft={setDraft} onCommit={setDraft}/>
+      </div>
     </div> : null}
     {notice === "no-video" ? <div className="notice" role="status">ویدیو هنوز رندر نشده؛ تایم‌لاین نشان می‌دهد چه چیزی ساخته می‌شود.</div>
       : notice === "different-version" ? <div className="notice" data-tone="warning" role="status">
@@ -194,7 +218,7 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
       {element.source?.label ? <p className="tl-meta">منبع: {element.source.label}{element.source.file ? ` · ${element.source.file}` : ""}
         {element.source.in != null ? <span dir="ltr"> ({clock(element.source.in)}–{clock(element.source.out || 0)} در فایل اصلی)</span> : null}</p> : null}
       <p className="tl-meta">تغییر: {element.edit.via.length ? element.edit.via.map(item => VIA_LABEL[item] || item).join("، ") : "فعلاً قابل تغییر نیست"}</p>
-      {element.type === "caption" && element.props.original ? <CaptionEditor project={project} element={element} duration={doc.content_duration} onChanged={onChanged}/>
+      {element.type === "caption" && element.props.original ? <CaptionEditor project={project} element={element} duration={doc.content_duration} onChanged={onChanged} look={draft} onLook={setDraft}/>
         : element.type === "picture" && element.props.editable ? <PictureEditor project={project} element={element} onChanged={onChanged}/>
         : <>{element.edit.note ? <small className="tl-note">{element.edit.note}</small> : null}
           <small className="tl-note">ویرایش مستقیم این نوع عنصر روی تایم‌لاین هنوز اضافه نشده است.</small></>}

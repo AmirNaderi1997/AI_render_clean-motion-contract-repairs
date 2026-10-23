@@ -332,3 +332,17 @@ button.act-row:hover { color: var(--text-2); }
 .ws-player:fullscreen video, .ws-player:-webkit-full-screen video { width: 100%; height: 100%; max-height: none; min-height: 0; object-fit: contain; }
 .tl-picture { width: min(100%, 220px); border-radius: var(--radius-md); overflow: hidden; background: var(--active); aspect-ratio: 1 / 1; }
 .tl-picture img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* ── Caption editing on the video frame ───────────────────── */
+.tl-stage { position: relative; display: inline-block; line-height: 0; max-width: 100%; }
+.cc { position: absolute; pointer-events: none; }
+.cc-box { position: absolute; pointer-events: auto; display: grid; place-items: center; box-sizing: border-box; cursor: grab; touch-action: none;
+  border: 1.5px dashed rgba(255, 255, 255, .75); border-radius: 6px; background: rgba(0, 0, 0, .18); color: #fff; font-weight: 700; line-height: 1.25;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .8); overflow: visible; }
+.cc-box[data-active] { border-color: var(--ink, #fff); border-style: solid; background: rgba(0, 0, 0, .3); box-shadow: 0 0 0 1px rgba(0, 0, 0, .6); cursor: grabbing; }
+.cc-box[data-locked] { cursor: not-allowed; opacity: .7; }
+.cc-box span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-inline: 4px; }
+.cc-handle { position: absolute; inset-inline-end: -7px; inset-block-end: -7px; width: 16px; height: 16px; border-radius: 4px; background: #fff; border: 2px solid #111;
+  cursor: nwse-resize; touch-action: none; }
+.tl-look { display: grid; gap: 8px; padding-block: 4px; }
+.tl-look input[type="color"] { width: 44px; height: 32px; padding: 0; border: none; background: none; }

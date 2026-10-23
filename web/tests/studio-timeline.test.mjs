@@ -80,3 +80,11 @@ test("a saved choice is shown again, and incomplete forms are flagged before sav
   assert.match(pictureProblem({ source: "library", media: "", library: "", visual: "" }), /کتابخانه/);
   assert.equal(pictureProblem({ source: "hidden", media: "", library: "", visual: "" }), "");
 });
+
+test("a caption op carries its on-frame look, and a look equal to the AI's is a reset", () => {
+  const element = caption();
+  assert.deepEqual(captionOp(element, captionForm(element), false, { x: 300, y: 1500, scale: 1.4, color: "#FFD23F" }),
+                   { id: "caption:s0:0", x: 300, y: 1500, scale: 1.4, color: "#FFD23F" });
+  assert.deepEqual(captionOp(element, captionForm(element), false, {}), { id: "caption:s0:0", reset: true });
+  assert.deepEqual(captionOp(element, { text: "متن تازه", start: "1.00", end: "2.50" }, false, { scale: 2 }), { id: "caption:s0:0", text: "متن تازه", scale: 2 });
+});

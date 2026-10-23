@@ -899,6 +899,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     settings = render_settings or {}
     ass_text = build_ass(plan, hook, highlight, name, title, fonts, moments=overlay is None,
                          caption_font='Vazirmatn' if settings.get('caption_font') == 'Vazirmatn' else None)
+    from engine.caption_looks import apply as apply_caption_looks
+    ass_text = apply_caption_looks(ass_text, plan.captions)
     title_color = str(settings.get("title_color") or YELLOW)
     if re.fullmatch(r"#[0-9A-Fa-f]{6}", title_color):
         old, new = _colour(YELLOW), _colour(title_color)

@@ -49,6 +49,44 @@ def _element(id_: str, type_: str, start: float, end: float, label: str, *, text
             "source": source or {}, "props": props or {}, "edit": {"via": via or [], "note": note}}
 
 
+def _caption_frames(planned, job_dir: Path, state: dict) -> dict[int, dict]:
+    """Where each caption sits on the 1080x1920 frame, read from the ASS the style itself builds (no looks applied).
+
+    Style 4 is drawn by Tscaps (always horizontally centred): its place comes from the role, and is approximate."""
+    from engine import caption_looks
+    from engine.talking_styles import talking_1 as first
+    style, plan = planned.style, planned.plan
+    try:
+        if style == "talking_4":
+            from engine import tscaps_overlay as tso
+            vertical = float(tso.ROLES["caption"]["alignment"]["verticalOffset"])
+            return {i: {"x": 540.0, "y": vertical * 1920, "size": 4.8 * 19.2, "box": None, "style": "tscaps", "font": "Ray Bold", "x_locked": True}
+                    for i in range(len(plan.captions))}
+        fonts = first.fonts_bundle(job_dir / "talking_reel_work")
+        if style == "talking_1":
+            ass = planned.media.build_ass(plan, state.get("hook") or "", state.get("hook_highlight") or [], state.get("name") or "",
+                                          state.get("title") or "", fonts, moments=False)
+        else:
+            ass = planned.media.build_ass(plan, fonts)
+        frames = caption_looks.geometry(ass, plan.captions)
+        for frame in frames.values():
+            frame["fonts_dir"] = str(fonts)
+        return frames
+    except Exception:
+        return {}
+
+
+def _text_width(frame: dict, text: str) -> float:
+    """Width of the caption text in frame pixels (measured with the style's own font, estimated if that fails)."""
+    if frame.get("box") or not text:
+        return 0.0
+    try:
+        from engine.localize import measure_text_boxes
+        return float(measure_text_boxes([(text, int(frame["size"]))], 1080, 1920, frame["font"], Path(frame["fonts_dir"]))[0][0])
+    except Exception:
+        return min(1000.0, frame["size"] * 0.55 * len(text))
+
+
 def talking_document(job_dir: Path, video: Path) -> dict:
     from app import talking_reel
     from engine.talking_styles.talking_1 import CTA_SECONDS, LOGO, LOGO_SECONDS
@@ -151,19 +189,30 @@ def talking_document(job_dir: Path, video: Path) -> dict:
     # Captions, with ids from their transcript sentence and the user's edits laid over the AI's version.
     edits = state.get("timeline_edits") or {}
     caption_ids = edits_layer.caption_ids(plan, sentences)
-    for element_id, caption in zip(caption_ids, plan.captions):
+    frames = _caption_frames(planned, job_dir, state)
+    from engine.caption_looks import effective_rect
+    for index, (element_id, caption) in enumerate(zip(caption_ids, plan.captions)):
         edit = edits.get(element_id)
         shown = edits_layer.merge_caption(caption, edit) or caption
         teaser = element_id.startswith("caption:cold")
         sentence = None if element_id.split(":")[-2] == "sx" else int(element_id.split(":")[-2][1:])
         original = {"text": edits_layer.caption_text(caption), "start": _r(caption["start"]), "end": _r(caption["end"])}
+        frame = frames.get(index)
+        look = (shown.get("look") or {}) if shown is not caption else {}
+        placed = None
+        if frame:
+            width = _text_width(frame, edits_layer.caption_text(shown))
+            placed = {"x": frame["x"], "y": frame["y"], "size": frame["size"], "boxed": bool(frame["box"]),
+                      "x_locked": bool(frame.get("x_locked")),
+                      "rect": {k: round(v, 1) for k, v in effective_rect(frame, None, width).items()},
+                      "now": {k: round(v, 1) for k, v in effective_rect(frame, look, width).items()}}
         tracks["captions"].append(_element(
             element_id, "caption", shown["start"], shown["end"],
             ("پیش‌نمایش ابتدایی · " if teaser else "") + (f"جملهٔ {sentence + 1}" if sentence is not None else ""),
             text=edits_layer.caption_text(shown),
             props={"sentence": sentence, "key": shown.get("key"), "edited": bool(edit), "deleted": bool(edit and edit.get("deleted")),
-                   "original": original},
-            via=["timeline", "chat"], note="متن و زمان این زیرنویس را همین‌جا عوض کنید یا آن را پنهان کنید."))
+                   "original": original, "look": look, "frame": placed},
+            via=["timeline", "chat"], note="متن، زمان، جای زیرنویس روی تصویر، اندازه و رنگ آن را همین‌جا عوض کنید یا آن را پنهان کنید."))
     stale = sorted(set(edits) - set(caption_ids))
 
     # Graphics: chips (lists), key moments (style 1) and authored motion scenes (style 2 with HyperFrames).
