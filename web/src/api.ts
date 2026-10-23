@@ -1132,6 +1132,11 @@ export const api = {
     return j(await authFetch(`${BASE}/studio/projects/${id}/clean-base`));
   },
   studioCleanBaseUrl(id: string, key: string): string { return `${BASE}/studio/projects/${id}/clean-base?key=${encodeURIComponent(key)}`; },
+  async studioFont(name: string): Promise<ArrayBuffer> {
+    const response = await authFetch(`${BASE}/studio/fonts/${encodeURIComponent(name)}`);
+    if (!response.ok) throw new Error("font");
+    return response.arrayBuffer();
+  },
   studioPlanFrameUrl(id: string, frame: string): string { return `${BASE}/studio/projects/${id}/plan/frames/${frame}`; },
   async getBrandProfile(): Promise<BrandProfile> {
     return j(await authFetch(`${BASE}/studio/profile`));

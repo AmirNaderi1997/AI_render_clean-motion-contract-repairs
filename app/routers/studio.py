@@ -761,3 +761,13 @@ async def clean_base_status(request: Request, project_id: str, key: str | None =
         if not path: raise HTTPException(404, 'preview is not ready')
         return FileResponse(path, media_type='video/mp4')
     return await asyncio.to_thread(clean_base.status, job.dir, job.dir / 'raw' / job.raw_name)
+
+
+@router.get('/fonts/{name}')
+async def caption_font_file(name: str):
+    """A caption font the renders use, so the timeline draws captions with the same letters."""
+    from app import fonts
+    path = fonts.path_for(name)
+    if not path: raise HTTPException(404, 'font not found')
+    return FileResponse(path, media_type='font/ttf' if path.suffix.lower() == '.ttf' else 'font/otf',
+                        headers={'Cache-Control': 'public, max-age=86400'})

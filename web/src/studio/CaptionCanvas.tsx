@@ -1,5 +1,5 @@
 import React from "react";
-import { DocElement } from "../api";
+import { api, DocElement } from "../api";
 import { CaptionFrame, FRAME_H, FRAME_W, Look, fitFrame, lookIsEmpty, moveLook, resizeLook, toScreen, visibleAt } from "./canvas";
 
 interface Props {
@@ -17,12 +17,42 @@ interface Props {
   live?: boolean;
 }
 
+const loadedFonts = new Map<string, Promise<boolean>>();
+
+/** The render's own caption fonts, loaded into the page once (the request carries the sign-in, so not a plain @font-face). */
+function useCaptionFonts(captions: DocElement[]): Set<string> {
+  const [ready, setReady] = React.useState<Set<string>>(new Set());
+  const wanted = React.useMemo(() => {
+    const found = new Map<string, string>();
+    for (const item of captions) {
+      const frame = item.props.frame as CaptionFrame | null | undefined;
+      if (frame?.font && frame.font_file) found.set(frame.font, frame.font_file);
+    }
+    return [...found.entries()];
+  }, [captions]);
+  React.useEffect(() => {
+    let active = true;
+    for (const [family, file] of wanted) {
+      if (!loadedFonts.has(file)) {
+        loadedFonts.set(file, api.studioFont(file)
+          .then(data => new FontFace(family, data).load())
+          .then(face => { document.fonts.add(face); return true; })
+          .catch(() => false));
+      }
+      loadedFonts.get(file)!.then(ok => { if (ok && active) setReady(previous => previous.has(family) ? previous : new Set(previous).add(family)); });
+    }
+    return () => { active = false; };
+  }, [wanted]);
+  return ready;
+}
+
 /**
  * An editing layer over the video: the captions that are on screen at the playhead, each as its exact rectangle on the
- * 1080x1920 frame. Drag to move, drag the corner to resize. The text is only a stand-in (the browser does not have the
- * style's font); the position and size are the real ones the render will use.
+ * 1080x1920 frame. Drag to move, drag the corner to resize. The text is drawn with the render's own font file, at the real
+ * position and size the render will use.
  */
 export function CaptionCanvas({ boxRef, captions, time, selectedId, draft, onSelect, onDraft, onCommit, disabled, live }: Props) {
+  const fonts = useCaptionFonts(captions);
   const [size, setSize] = React.useState({ w: 0, h: 0 });
   const drag = React.useRef<{ mode: "move" | "resize"; x: number; y: number; look: Look; rect: number } | null>(null);
   React.useLayoutEffect(() => {
@@ -75,6 +105,7 @@ export function CaptionCanvas({ boxRef, captions, time, selectedId, draft, onSel
       const color = active && draft.color ? draft.color : (item.props.look as Look)?.color;
       return <div key={item.id} className="cc-box" data-active={active || undefined} data-locked={disabled || undefined}
         style={{ left: screen.x, top: screen.y, width: screen.w, height: screen.h, color: color || undefined,
+                 fontFamily: frame.font && fonts.has(frame.font) ? `"${frame.font}", system-ui` : undefined,
                  fontSize: Math.max(8, frame.size * (displayed.width / FRAME_W) * ((active ? draft.scale : (item.props.look as Look)?.scale) ?? 1) * 0.9) }}
         role="button" tabIndex={0} aria-label={`زیرنویس: ${item.text}`} aria-pressed={active}
         onPointerDown={event => down(event, item, "move")} onPointerMove={event => move(event, item)} onPointerUp={event => up(event, item)}

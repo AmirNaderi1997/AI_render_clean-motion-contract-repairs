@@ -71,6 +71,8 @@ def _caption_frames(planned, job_dir: Path, state: dict) -> dict[int, dict]:
         frames = caption_looks.geometry(ass, plan.captions)
         for frame in frames.values():
             frame["fonts_dir"] = str(fonts)
+            if planned.settings.get("caption_font") == "Vazirmatn":      # the render swaps the caption font the same way
+                frame["font"] = "Vazirmatn"
         return frames
     except Exception:
         return {}
@@ -202,7 +204,9 @@ def talking_document(job_dir: Path, video: Path) -> dict:
         placed = None
         if frame:
             width = _text_width(frame, edits_layer.caption_text(shown))
-            placed = {"x": frame["x"], "y": frame["y"], "size": frame["size"], "boxed": bool(frame["box"]),
+            from app.fonts import font_file
+            placed = {"font": frame.get("font") or "", "font_file": font_file(frame.get("font") or ""),
+                      "x": frame["x"], "y": frame["y"], "size": frame["size"], "boxed": bool(frame["box"]),
                       "x_locked": bool(frame.get("x_locked")),
                       "rect": {k: round(v, 1) for k, v in effective_rect(frame, None, width).items()},
                       "now": {k: round(v, 1) for k, v in effective_rect(frame, look, width).items()}}

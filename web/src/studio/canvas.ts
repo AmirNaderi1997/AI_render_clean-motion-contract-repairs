@@ -9,7 +9,7 @@ export const SCALE_MAX = 3;
 
 export interface Rect { x: number; y: number; w: number; h: number }
 export interface Look { x?: number; y?: number; scale?: number; color?: string }
-export interface CaptionFrame { x: number; y: number; size: number; boxed: boolean; x_locked: boolean; rect: Rect; now: Rect }
+export interface CaptionFrame { font?: string; font_file?: string | null; x: number; y: number; size: number; boxed: boolean; x_locked: boolean; rect: Rect; now: Rect }
 
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 
