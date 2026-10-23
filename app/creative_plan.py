@@ -16,6 +16,7 @@ and the workflow position under ``workflow`` (see ``WORKFLOW``).
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 import hashlib
 import json
 import time
@@ -132,7 +133,8 @@ def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, 
                  "zoom": (settings.get("zoom") or {}).get("amount", 100),
                  "key_moments": bool(settings.get("key_moments_enabled", True))},
         "captions": info["captions"], "motion": info["motion"], "broll": info["broll"], "pictures": pictures,
-        "audio": {"music": (status.get("music") or "").rsplit("/", 1)[-1], "voice": "صدای اصلی گوینده (بدون نریشن جدید)",
+        "audio": {"music": (status.get("music") or "").rsplit("/", 1)[-1], "music_path": status.get("music") or "",
+                  "mix": _music_mix(style, settings), "voice": "صدای اصلی گوینده (بدون نریشن جدید)",
                   "sfx": info["sfx"]},
         "brand": {"name": status.get("name", ""), "tagline": status.get("title", ""), "cta": status.get("cta", ""),
                   "logo": {"enabled": bool(logo.get("enabled", True)), "motion": logo.get("motion", "pop"),
@@ -204,7 +206,15 @@ def approve(state: dict, version_id: str) -> dict:
 # -- manual plan edits ----------------------------------------------------------------------------
 
 EDITABLE = {"hook", "hook_highlight", "look", "accent_color", "caption_font", "zoom", "key_moments",
-            "logo_enabled", "logo_motion", "name", "tagline", "cta", "concept_id", "style", "timeline_edits", "broll_edits"}
+            "logo_enabled", "logo_motion", "name", "tagline", "cta", "concept_id", "style", "timeline_edits", "broll_edits",
+            "music", "music_mix"}
+
+
+def _music_mix(style: str, settings: dict) -> dict:
+    from engine import music_mix
+    mix = music_mix.resolve(style, settings)
+    return {"volume_db": mix.volume_db, "fade_in": mix.fade_in, "fade_out": mix.fade_out, "duck": mix.duck,
+            "defaults": music_mix.defaults(style)}
 
 
 def talking_edits(content: dict, edits: dict, status: dict) -> dict:
@@ -277,6 +287,26 @@ def talking_edits(content: dict, edits: dict, status: dict) -> dict:
             value = " ".join(str(edits[field] or "").split())[:120]
             engine[key] = value; profile[field] = value
             applied.append(f"{label}: «{value}»" if value else f"{label} حذف شد")
+    if "music" in edits:
+        from app import talking_reel
+        value = str(edits["music"] or "").strip()
+        if value and talking_reel.resolve_music(value) is None:
+            raise PlanError("این موسیقی در کتابخانه پیدا نشد.")
+        engine["music"] = value or None
+        engine["music_chosen"] = True
+        applied.append(f"موسیقی: {Path(value).stem.replace('_', ' ')}" if value else "موسیقی حذف شد")
+    if "music_mix" in edits:
+        from engine import music_mix
+        try:
+            mix = music_mix.clean(edits["music_mix"])
+        except ValueError as exc:
+            raise PlanError(f"تنظیم موسیقی معتبر نیست: {exc}")
+        if mix:
+            settings["music_mix"] = mix
+        else:
+            settings.pop("music_mix", None)
+        touched = True
+        applied.append("بلندی، محو شدن و کاهش خودکار موسیقی" if mix else "تنظیم موسیقی به حالت پیش‌فرض برگشت")
     if touched:
         engine["render_settings"] = settings
     if "broll_edits" in edits:

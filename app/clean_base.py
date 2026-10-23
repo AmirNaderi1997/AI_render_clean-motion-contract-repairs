@@ -35,7 +35,7 @@ def _key(planned, state: dict) -> str:
         "pictures": sorted((str(k), str(v)) for k, v in (planned.pictures or {}).items()),
         "settings": planned.settings,
         "style": planned.style,
-        "hook": [state.get(k) for k in ("hook", "hook_highlight", "name", "title", "music", "cta")],
+        "hook": [state.get(k) for k in ("hook", "hook_highlight", "name", "title", "music", "music_chosen", "cta")],
     }
     return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
@@ -88,7 +88,7 @@ def ensure(job_dir: Path, raw_video: Path) -> dict:
             tmp = out_dir / f"base_{key}.part.mp4"
             work = job_dir / "talking_reel_work" / "clean_work"
             music = state.get("music")
-            if planned.style in talking_reel.SPLIT_STYLES and music in (None, talking_reel.DEFAULT_MUSIC) and music is not None:
+            if planned.style in talking_reel.SPLIT_STYLES and music in (None, talking_reel.DEFAULT_MUSIC) and music is not None and not state.get("music_chosen"):
                 music = talking_reel.SPLIT_STYLES[planned.style][2]       # same bed choice as the real render
             music = talking_reel.resolve_music(music)
             common = dict(work_dir=work, music=music, cta=state.get("cta") or "", render_settings=planned.settings,

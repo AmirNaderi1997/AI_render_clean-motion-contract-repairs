@@ -1,5 +1,5 @@
 /** Pure helpers for the project timeline view (type imports only, unit-tested with `node --test`). */
-import type { DocElement, PictureOp, PictureSource, ProjectDocument, TimelineOp } from "../api";
+import type { DocElement, MusicMix, PictureOp, PictureSource, ProjectDocument, TimelineOp } from "../api";
 
 export const TYPE_LABEL: Record<string, string> = {
   clip: "برش تصویر", picture: "تصویر بالا", title: "عنوان", caption: "زیرنویس", card: "کارت متنی", chips: "فهرست",
@@ -112,3 +112,37 @@ export function pictureProblem(form: PictureForm): string {
   if (form.source === "library" && !form.library) return "یک تصویر از کتابخانه انتخاب کنید.";
   return "";
 }
+
+
+export interface MusicForm { path: string; volume_db: number; fade_in: number; fade_out: number; duck: boolean }
+export const MUSIC_LIMITS = { volume_db: [-40, -3], fade_in: [0, 5], fade_out: [0, 8] } as const;
+
+/** The music element's current choice and mix (what the render will use). */
+export function musicForm(element: { props: Record<string, any> }): MusicForm {
+  const p = element.props;
+  return { path: p.path ?? "", volume_db: Number(p.volume_db), fade_in: Number(p.fade_in), fade_out: Number(p.fade_out), duck: p.duck !== false };
+}
+
+/** Plan edits for a changed form: the track only when it changed, and only the mix fields that differ from the style's own. */
+export function musicEdits(form: MusicForm, element: { props: Record<string, any> }): { music?: string; music_mix: Partial<MusicMix> } {
+  const defaults = element.props.defaults as MusicMix;
+  const mix: Partial<MusicMix> = {};
+  for (const key of ["volume_db", "fade_in", "fade_out"] as const) if (Math.abs(form[key] - defaults[key]) > 1e-9) mix[key] = form[key];
+  if (form.duck !== defaults.duck) mix.duck = form.duck;
+  const edits: { music?: string; music_mix: Partial<MusicMix> } = { music_mix: mix };
+  if (form.path !== (element.props.path ?? "")) edits.music = form.path;
+  return edits;
+}
+
+export function musicProblem(form: MusicForm): string {
+  for (const [key, [low, high]] of Object.entries(MUSIC_LIMITS) as [keyof typeof MUSIC_LIMITS, readonly [number, number]][]) {
+    const value = form[key];
+    if (!Number.isFinite(value) || value < low || value > high) return "مقدار موسیقی خارج از محدودهٔ مجاز است.";
+  }
+  return "";
+}
+
+export const musicChanged = (form: MusicForm, element: { props: Record<string, any> }) => {
+  const saved = musicForm(element);
+  return form.path !== saved.path || form.volume_db !== saved.volume_db || form.fade_in !== saved.fade_in || form.fade_out !== saved.fade_out || form.duck !== saved.duck;
+};

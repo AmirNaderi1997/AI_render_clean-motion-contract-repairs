@@ -1003,13 +1003,10 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     if music and music.is_file():
         bed = music_bed(music, total + 1.0, work_dir)
         inputs += ["-i", str(bed)]
-        vf.append(f"[{next_input}:a]atrim=0:{total:.3f},volume={MUSIC_DB}dB,afade=t=in:d=0.8,"
-                  f"afade=t=out:st={max(0.0, total - 1.6):.3f}:d=1.6,aresample=48000,"
-                  f"aformat=channel_layouts=stereo[m]")
-        vf.append("[cpad]aresample=48000,aformat=channel_layouts=stereo,asplit[vo][key]")
-        vf.append("[m][key]sidechaincompress=threshold=0.03:ratio=5:attack=50:release=500[duck]")
-        vf.append("[vo][duck]amix=inputs=2:normalize=0:duration=first,"
-                  "loudnorm=I=-16:TP=-1:LRA=9,aresample=48000[aout]")
+        from engine import music_mix
+        mix = music_mix.resolve("talking_1", render_settings)
+        vf.append(mix.bed(next_input, total))
+        vf.extend(mix.graph("loudnorm=I=-16:TP=-1:LRA=9,aresample=48000[aout]"))
     else:
         # loudnorm internally upsamples.  With the source's 44.1kHz AAC and
         # this FFmpeg build, normalising before fixing the input rate changes

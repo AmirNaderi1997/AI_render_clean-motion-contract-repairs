@@ -771,3 +771,19 @@ async def caption_font_file(name: str):
     if not path: raise HTTPException(404, 'font not found')
     return FileResponse(path, media_type='font/ttf' if path.suffix.lower() == '.ttf' else 'font/otf',
                         headers={'Cache-Control': 'public, max-age=86400'})
+
+
+@router.get('/music')
+async def music_library():
+    """The bundled music beds a talking project can choose from."""
+    from app import talking_reel
+    return talking_reel.music_library()
+
+
+@router.get('/music/{name}')
+async def music_file(name: str):
+    from app import talking_reel
+    entry = next((m for m in talking_reel.music_library() if m['path'].rsplit('/', 1)[-1] == name), None)
+    path = talking_reel.resolve_music(entry['path']) if entry else None
+    if not path: raise HTTPException(404, 'music not found')
+    return FileResponse(path, headers={'Cache-Control': 'public, max-age=86400'})

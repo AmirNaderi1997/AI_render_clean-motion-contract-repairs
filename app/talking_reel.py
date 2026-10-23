@@ -39,7 +39,7 @@ DEFAULTS = {
         "dropped_sentences": [], "bottom_shade": 0, "source_cuts": [],
     },
 }
-EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions", "storyboard", "render_settings",
+EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "music_chosen", "cta", "style", "captions", "storyboard", "render_settings",
             "timeline_edits", "broll_edits"}
 _lock = threading.Lock()
 _running: set[str] = set()
@@ -190,6 +190,13 @@ def _clean_render_settings(value: object) -> dict:
     current["outro_logo"]["enabled"] = bool(outro.get("enabled", True))
     if outro.get("motion") in {"pop", "fade", "slide", "none"}:
         current["outro_logo"]["motion"] = outro["motion"]
+    from engine import music_mix
+    try:
+        mix = music_mix.clean(value.get("music_mix"))
+    except ValueError:
+        mix = {}
+    if mix:
+        current["music_mix"] = mix
     current["disabled_moments"] = [str(v)[:80] for v in (value.get("disabled_moments") or [])][:30]
     drops = value.get('dropped_sentences') or []
     current['dropped_sentences'] = sorted({v for v in drops if type(v) is int and 0 <= v < 10000})[:500] if isinstance(drops, list) else []
@@ -265,6 +272,8 @@ def update(job_dir: Path, changes: dict) -> dict:
                 from engine.talking_reel import STYLES
                 if value not in STYLES:
                     raise ValueError(f"unknown style {value!r}")
+            elif key == "music_chosen":
+                value = bool(value)
             elif key == "music":
                 value = value or None
                 if value and resolve_music(value) is None:
@@ -273,6 +282,13 @@ def update(job_dir: Path, changes: dict) -> dict:
                 value = str(value or "").strip()
             state[key] = value
         return save(job_dir, state)
+
+
+def music_library() -> list[dict]:
+    """The bundled music beds a project can use: [{"path": "assets/music/x.mp3", "label": "x"}]."""
+    folder = PROJECT_ROOT / "assets" / "music"
+    return [{"path": f"assets/music/{p.name}", "label": p.stem.replace("_", " ")}
+            for p in sorted(folder.glob("*")) if p.suffix.lower() in {".mp3", ".wav", ".m4a"} and p.is_file()]
 
 
 def resolve_music(music: Optional[str]) -> Optional[Path]:
@@ -975,7 +991,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
 
     # The talking_1 default bed does not suit every style; an explicit choice wins.
     music = state.get("music")
-    if music in (None, DEFAULT_MUSIC) and state.get("music") is not None:
+    if music in (None, DEFAULT_MUSIC) and state.get("music") is not None and not state.get("music_chosen"):
         music = default_music
     rough = job_dir / "talking_reel_work" / "hyperframes_base.mp4" if hyperframes else out
     render_options=dict(work_dir=job_dir / "talking_reel_work",music=resolve_music(music),

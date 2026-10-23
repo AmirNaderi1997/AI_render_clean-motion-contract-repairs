@@ -1,11 +1,11 @@
 import React from "react";
-import { api, CleanBase, DocElement, LibraryPicture, ProjectDocument, StudioProject } from "../api";
+import { api, CleanBase, DocElement, LibraryPicture, MusicMix, PlanEdits, ProjectDocument, StudioProject } from "../api";
 import { currentVersion, planPhase } from "./plan";
 import { CaptionCanvas } from "./CaptionCanvas";
 import { Look, lookIsEmpty } from "./canvas";
 import { AuthenticatedMedia } from "../AuthenticatedMedia";
 import { friendlyError } from "../ui";
-import { CaptionForm, PictureForm, TYPE_LABEL, VIA_LABEL, captionForm, captionOp, captionProblem, clock, findElement, pictureForm, pictureOp, pictureProblem, playerMatches, stackRows, syncNotice, ticks } from "./timeline";
+import { CaptionForm, MUSIC_LIMITS, MusicForm, PictureForm, TYPE_LABEL, VIA_LABEL, captionForm, captionOp, captionProblem, clock, findElement, musicChanged, musicEdits, musicForm, musicProblem, pictureForm, pictureOp, pictureProblem, playerMatches, stackRows, syncNotice, ticks } from "./timeline";
 
 const HEADER = 92;   // px, sticky track labels
 
@@ -110,6 +110,51 @@ function PictureEditor({ project, element, onChanged }: { project: StudioProject
     </div>
     {problem ? <small className="field-error">{problem}</small> : null}
     <small className="tl-note">{phase === "rendering" ? "تا پایان رندر ویرایش قفل است." : "هر تغییر یک نسخهٔ جدید از برنامه می‌سازد و برای دیده‌شدن در ویدیو باید تأیید شود. زمان نمایش تصویر با برش‌های گفتار تعیین می‌شود."}</small>
+  </div>;
+}
+
+function MusicEditor({ project, element, onChanged }: { project: StudioProject; element: DocElement; onChanged: () => void }) {
+  const [form, setForm] = React.useState<MusicForm>(() => musicForm(element));
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+  React.useEffect(() => { setForm(musicForm(element)); setError(""); }, [element.id, element.props.path, element.props.volume_db, element.props.fade_in, element.props.fade_out, element.props.duck]);
+  const library = (element.props.library ?? []) as { path: string; label: string }[];
+  const defaults = element.props.defaults as MusicMix;
+  const phase = planPhase(project);
+  const version = currentVersion(project);
+  const locked = busy || !version || phase === "analyzing" || phase === "rendering";
+  const problem = musicProblem(form);
+  const changed = musicChanged(form, element);
+  const save = async (edits: PlanEdits) => {
+    if (!version) return;
+    setBusy(true); setError("");
+    try { await api.editStudioPlan(project.id, version.id, edits); onChanged(); }
+    catch (e) { setError(friendlyError(e, "edit the music")); }
+    finally { setBusy(false); }
+  };
+  const slider = (key: "volume_db" | "fade_in" | "fade_out", label: string, unit: string, step: number) => {
+    const [low, high] = MUSIC_LIMITS[key];
+    return <div className="field"><label htmlFor={`music-${key}`}>{label}: <b dir="ltr">{form[key]} {unit}</b>{form[key] !== defaults[key] ? <small dir="ltr"> (style default: {defaults[key]} {unit})</small> : null}</label>
+      <input id={`music-${key}`} type="range" min={low} max={high} step={step} disabled={locked} value={form[key]} onChange={event => setForm({ ...form, [key]: Number(event.target.value) })}/></div>;
+  };
+  return <div className="tl-editor">
+    <div className="field"><label htmlFor="music-track">موسیقی</label>
+      <select id="music-track" className="input" disabled={locked} value={form.path} onChange={event => setForm({ ...form, path: event.target.value })}>
+        <option value="">بدون موسیقی</option>{library.map(item => <option key={item.path} value={item.path}>{item.label}</option>)}</select>
+      {form.path ? <AuthenticatedMedia key={form.path} as="audio" controls preload="none" src={api.studioMusicUrl(form.path)} style={{ width: "100%" }}/> : null}</div>
+    {form.path ? <>
+      {slider("volume_db", "بلندی موسیقی زیر صدا", "dB", 1)}
+      {slider("fade_in", "محو شدن در شروع", "s", 0.1)}
+      {slider("fade_out", "محو شدن در پایان", "s", 0.1)}
+      <label className="check"><input type="checkbox" disabled={locked} checked={form.duck} onChange={event => setForm({ ...form, duck: event.target.checked })}/> هنگام صحبت، موسیقی خودکار کم شود</label>
+    </> : null}
+    {error ? <div className="notice" data-tone="error" role="alert">{error}</div> : null}
+    <div className="action-buttons">
+      <button className="btn btn-sm" disabled={locked || Boolean(problem) || !changed} onClick={() => void save(musicEdits(form, element))}>{busy ? "در حال ذخیره…" : "ذخیرهٔ موسیقی"}</button>
+      {element.props.edited ? <button className="btn btn-sm btn-secondary" disabled={locked} onClick={() => void save({ music_mix: {} })}>برگرداندن به حالت پیش‌فرض سبک</button> : null}
+    </div>
+    {problem ? <small className="field-error">{problem}</small> : null}
+    <small className="tl-note">{phase === "rendering" ? "تا پایان رندر ویرایش قفل است." : "هر تغییر یک نسخهٔ جدید از برنامه می‌سازد و برای شنیده‌شدن در ویدیو باید تأیید شود. بلندی نسبت به صدای گوینده است؛ بلندی نهایی خروجی یکسان‌سازی می‌شود."}</small>
   </div>;
 }
 
@@ -237,7 +282,8 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
       {element.source?.label ? <p className="tl-meta">منبع: {element.source.label}{element.source.file ? ` · ${element.source.file}` : ""}
         {element.source.in != null ? <span dir="ltr"> ({clock(element.source.in)}–{clock(element.source.out || 0)} در فایل اصلی)</span> : null}</p> : null}
       <p className="tl-meta">تغییر: {element.edit.via.length ? element.edit.via.map(item => VIA_LABEL[item] || item).join("، ") : "فعلاً قابل تغییر نیست"}</p>
-      {element.type === "caption" && element.props.original ? <CaptionEditor project={project} element={element} duration={doc.content_duration} onChanged={onChanged} look={draft} onLook={setDraft}/>
+      {element.type === "music" && element.props.defaults ? <MusicEditor project={project} element={element} onChanged={onChanged}/>
+        : element.type === "caption" && element.props.original ? <CaptionEditor project={project} element={element} duration={doc.content_duration} onChanged={onChanged} look={draft} onLook={setDraft}/>
         : element.type === "picture" && element.props.editable ? <PictureEditor project={project} element={element} onChanged={onChanged}/>
         : <>{element.edit.note ? <small className="tl-note">{element.edit.note}</small> : null}
           <small className="tl-note">ویرایش مستقیم این نوع عنصر روی تایم‌لاین هنوز اضافه نشده است.</small></>}

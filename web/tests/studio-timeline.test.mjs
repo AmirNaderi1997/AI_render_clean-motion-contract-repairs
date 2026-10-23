@@ -88,3 +88,27 @@ test("a caption op carries its on-frame look, and a look equal to the AI's is a 
   assert.deepEqual(captionOp(element, captionForm(element), false, {}), { id: "caption:s0:0", reset: true });
   assert.deepEqual(captionOp(element, { text: "متن تازه", start: "1.00", end: "2.50" }, false, { scale: 2 }), { id: "caption:s0:0", text: "متن تازه", scale: 2 });
 });
+
+import { musicForm, musicEdits, musicProblem, musicChanged } from "../src/studio/timeline.ts";
+
+const music = (props = {}) => ({ props: { path: "assets/music/a.mp3", volume_db: -15, fade_in: 0.5, fade_out: 1.6, duck: true,
+  defaults: { volume_db: -15, fade_in: 0.5, fade_out: 1.6, duck: true }, ...props } });
+
+test("music edits send the track only when it changed and only mix fields that differ from the style's own", () => {
+  const element = music();
+  const form = musicForm(element);
+  assert.deepEqual(musicEdits(form, element), { music_mix: {} });
+  assert.deepEqual(musicEdits({ ...form, volume_db: -24, duck: false }, element), { music_mix: { volume_db: -24, duck: false } });
+  assert.deepEqual(musicEdits({ ...form, path: "assets/music/b.mp3" }, element), { music: "assets/music/b.mp3", music_mix: {} });
+  assert.deepEqual(musicEdits({ ...form, path: "" }, element), { music: "", music_mix: {} });   // "no music" is an explicit choice
+});
+
+test("music form shows what is saved, flags changes and out-of-range values", () => {
+  const element = music({ path: null });
+  const form = musicForm(element);
+  assert.equal(form.path, "");
+  assert.equal(musicChanged(form, element), false);
+  assert.equal(musicChanged({ ...form, fade_out: 3 }, element), true);
+  assert.equal(musicProblem({ ...form, volume_db: 5 }), "مقدار موسیقی خارج از محدودهٔ مجاز است.");
+  assert.equal(musicProblem(form), "");
+});

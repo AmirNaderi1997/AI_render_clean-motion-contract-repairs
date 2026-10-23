@@ -43,9 +43,17 @@ def ids(doc, track):
     return [e["id"] for t in doc["tracks"] if t["id"] == track for e in t["elements"]]
 
 
+def test_music_track_always_exists_so_a_bed_can_be_chosen(document):
+    doc = document()
+    music = next(e for t in doc["tracks"] if t["id"] == "music" for e in t["elements"])
+    assert music["props"]["path"] is None and music["label"] == "بدون موسیقی"
+    assert {"volume_db", "fade_in", "fade_out", "duck", "defaults", "library"} <= set(music["props"])
+    assert music["edit"]["via"] == ["timeline", "chat"]
+
+
 def test_tracks_follow_the_render_plan(document):
     doc = document()
-    assert [t["id"] for t in doc["tracks"]] == ["video", "panel", "titles", "captions", "graphics", "voice", "outro"]
+    assert [t["id"] for t in doc["tracks"]] == ["video", "panel", "titles", "captions", "graphics", "voice", "music", "outro"]
     assert ids(doc, "video") == ["clip:0", "clip:4200", "clip:9100"]
     assert ids(doc, "panel") == ["picture:s0", "picture:s1"]       # contiguous runs of one slot merge
     panel = {e["id"]: e for t in doc["tracks"] if t["id"] == "panel" for e in t["elements"]}

@@ -248,10 +248,20 @@ def talking_document(job_dir: Path, video: Path) -> dict:
     cta = (state.get("cta") or "").strip()
     outro_seconds = (CTA_SECONDS if cta else 0.0) + (LOGO_SECONDS if logo_on else 0.0)
     total = plan.duration + outro_seconds
+    from engine import music_mix
+    mix = music_mix.resolve(planned.style, planned.settings)
+    mix_props = {"volume_db": mix.volume_db, "fade_in": mix.fade_in, "fade_out": mix.fade_out, "duck": mix.duck,
+                 "defaults": music_mix.defaults(planned.style), "edited": bool((planned.settings or {}).get("music_mix")),
+                 "library": talking_reel.music_library()}
     if music:
         tracks["music"].append(_element("music", "music", 0, total, music.stem.replace("_", " "),
                                         source={"kind": "library", "label": music.name},
-                                        note="موسیقی زیر صدا با کاهش خودکار هنگام صحبت پخش می‌شود."))
+                                        props={**mix_props, "path": state.get("music")}, via=["timeline", "chat"],
+                                        note="بلندی، محو شدن و کاهش خودکار موسیقی هنگام صحبت را همین‌جا عوض کنید یا موسیقی دیگری انتخاب کنید."))
+    else:
+        tracks["music"].append(_element("music", "music", 0, total, "بدون موسیقی",
+                                        source={"kind": "library", "label": ""}, props={**mix_props, "path": None},
+                                        via=["timeline", "chat"], note="موسیقی‌ای انتخاب نشده؛ از اینجا یکی را انتخاب کنید."))
 
     # Outro.
     if cta:

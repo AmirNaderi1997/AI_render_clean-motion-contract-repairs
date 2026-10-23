@@ -324,6 +324,26 @@ def test_caption_look_edit_passes_through_the_api_model_and_orchestrator(studio,
     assert s.engine["timeline_edits"] == {"caption:s0:0": {"x": 318.9, "y": 421.4, "scale": 1.5, "color": "#FFCC00"}}
 
 
+def test_music_and_mix_edits_become_a_new_version_and_validate(studio):
+    s = studio
+    run(s.o.sync_conversation(s.c["id"], "u"))
+    v1 = creative_plan.current(project(s)["state"])["id"]
+    run(s.o.edit_plan(s.p["id"], "u", v1, {"music": "assets/music/cinematic_pulse.mp3",
+                                          "music_mix": {"volume_db": -24, "fade_out": 3, "duck": False}}))
+    v2 = creative_plan.current(project(s)["state"])
+    assert v2["n"] == 2 and not creative_plan.is_approved(project(s)["state"])
+    assert s.engine["music"] == "assets/music/cinematic_pulse.mp3" and s.engine["music_chosen"] is True
+    assert s.engine["render_settings"]["music_mix"] == {"volume_db": -24.0, "fade_out": 3.0, "duck": False}
+    assert v2["content"]["audio"]["mix"]["volume_db"] == -24.0 and v2["content"]["audio"]["mix"]["duck"] is False
+    with pytest.raises(creative_plan.PlanError):
+        run(s.o.edit_plan(s.p["id"], "u", v2["id"], {"music": "assets/music/nope.mp3"}))
+    with pytest.raises(creative_plan.PlanError):
+        run(s.o.edit_plan(s.p["id"], "u", v2["id"], {"music_mix": {"volume_db": 10}}))
+    run(s.o.edit_plan(s.p["id"], "u", v2["id"], {"music": "", "music_mix": {}}))
+    assert s.engine["music"] is None and "music_mix" not in s.engine["render_settings"]
+    assert s.calls["start"] == 0
+
+
 def test_picture_edit_becomes_a_new_version_and_costs_nothing_until_approved(studio, monkeypatch):
     s = studio
     monkeypatch.setattr(s.o, "_validate_broll_edits", lambda job, edits: None)

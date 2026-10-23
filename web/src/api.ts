@@ -203,7 +203,10 @@ export type PlanEdits = Partial<{
   hook: string; hook_highlight: string[]; look: string; accent_color: string; caption_font: string; zoom: number;
   key_moments: boolean; logo_enabled: boolean; logo_motion: string; name: string; tagline: string; cta: string;
   concept_id: string; style: string; timeline_edits: PlanContent["timeline_edits"]; broll_edits: PlanContent["broll_edits"];
+  music: string; music_mix: Partial<MusicMix>;
 }>;
+/** The music bed's mix: level under the voice (dB), fades (seconds) and automatic lowering while someone speaks. */
+export interface MusicMix { volume_db: number; fade_in: number; fade_out: number; duck: boolean }
 /** Engine-neutral project timeline (app/project_document.py). Read-only in this phase. */
 export interface DocElement {
   id: string; type: string; start: number; end: number; label: string; text: string;
@@ -1115,6 +1118,7 @@ export const api = {
     const form = new FormData(); form.append("file", file);
     return j(await authFetch(`${BASE}/studio/projects/${id}/media`, { method: "POST", body: form }));
   },
+  studioMusicUrl(path: string): string { return `${BASE}/studio/music/${encodeURIComponent(path.split("/").pop() || "")}`; },
   studioPictureUrl(id: string, slot: number): string { return `${BASE}/studio/projects/${id}/pictures/${slot}`; },
   async libraryPictures(): Promise<LibraryPicture[]> {
     return j(await authFetch(`${BASE}/studio/library/pictures`));
