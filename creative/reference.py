@@ -274,6 +274,9 @@ def review_frames(path: Path, duration: float, cuts: list[float], work: Path, de
             return {}
     with ThreadPoolExecutor(max_workers=1) as pool:      # one at a time: the vision route is a single key
         results = list(pool.map(one, chunks))
+        for position, chunk in enumerate(chunks):       # a second pass for sheets the provider failed (upstream errors are frequent)
+            if not (isinstance(results[position], dict) and results[position].get("frames")):
+                results[position] = one(chunk)
     described: dict[int, dict] = {}
     for result in results:
         for item in (result.get("frames") or []) if isinstance(result, dict) else []:
