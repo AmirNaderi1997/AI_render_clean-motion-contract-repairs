@@ -470,7 +470,7 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
     _emit(conversation_id, "tool.started", tool="create_storyboard", message="در حال ساخت سناریو و استوری‌بورد قابل‌ویرایش هستم.")
     result = execute("create_storyboard", {"prompt": prompt, "user_key": user_key, "provider": provider,
         "language": "fa", "source_assets": assets,
-        "creative_brief": {"motion_engine":'motion_so' if 'motion.so' in text.lower() else 'default',
+        "creative_brief": {"motion_engine":'motion_so' if ('motion.so' in text.lower() or 'کلیپ موشن هوشمند' in text) else 'default',
                            "goal": (plan.brief.goal if plan else "") or "تبلیغ و معرفی محصول",
                            "brand": "از هویت بصری منابع واقعی پیروی کن",
                            "avoid": "؛ ".join(plan.brief.must_not) if plan and plan.brief.must_not else "ادعاهای تأییدنشده"}})
@@ -493,7 +493,7 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
         "قبل از تولید دارایی‌ها، نریشن و رندر سنگین آن را تأیید یا اصلاح کنید.")
     if using_motion:
         count=sum(s.get('motion_engine')=='motion_so' for s in result['storyboard'].get('scenes',[]))
-        _assistant(conversation_id,user_key,f'Motion.so برای {count} کلیپ صحنه انتخاب شده است؛ هر کلیپ جداگانه اعتبار مصرف می‌کند. تأیید شما اجازه ارسال شرح صحنه و تصاویر مرجع همان صحنه به Motion را می‌دهد؛ هزینه دقیق از API قابل محاسبه نیست. نریشن و زیرنویس را EditorGPT می‌سازد. هیچ تلاش مجدد خودکاری انجام نمی‌شود.')
+        _assistant(conversation_id,user_key,f'کلیپ موشن هوشمند برای {count} صحنه انتخاب شده است؛ هر کلیپ جداگانه اعتبار مصرف می‌کند. تأیید شما اجازه ارسال شرح صحنه و تصاویر مرجع همان صحنه به سرویس موشن را می‌دهد؛ هزینه دقیق از API قابل محاسبه نیست. نریشن و زیرنویس را EditorGPT می‌سازد. هیچ تلاش مجدد خودکاری انجام نمی‌شود.')
     _emit(conversation_id, "storyboard.ready", project_id=project["id"], action_id=action["id"],
           storyboard=result["storyboard"], estimated_cost_usd=estimate,
           images=[{"index": index, "name": Path(item).name} for index, item in enumerate(assets)])
@@ -1098,7 +1098,7 @@ async def _sync_motion_messages(conversation_id,project,job,user_key):
         activity='motion-so-'+str(remote)
         common={'project_id':project['id'],'tool':'motion_so','stage':'motion_generation',
             'activity_id':activity,'provider':'motion_so'}
-        await emit('tool.started',{**common,'message':'Motion Agent · در حال ساخت موشن صحنه'},source_event_id=activity+':started')
+        await emit('tool.started',{**common,'message':'کلیپ موشن هوشمند · در حال ساخت صحنه'},source_event_id=activity+':started')
         for message in data.get('messages',[]):
             identity=f"{activity}:{message['id']}:{message['revision']}"
             await emit('tool.completed' if data.get('status')=='ready' else 'tool.progress',{**common,'message':message['text'],
@@ -1189,7 +1189,7 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                               "error" if generation.get("state") == "failed" or job.render.status == "error" else "running")
                 stage = ("storyboard ready" if not confirmed else
                          "rendering" if job.render.status in {"queued", "running"} else
-                         f"Motion.so: {generation['motion_so']['status']}" if generation.get('state')=='generating' and generation.get('motion_so') else
+                         f"کلیپ موشن: {generation['motion_so']['status']}" if generation.get('state')=='generating' and generation.get('motion_so') else
                          "generating assets" if generation.get("state") == "generating" else generation.get("state", "planning"))
                 progress = job.render.progress if job.render.status in {"queued", "running", "done"} else None
                 output = f"/api/jobs/{ref}/exports/{job.render.output}" if job.render.status == "done" and job.render.output else None

@@ -741,26 +741,79 @@ async def _talking_job(request: Request, project_id: str):
     return job
 
 
+async def _clean_base_target(request: Request, project_id: str):
+    """("talking", job) or ("localize", project id): the project whose caption-free preview is asked for."""
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    if project['engine'] == 'localize' and project.get('external_ref'):
+        return 'localize', project['external_ref']
+    job = jobstore.get(project.get('external_ref')) if project['engine'] == 'talking' else None
+    if not job: raise HTTPException(404, 'talking project not found')
+    return 'talking', job
+
+
 @router.post('/projects/{project_id}/clean-base')
 async def start_clean_base(request: Request, project_id: str):
-    """Start (once) the caption-free render the timeline edits captions on; returns its status."""
+    """Start (once) the caption-free render the timeline edits captions on; returns its status.
+    Localize builds it from voice clips already made and never asks the voice service for anything."""
     import asyncio
+    kind, target = await _clean_base_target(request, project_id)
+    if kind == 'localize':
+        from app import localize_clean_base
+        return await asyncio.to_thread(localize_clean_base.ensure, target)
     from app import clean_base
-    job = await _talking_job(request, project_id)
-    return await asyncio.to_thread(clean_base.ensure, job.dir, job.dir / 'raw' / job.raw_name)
+    return await asyncio.to_thread(clean_base.ensure, target.dir, target.dir / 'raw' / target.raw_name)
 
 
 @router.get('/projects/{project_id}/clean-base')
 async def clean_base_status(request: Request, project_id: str, key: str | None = None):
     """Status as JSON; with ``key`` the video file itself."""
     import asyncio
+    kind, target = await _clean_base_target(request, project_id)
+    if kind == 'localize':
+        from app import localize_clean_base as module
+        if key:
+            path = module.path_for(target, key)
+            if not path: raise HTTPException(404, 'preview is not ready')
+            return FileResponse(path, media_type='video/mp4')
+        return await asyncio.to_thread(module.status, target)
     from app import clean_base
-    job = await _talking_job(request, project_id)
     if key:
-        path = clean_base.path_for(job.dir, key)
+        path = clean_base.path_for(target.dir, key)
         if not path: raise HTTPException(404, 'preview is not ready')
         return FileResponse(path, media_type='video/mp4')
-    return await asyncio.to_thread(clean_base.status, job.dir, job.dir / 'raw' / job.raw_name)
+    return await asyncio.to_thread(clean_base.status, target.dir, target.dir / 'raw' / target.raw_name)
+
+
+class CaptionLookOp(BaseModel):
+    model_config = {"extra": "forbid"}
+    id: str = Field(min_length=3, max_length=40, pattern=r'^caption:l\d{1,4}:\d{1,3}$')
+    reset: bool | None = None
+    x: float | None = None
+    y: float | None = None
+    scale: float | None = None
+    color: str | None = Field(default=None, max_length=7)
+
+
+class CaptionLookEdit(BaseModel):
+    ops: list[CaptionLookOp] = Field(min_length=1, max_length=50)
+
+
+@router.patch('/projects/{project_id}/localize-captions')
+async def edit_localize_captions(request: Request, project_id: str, body: CaptionLookEdit):
+    """Where Localize captions sit on the frame (position, size, colour). Saved on the project; it starts no render
+    and no voice generation, and the video is marked as needing a re-render."""
+    import asyncio
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    if project['engine'] != 'localize' or not project.get('external_ref'):
+        raise HTTPException(404, 'localize project not found')
+    from app import localize as store
+    try:
+        await asyncio.to_thread(store.set_caption_looks, project['external_ref'], [op.model_dump(exclude_none=True) for op in body.ops])
+    except KeyError: raise HTTPException(404, 'project not found')
+    except ValueError as exc: raise HTTPException(409 if 'busy' in str(exc) else 422, str(exc))
+    return {'ok': True}
 
 
 @router.get('/fonts/{name}')

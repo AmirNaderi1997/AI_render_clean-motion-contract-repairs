@@ -7,7 +7,8 @@ import { useFullscreen } from "../components/useFullscreen";
 import { displayTitle } from "../format";
 import { renderView } from "./model";
 import {MotionScenes} from './MotionScenes';
-import { ProjectEditor as LocalizeSettings } from "../Localize";
+import { LocalizeEdit } from "./LocalizeEdit";
+import { EditCard } from "./EditCard";
 import { PlanReview } from "./PlanReview";
 import { currentVersion, planPhase } from "./plan";
 import { TimelineView } from "./TimelineView";
@@ -99,24 +100,32 @@ function StoryboardEditor({ project, onSaved }: { project: StudioProject; onSave
   async function save() {
     setSaving(true); setError("");
     try { await api.updateStudioStoryboard(project.id, scenes); setSaved(true); onSaved(); }
-    catch { setError("We could not save the storyboard. Please try again."); }
+    catch { setError("ذخیرهٔ استوری‌بورد انجام نشد. دوباره تلاش کنید."); }
     finally { setSaving(false); }
   }
-  return <section className="sb">
-    <header className="sb-head2"><div><h3>Storyboard</h3><p>Adjust on-screen text, narration and scene length.</p></div>
-      <button className="btn btn-sm" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : saved ? "Saved" : "Save changes"}</button></header>
+  const total = scenes.reduce((sum, scene) => sum + (Number(scene.duration_s) || 0), 0);
+  return <EditCard title="صحنه‌ها" open summary={`${scenes.length} صحنه · ${Math.round(total)} ثانیه`} hint="متن روی تصویر، نریشن و مدت هر صحنه را اینجا عوض کنید.">
     {error ? <div className="notice" data-tone="error" role="alert">{error}</div> : null}
     {scenes.map((scene, index) => <details className="scene" key={scene.index ?? index}>
-      <summary><span className="scene-n">{index + 1}</span><b className="wrap-safe bidi" dir="auto">{scene.text_overlay || `Scene ${index + 1}`}</b><small>{scene.duration_s}s</small><Icon name="chevronDown" size={16} className="scene-chev"/></summary>
+      <summary><span className="scene-n">{index + 1}</span><b className="wrap-safe bidi" dir="auto">{scene.text_overlay || `صحنهٔ ${index + 1}`}</b><small>{scene.duration_s} ث</small><Icon name="chevronDown" size={16} className="scene-chev"/></summary>
       <div className="scene-body">
-        <div className="field"><label htmlFor={`s-engine-${index}`}>Motion tool</label><select id={`s-engine-${index}`} className="input" value={scene.motion_engine || 'default'} onChange={event=>update(index,{motion_engine:event.target.value})}><option value="default">Existing engine</option><option value="motion_so">Motion.so · uses account credits</option></select></div>
-        {scene.motion_engine==='motion_so' ? <><p className="eg-muted">Silent motion clip. Captions and narration stay in EditorGPT. References are sent to Motion only after approval. Exact credit cost is unknown; no automatic retry.</p><div className="field"><label htmlFor={`s-visual-${index}`}>Visual direction</label><textarea id={`s-visual-${index}`} className="input" value={scene.media_prompt || scene.description || ''} onChange={event=>update(index,{media_prompt:event.target.value})}/></div><div className="field"><label htmlFor={`s-effort-${index}`}>Motion effort</label><select id={`s-effort-${index}`} className="input" value={scene.motion_effort || 'light'} onChange={event=>update(index,{motion_effort:event.target.value})}>{['light','medium','high'].map(e=><option key={e} value={e}>{e}</option>)}</select></div><div className="field"><label htmlFor={`s-bg-${index}`}>Solid background</label><input id={`s-bg-${index}`} type="color" value={scene.motion_background || '#101010'} onChange={event=>update(index,{motion_background:event.target.value})}/></div></> : null}
-        <div className="field"><label htmlFor={`s-text-${index}`}>On-screen text</label><input id={`s-text-${index}`} className="input bidi" dir="auto" value={scene.text_overlay || ""} onChange={event => update(index, { text_overlay: event.target.value })}/></div>
-        <div className="field"><label htmlFor={`s-nar-${index}`}>Narration</label><textarea id={`s-nar-${index}`} className="input bidi" dir="auto" rows={3} value={scene.narration_text || ""} onChange={event => update(index, { narration_text: event.target.value })}/></div>
-        <div className="field"><label htmlFor={`s-dur-${index}`}>Duration (seconds)</label><input id={`s-dur-${index}`} className="input" type="number" min="0.5" max="30" step="0.5" value={scene.duration_s} onChange={event => update(index, { duration_s: Number(event.target.value) })}/></div>
+        <div className="field"><label htmlFor={`s-text-${index}`}>متن روی تصویر</label><input id={`s-text-${index}`} className="input bidi" dir="auto" value={scene.text_overlay || ""} onChange={event => update(index, { text_overlay: event.target.value })}/></div>
+        <div className="field"><label htmlFor={`s-nar-${index}`}>نریشن</label><textarea id={`s-nar-${index}`} className="input bidi" dir="auto" rows={3} value={scene.narration_text || ""} onChange={event => update(index, { narration_text: event.target.value })}/></div>
+        <div className="field"><label htmlFor={`s-dur-${index}`}>مدت صحنه (ثانیه)</label><input id={`s-dur-${index}`} className="input" type="number" min="0.5" max="30" step="0.5" value={scene.duration_s} onChange={event => update(index, { duration_s: Number(event.target.value) })}/></div>
+        <div className="field"><label htmlFor={`s-engine-${index}`}>روش ساخت تصویر</label>
+          <select id={`s-engine-${index}`} className="input" value={scene.motion_engine || "default"} onChange={event => update(index, { motion_engine: event.target.value })}>
+            <option value="default">روش معمول EditorGPT</option><option value="motion_so">کلیپ موشن هوشمند (از اعتبار حساب مصرف می‌کند)</option></select></div>
+        {scene.motion_engine === "motion_so" ? <>
+          <p className="ec-hint">کلیپ بی‌صدا؛ نریشن و زیرنویس همچنان در EditorGPT ساخته می‌شود. شرح و تصاویر مرجع فقط بعد از تأیید شما ارسال می‌شود، هزینهٔ دقیق مشخص نیست و تلاش مجدد خودکار انجام نمی‌شود.</p>
+          <div className="field"><label htmlFor={`s-visual-${index}`}>توضیح تصویر</label><textarea id={`s-visual-${index}`} className="input bidi" dir="auto" rows={3} value={scene.media_prompt || scene.description || ""} onChange={event => update(index, { media_prompt: event.target.value })}/></div>
+          <div className="ec-grid">
+            <div className="field"><label htmlFor={`s-effort-${index}`}>دقت ساخت</label><select id={`s-effort-${index}`} className="input" value={scene.motion_effort || "light"} onChange={event => update(index, { motion_effort: event.target.value })}>{[["light", "سبک"], ["medium", "متوسط"], ["high", "بالا"]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div>
+            <div className="field"><label htmlFor={`s-bg-${index}`}>رنگ پس‌زمینه</label><input id={`s-bg-${index}`} className="input" style={{ padding: 4 }} type="color" value={scene.motion_background || "#101010"} onChange={event => update(index, { motion_background: event.target.value })}/></div>
+          </div></> : null}
       </div>
     </details>)}
-  </section>;
+    <div className="ec-actions"><button className="btn" disabled={saving} onClick={() => void save()}>{saving ? "در حال ذخیره…" : saved ? "ذخیره شد" : "ذخیرهٔ تغییرات"}</button></div>
+  </EditCard>;
 }
 
 /** The existing specialist editor for this project, where failed runs can be re-analyzed. */
@@ -143,16 +152,16 @@ function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () =
       <button type="button" aria-pressed={shown === "timeline"} onClick={() => setView("timeline")}>تایم‌لاین</button>
     </div> : null}
     {shown === "timeline" ? <TimelineView project={project} onChanged={onSaved} currentOutput={projectOutputUrl(project)}/> : null}
-    {shown === "timeline" ? null : project.engine === "localize" && project.external_ref ? <LocalizeSettings key={project.external_ref} id={project.external_ref} onChanged={onSaved} embedded/>
+    {shown === "timeline" ? null : project.engine === "localize" && project.external_ref ? <LocalizeEdit key={project.external_ref} id={project.external_ref} onChanged={onSaved}/>
       : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved}/>
-      : <header><h2>Refine this video</h2><p>Ask for caption, pacing, colour or audio changes in the chat. Controls appear here when the current engine supports them.</p></header>}
+      : <header className="ws-edit-intro" dir="rtl"><h2>ویرایش این ویدیو</h2><p>تغییر زیرنویس، ریتم، رنگ یا صدا را در چت بگویید. هر چه این نوع ویدیو پشتیبانی کند، همین‌جا کنترلش را می‌بینید.</p></header>}
     {shown === "timeline" ? null : <>
     {project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}
     {project.external_ref && project.engine!=='localize' ? <MotionScenes jobId={project.external_ref} onSaved={onSaved}/> : null}
     </>}
     {shown === "timeline" ? null : advanced
-      ? <NavLink className="adv-link" to={advanced}><Icon name="advanced" size={20}/><span><b>Advanced editor</b><small>Timeline, audio and detailed controls</small></span><Icon name="chevron" size={18}/></NavLink>
-      : <p className="ws-hint">Ask for a change in the chat and a new version is created without overwriting this one.</p>}
+      ? <NavLink className="adv-link" to={advanced}><Icon name="advanced" size={20}/><span><b>ویرایشگر پیشرفته</b><small>تایم‌لاین، صدا و تنظیمات دقیق‌تر</small></span><Icon name="chevron" size={18}/></NavLink>
+      : <p className="ws-hint" dir="rtl">تغییر را در چت بگویید؛ نسخهٔ تازه‌ای ساخته می‌شود و نسخهٔ فعلی دست‌نخورده می‌ماند.</p>}
   </div>;
 }
 

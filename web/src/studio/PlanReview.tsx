@@ -1,4 +1,5 @@
 import React from "react";
+import { EditCard, EditSwitch } from "./EditCard";
 import { api, PlanContent, PlanEdits, PlanVersion, StudioProject } from "../api";
 import { AuthenticatedMedia } from "../AuthenticatedMedia";
 import { Icon } from "../components/Icon";
@@ -8,7 +9,7 @@ import { PHASE_LABEL, SOURCE_LABEL, estimateText, planPhase, restoreEdits, roleL
 const LOOKS: [string, string][] = [["default", "پیش‌فرض سبک"], ["natural", "طبیعی"], ["warm", "گرم"], ["cool", "سرد و ملایم"], ["cinematic", "سینمایی"]];
 const ACCENTS = ["#F5B800", "#FFFFFF", "#A8CF80", "#FF6B4A", "#4DA3FF"];
 const FONTS: [string, string][] = [["default", "Ray (فونت سبک)"], ["Vazirmatn", "وزیرمتن"]];
-const PICTURE_SOURCE: Record<string, string> = { upload: "فایل شما", library: "کتابخانه", ai: "ساخته‌شده", ai_planned: "ساخته می‌شود", motion_so: "Motion.so", card: "کارت متنی" };
+const PICTURE_SOURCE: Record<string, string> = { upload: "فایل شما", library: "کتابخانه", ai: "ساخته‌شده", ai_planned: "ساخته می‌شود", motion_so: "کلیپ موشن هوشمند", card: "کارت متنی" };
 const KEY_EFFECTS: [string, string][] = [["grayscale_title", "سیاه‌وسفید + تیتر"], ["title_only", "فقط تیتر"], ["grayscale", "فقط سیاه‌وسفید"], ["none", "بدون افکت"]];
 const LOGO_MOTIONS: [string, string][] = [["pop", "پاپ"], ["fade", "محو"], ["slide", "حرکت نرم"]];
 
@@ -20,8 +21,8 @@ function Mockup({ project, frame, label }: { project: StudioProject; frame?: str
   </div>;
 }
 
-function Section({ title, children, hint }: { title: string; children: React.ReactNode; hint?: string }) {
-  return <section className="plan-section"><h3>{title}</h3>{hint ? <p className="plan-hint">{hint}</p> : null}{children}</section>;
+function Section({ title, children, hint, summary, open }: { title: string; children: React.ReactNode; hint?: string; summary?: React.ReactNode; open?: boolean }) {
+  return <EditCard title={title} hint={hint} summary={summary} open={open}>{children}</EditCard>;
 }
 
 export function PlanReview({ project, onChanged }: { project: StudioProject; onChanged: () => void }) {
@@ -86,7 +87,7 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
     {!isLatest ? <div className="notice" data-tone="warning">نسخهٔ قدیمی را می‌بینید؛ فقط نسخهٔ فعلی قابل ویرایش و تأیید است.</div> : null}
     {error ? <div className="notice" data-tone="error" role="alert">{error}</div> : null}
 
-    {plan.concepts.length ? <Section title="ایده‌های خلاقانه" hint="ایده‌ها از محتوای واقعی ویدیوی شما ساخته شده‌اند. پیش‌نمایش‌ها یک فریم از ویدیوی شما با متن، کادر و رنگ واقعی هر سبک‌اند؛ تصویر بالای سبک‌های ۲ و ۳ فقط نمونه است و در ویدیو برای هر بخش تصویر مخصوص ساخته می‌شود.">
+    {plan.concepts.length ? <Section title="ایده‌های خلاقانه" open summary={plan.concepts.find(c => c.selected)?.name} hint="ایده‌ها از محتوای واقعی ویدیوی شما ساخته شده‌اند. پیش‌نمایش‌ها یک فریم از ویدیوی شما با متن، کادر و رنگ واقعی هر سبک‌اند؛ تصویر بالای سبک‌های ۲ و ۳ فقط نمونه است و در ویدیو برای هر بخش تصویر مخصوص ساخته می‌شود.">
       <div className="plan-cards">{plan.concepts.map(concept => <article key={concept.id} className="plan-card" data-selected={concept.selected || undefined}>
         <Mockup project={project} frame={plan.frames?.[`concept-${concept.id}`]} label={concept.name}/>
         <div className="plan-card-body">
@@ -99,7 +100,7 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
       </article>)}</div>
     </Section> : null}
 
-    <Section title="سبک تدوین" hint={plan.style.summary}>
+    <Section title="سبک تدوین" open summary={plan.style.label} hint={plan.style.summary}>
       <div className="plan-cards plan-cards-styles">{plan.style_options.map(option => <article key={option.id} className="plan-card" data-selected={option.id === plan.style.id || undefined}>
         <Mockup project={project} frame={plan.frames?.[`style-${option.id}`]} label={option.label}/>
         <div className="plan-card-body">
@@ -111,7 +112,7 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
       </article>)}</div>
     </Section>
 
-    <Section title="هدف و پیام">
+    <Section title="هدف و پیام" summary={plan.goal || plan.message}>
       <dl className="plan-facts">
         {plan.goal ? <><dt>هدف</dt><dd>{plan.goal}</dd></> : null}
         {plan.audience ? <><dt>مخاطب</dt><dd>{plan.audience}</dd></> : null}
@@ -121,14 +122,14 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
       </dl>
     </Section>
 
-    <Section title="هوک ابتدایی" hint="جملهٔ ثانیه‌های اول. روی هر کلمه بزنید تا رنگی شود (حداکثر دو کلمه).">
+    <Section title="هوک ابتدایی" open summary={hook} hint="جملهٔ ثانیه‌های اول. روی هر کلمه بزنید تا رنگی شود (حداکثر دو کلمه).">
       <textarea className="input bidi" dir="auto" rows={2} value={hook} disabled={!editable} maxLength={120}
         onChange={event => set({ hook: event.target.value, hook_highlight: highlight.filter(word => event.target.value.includes(word)) })}/>
       <div className="chip-row plan-words">{words.map((word, index) => <button key={`${word}-${index}`} type="button" className="chip" disabled={!editable}
         aria-pressed={highlight.includes(word)} onClick={() => set({ hook_highlight: toggleHighlight(highlight, word) })}>{word}</button>)}</div>
     </Section>
 
-    {plan.structure.length ? <Section title="ساختار روایت">
+    {plan.structure.length ? <Section title="ساختار روایت" summary={`${plan.structure.length} بخش`}>
       <ol className="plan-beats">{plan.structure.map((beat, index) => <li key={index}>
         <span className="plan-beat-at">{beat.at || "—"}</span>
         <div><b>{roleLabel(beat.role, index)}</b>{beat.text ? <p className="bidi" dir="auto">«{beat.text}»</p> : null}
@@ -136,7 +137,7 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
       </li>)}</ol>
     </Section> : null}
 
-    <Section title="ظاهر و رنگ">
+    <Section title="ظاهر و رنگ" summary={`${LOOKS.find(([key]) => key === value("look", plan.look.preset))?.[1] || "رنگ سفارشی"} · زوم ${value("zoom", plan.look.zoom)}٪`}>
       <div className="field"><span className="field-label">رنگ و نور</span>
         <div className="segmented" role="group" aria-label="رنگ و نور">{LOOKS.map(([key, label]) => <button key={key} type="button" disabled={!editable}
           aria-pressed={value("look", plan.look.preset) === key} onClick={() => set({ look: key })}>{label}</button>)}</div>
@@ -154,36 +155,36 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
       </div>
       <div className="field"><label htmlFor="plan-zoom">زوم روی گوینده: {value("zoom", plan.look.zoom)}٪</label>
         <input id="plan-zoom" type="range" min={0} max={200} step={10} disabled={!editable} value={value("zoom", plan.look.zoom)} onChange={event => set({ zoom: Number(event.target.value) })}/></div>
-      <label className="plan-toggle"><input type="checkbox" disabled={!editable} checked={value("key_moments", plan.look.key_moments)} onChange={event => set({ key_moments: event.target.checked })}/>تأکید بصری روی لحظه‌های کلیدی</label>
+      <EditSwitch label="تأکید بصری روی لحظه‌های کلیدی" disabled={!editable} checked={value("key_moments", plan.look.key_moments)} onChange={checked => set({ key_moments: checked })}/>
       <div className="field"><span className="field-label">افکت لحظه‌های کلیدی</span>
         <div className="segmented" role="group" aria-label="نوع افکت">{KEY_EFFECTS.map(([key, label]) => <button key={key} type="button" disabled={!editable || !value("key_moments", plan.look.key_moments)}
-          aria-pressed={value("key_moment_effect", plan.look.key_moment_effect) === key} onClick={() => set({ key_moment_effect: key })}>{label}</button>)}</div></div>
-      <label className="plan-toggle"><input type="checkbox" disabled={!editable} checked={value("cold_open", plan.look.cold_open)} onChange={event => set({ cold_open: event.target.checked })}/>لحظهٔ کلیدی اول (Cold open): تیزر کوتاه قبل از شروع</label>
-      {plan.look.moments.length && value("cold_open", plan.look.cold_open) ? <div className="field"><label htmlFor="plan-cold">انتخاب لحظهٔ اول</label>
-        <select id="plan-cold" className="input" disabled={!editable} value={String(value("cold_open_sentence", plan.look.cold_open_sentence) ?? "")} onChange={event => set({ cold_open_sentence: event.target.value === "" ? null : Number(event.target.value) })}>
-          <option value="">پیشنهاد هوش مصنوعی</option>{plan.look.moments.map((m, i) => <option key={`${m.sentence}-${i}`} value={m.sentence}>{i + 1}. {m.title}</option>)}</select></div> : null}
-      <label className="plan-toggle"><input type="checkbox" disabled={!editable} checked={value("zoom_enabled", plan.look.zoom_enabled)} onChange={event => set({ zoom_enabled: event.target.checked })}/>زوم‌های دوربین روی گوینده</label>
-      {value("zoom_enabled", plan.look.zoom_enabled) ? <div className="plan-grid">
-        <div className="field"><label htmlFor="plan-zbase">زوم قاب اصلی: {value("zoom_base", plan.look.zoom_base)}٪</label>
-          <input id="plan-zbase" type="range" min={100} max={180} step={5} disabled={!editable} value={value("zoom_base", plan.look.zoom_base)} onChange={event => set({ zoom_base: Number(event.target.value) })}/></div>
-        <div className="field"><label htmlFor="plan-zclose">زوم قاب نزدیک: {value("zoom_close", plan.look.zoom_close)}٪</label>
-          <input id="plan-zclose" type="range" min={100} max={220} step={5} disabled={!editable} value={value("zoom_close", plan.look.zoom_close)} onChange={event => set({ zoom_close: Number(event.target.value) })}/></div>
+          aria-pressed={value("key_moment_effect", plan.look.key_moment_effect ?? "grayscale_title") === key} onClick={() => set({ key_moment_effect: key })}>{label}</button>)}</div></div>
+      <EditSwitch label="لحظهٔ کلیدی اول (Cold open): تیزر کوتاه قبل از شروع" disabled={!editable} checked={value("cold_open", plan.look.cold_open ?? true)} onChange={checked => set({ cold_open: checked })}/>
+      {(plan.look.moments?.length ?? 0) > 0 && value("cold_open", plan.look.cold_open ?? true) ? <div className="field"><label htmlFor="plan-cold">انتخاب لحظهٔ اول</label>
+        <select id="plan-cold" className="input" disabled={!editable} value={String(value("cold_open_sentence", plan.look.cold_open_sentence ?? null) ?? "")} onChange={event => set({ cold_open_sentence: event.target.value === "" ? null : Number(event.target.value) })}>
+          <option value="">پیشنهاد هوش مصنوعی</option>{(plan.look.moments ?? []).map((m, i) => <option key={`${m.sentence}-${i}`} value={m.sentence}>{i + 1}. {m.title}</option>)}</select></div> : null}
+      <EditSwitch label="زوم‌های دوربین روی گوینده" disabled={!editable} checked={value("zoom_enabled", plan.look.zoom_enabled ?? true)} onChange={checked => set({ zoom_enabled: checked })}/>
+      {value("zoom_enabled", plan.look.zoom_enabled ?? true) ? <div className="plan-grid">
+        <div className="field"><label htmlFor="plan-zbase">زوم قاب اصلی: {value("zoom_base", plan.look.zoom_base ?? 100)}٪</label>
+          <input id="plan-zbase" type="range" min={100} max={180} step={5} disabled={!editable} value={value("zoom_base", plan.look.zoom_base ?? 100)} onChange={event => set({ zoom_base: Number(event.target.value) })}/></div>
+        <div className="field"><label htmlFor="plan-zclose">زوم قاب نزدیک: {value("zoom_close", plan.look.zoom_close ?? 140)}٪</label>
+          <input id="plan-zclose" type="range" min={100} max={220} step={5} disabled={!editable} value={value("zoom_close", plan.look.zoom_close ?? 140)} onChange={event => set({ zoom_close: Number(event.target.value) })}/></div>
       </div> : null}
     </Section>
 
-    <Section title="هویت و برند" hint="این موارد در پروفایل شما ذخیره می‌شوند تا در پروژه‌های بعدی دوباره پرسیده نشوند.">
+    <Section title="هویت و برند" summary={[value("name", plan.brand.name), value("cta", plan.brand.cta)].filter(Boolean).join(" · ")} hint="این موارد در پروفایل شما ذخیره می‌شوند تا در پروژه‌های بعدی دوباره پرسیده نشوند.">
       <div className="plan-grid">
         <div className="field"><label htmlFor="plan-name">نام گوینده</label><input id="plan-name" className="input bidi" dir="auto" disabled={!editable} value={value("name", plan.brand.name)} onChange={event => set({ name: event.target.value })} placeholder="بدون نام"/></div>
         <div className="field"><label htmlFor="plan-tagline">سمت یا تگ‌لاین</label><input id="plan-tagline" className="input bidi" dir="auto" disabled={!editable} value={value("tagline", plan.brand.tagline)} onChange={event => set({ tagline: event.target.value })} placeholder="بدون تگ‌لاین"/></div>
       </div>
       <div className="field"><label htmlFor="plan-cta">دعوت به اقدام پایانی</label><input id="plan-cta" className="input bidi" dir="auto" disabled={!editable} value={value("cta", plan.brand.cta)} onChange={event => set({ cta: event.target.value })} placeholder="بدون CTA"/></div>
-      <label className="plan-toggle"><input type="checkbox" disabled={!editable} checked={value("logo_enabled", plan.brand.logo.enabled)} onChange={event => set({ logo_enabled: event.target.checked })}/>لوگوی متحرک در پایان ویدیو</label>
+      <EditSwitch label="لوگوی متحرک در پایان ویدیو" disabled={!editable} checked={value("logo_enabled", plan.brand.logo.enabled)} onChange={checked => set({ logo_enabled: checked })}/>
       {value("logo_enabled", plan.brand.logo.enabled) ? <div className="segmented" role="group" aria-label="حرکت لوگو">{LOGO_MOTIONS.map(([key, label]) => <button key={key} type="button" disabled={!editable}
         aria-pressed={value("logo_motion", plan.brand.logo.motion) === key} onClick={() => set({ logo_motion: key })}>{label}</button>)}</div> : null}
       {value("logo_enabled", plan.brand.logo.enabled) && !plan.brand.logo.has_logo ? <small className="field-hint">لوگویی ثبت نشده؛ لوگوی پیش‌فرض استفاده می‌شود. می‌توانید فایل لوگو را در چت بفرستید.</small> : null}
     </Section>
 
-    <Section title="جزئیات تولید">
+    <Section title="جزئیات تولید" summary={estimateText(plan)}>
       <dl className="plan-facts">
         <dt>حرکت و موشن</dt><dd>{plan.motion}</dd>
         <dt>تصاویر مکمل</dt><dd>{plan.broll}{plan.pictures.length ? <ul>{plan.pictures.map((item, index) => <li key={index}>{item.title || `جملهٔ ${(item.sentence ?? 0) + 1}`}{" · "}{PICTURE_SOURCE[item.source] || item.source}</li>)}</ul> : null}

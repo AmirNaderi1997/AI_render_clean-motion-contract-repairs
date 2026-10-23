@@ -34,7 +34,7 @@ TRACKS = {   # id -> (kind, Persian label), in display order
 PICTURE_SOURCES = {
     "hidden": "بدون تصویر",
     "upload": "فایل شما", "library": "کتابخانه", "ai": "ساخته‌شده با هوش مصنوعی",
-    "ai_planned": "با هوش مصنوعی ساخته می‌شود (هنوز ساخته نشده)", "motion_so": "موشن Motion.so", "motion": "موشن HyperFrames",
+    "ai_planned": "با هوش مصنوعی ساخته می‌شود (هنوز ساخته نشده)", "motion_so": "کلیپ موشن هوشمند", "motion": "موشن HyperFrames",
     "card": "کارت متنی",
 }
 
@@ -292,10 +292,47 @@ def localize_fingerprint(state: dict) -> str:
         "lines": [(l.get("i"), l.get("start"), l.get("end"), l.get("fa"), l.get("kind"), len(l.get("covers") or []))
                   for l in state.get("lines") or []],
         "placements": [(p.get("i"), p.get("start"), p.get("end"), p.get("tempo")) for p in state.get("placements") or []],
+        **({"caption_looks": state["caption_looks"]} if state.get("caption_looks") else {}),   # absent when unedited: old fingerprints stay valid
         **{k: state.get(k) for k in ("title", "title_layout", "title_emojis", "title_box", "caption_box", "end_card",
                                       "end_card_seconds", "cta_number", "music", "voice_provider")},
     }
     return hashlib.sha256(json.dumps(relevant, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def _localize_frames(state: dict, windows: list[tuple], placements: list[dict], w: int, h: int, duration: float,
+                     source_duration: float, card_at: float | None) -> dict[int, dict]:
+    """Where each Localize caption sits on the frame, read from the overlay the renderer itself lays out (no looks).
+
+    Only for the 1080x1920 frame the on-frame editor draws on; other sizes can still be edited as text."""
+    from app import localize as store
+    from app.fonts import font_file
+    from engine import localize as media
+    from engine.caption_looks import effective_rect
+
+    if (w, h) != (1080, 1920):
+        return {}
+    fonts_dir = store.PROJECT_ROOT / "presets" / "fonts"
+    style = store.render_style({**state, "caption_looks": {}}, store.next_version(state["id"]))
+    raw: dict[int, dict] = {}
+    try:
+        media.plan_overlays(style, placements, w, h, duration, font_file=fonts_dir / "RAY-EXTRABLACK.TTF", fonts_dir=fonts_dir,
+                            source_duration=source_duration, end_card_at=card_at, frames=raw)
+    except Exception:
+        return {}
+    looks = state.get("caption_looks") or {}
+    ids = media.caption_ids(windows)
+    out = {}
+    for index, frame in raw.items():
+        geometry = {"x": frame["x"], "y": frame["y"], "size": frame["size"],
+                    "box": {"dx": -frame["w"] / 2, "dy": -frame["h"] / 2, "w": frame["w"], "h": frame["h"]}}
+        look = looks.get(ids[index]) if index < len(ids) else None
+        out[index] = {"font": media.END_CARD_FONT, "font_file": font_file(media.END_CARD_FONT), "x": round(frame["x"], 1),
+                      "y": round(frame["y"], 1), "size": frame["size"], "boxed": True, "x_locked": False,
+                      "box_color": frame["box_color"], "text_color": frame["text_color"], "covers_english": frame["cover"],
+                      "lines": frame.get("lines") or [],
+                      "rect": {k: round(v, 1) for k, v in effective_rect(geometry, None).items()},
+                      "now": {k: round(v, 1) for k, v in effective_rect(geometry, look).items()}}
+    return out
 
 
 def localize_document(project_id: str) -> dict:
@@ -336,14 +373,21 @@ def localize_document(project_id: str) -> dict:
                                          text=title + (" " + state["title_emojis"] if state.get("title_emojis") else ""),
                                          via=["advanced", "chat"]))
 
-    seen: dict[str, int] = {}
-    for line, start, stop, cover in media.caption_windows(state, placements, end_all):
-        key = f"caption:l{line['i']}"
-        n = seen.get(key, 0); seen[key] = n + 1
+    windows = media.caption_windows({**state, "caption_looks": {}}, placements, end_all)   # the AI's captions, before any look
+    ids = media.caption_ids(windows)
+    looks = state.get("caption_looks") or {}
+    frames = _localize_frames(state, windows, placements, _w, _h, duration, source_duration, card_at if end_card else None)
+    for index, (element_id, (line, start, stop, cover)) in enumerate(zip(ids, windows)):
+        look = looks.get(element_id) or {}
+        frame = frames.get(index)
         tracks["captions"].append(_element(
-            f"{key}:{n}", "caption", start, stop, f"خط {line['i'] + 1}", text=line["fa"],
-            props={"line": line["i"], "english": line.get("en", ""), "covers_english": cover is not None, "kind": line.get("kind")},
-            via=["advanced", "chat"], note="ترجمه را در ویرایشگر Localize یا با چت اصلاح کنید؛ متن انگلیسی منبع: «" + str(line.get("en", ""))[:80] + "»"))
+            element_id, "caption", start, stop, f"خط {line['i'] + 1}", text=line["fa"],
+            props={"line": line["i"], "english": line.get("en", ""), "covers_english": cover is not None, "kind": line.get("kind"),
+                   "edited": bool(look), "deleted": False, "look": look, "frame": frame},
+            via=(["timeline", "advanced", "chat"] if frame else ["advanced", "chat"]),
+            note=("جا، اندازه و رنگ زیرنویس را روی تصویر عوض کنید؛ " if frame else "") +
+                 "ترجمه را در ویرایشگر Localize یا با چت اصلاح کنید؛ متن انگلیسی منبع: «" + str(line.get("en", ""))[:80] + "»"))
+    stale = sorted(set(looks) - set(ids))
 
     for placed in placements:
         line = next((l for l in state["lines"] if l["i"] == placed["i"]), {})
@@ -370,7 +414,7 @@ def localize_document(project_id: str) -> dict:
         "canvas": {"width": media.output_size(_w, _h)[0], "height": media.output_size(_w, _h)[1], "fps": 30},
         "duration": _r(duration), "content_duration": _r(card_at),
         "notes": ([] if placements else ["صدای دوبله بعد از ساخت صدا به تایم‌لاین اضافه می‌شود."]),
-        "stale_edits": [], "edit_count": 0,
+        "stale_edits": stale, "edit_count": len(set(looks) & set(ids)),
         # None = unknown (rendered before this was recorded): the player is not claimed to match.
         "basis": {"plan_version": None, "rendered_version": None, "workflow": state.get("status"),
                   "synced": (rendered == fingerprint) if (output and rendered) else None},

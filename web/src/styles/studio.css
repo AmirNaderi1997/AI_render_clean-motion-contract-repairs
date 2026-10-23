@@ -348,6 +348,7 @@ button.act-row:hover { color: var(--text-2); }
 .cc[data-live] .cc-box[data-active] { border-color: #fff; }
 .cc[data-live] .cc-box span { overflow: visible; text-overflow: clip; }
 .cc[data-live] .cc-box span[data-boxed] { background: rgba(0, 0, 0, .78); border-radius: 999px; padding: 2px 10px; text-shadow: none; }
+.cc[data-live] .cc-box span[data-solid] { display: grid; place-items: center; width: 100%; height: 100%; padding: 0; white-space: pre-line; text-align: center; text-shadow: none; }
 .cc-handle { position: absolute; inset-inline-end: -7px; inset-block-end: -7px; width: 16px; height: 16px; border-radius: 4px; background: #fff; border: 2px solid #111;
   cursor: nwse-resize; touch-action: none; }
 .tl-look { display: grid; gap: 8px; padding-block: 4px; }
@@ -357,16 +358,48 @@ button.act-row:hover { color: var(--text-2); }
 .workspace[data-max] { position: fixed !important; inset: 0 !important; z-index: 1000; width: auto !important; max-width: none !important; transform: none !important; visibility: visible !important; border: 0; background: var(--bg, var(--sidebar)); }
 .workspace[data-max] .ws-body { max-width: 1100px; width: 100%; margin-inline: auto; }
 
-/* The Localize settings and lines, laid out for the narrow Edit panel. */
-.loc-embedded.card { background: none; border: 0; padding: 0; box-shadow: none; }
-.loc-embedded .section-header h2 { font-size: var(--text-base, 15px); }
-.loc-embedded .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
-.loc-embedded label { display: grid; gap: 4px; font-size: 13px; color: var(--text-muted, inherit); min-width: 0; }
-.loc-embedded label:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
-.loc-embedded input:not([type="checkbox"]), .loc-embedded select, .loc-embedded textarea { width: 100% !important; box-sizing: border-box; }
-.loc-embedded .row > label { flex: 1 1 150px; }
-.loc-embedded table, .loc-embedded tbody, .loc-embedded tr, .loc-embedded td { display: block; width: 100% !important; }
-.loc-embedded thead { display: none; }
-.loc-embedded tr { padding-block: 10px; border-top: 1px solid var(--border-subtle) !important; display: grid; gap: 6px; }
-.loc-embedded td { padding: 0; }
-.loc-embedded td:first-child { font-size: 12px; }
+.loc-edit { display: grid; gap: var(--space-3); }
+
+/* ── Edit tab: one card style for every engine ───────────────── */
+.ws-edit { gap: var(--space-3); }
+.ec { border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--surface); min-width: 0; }
+.ec > summary { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px 14px; cursor: pointer; list-style: none; border-radius: inherit; }
+.ec > summary::-webkit-details-marker { display: none; }
+.ec > summary:hover { background: var(--hover); }
+.ec-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.ec-text b { font-size: 15px; font-weight: 600; }
+.ec-text small { color: var(--text-3); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ec-chev { color: var(--text-3); transition: transform var(--dur) var(--ease); flex: none; }
+.ec[open] > summary .ec-chev { transform: rotate(180deg); }
+.ec[open] > summary { border-bottom: 1px solid var(--border-subtle); border-end-start-radius: 0; border-end-end-radius: 0; }
+.ec-body { display: grid; gap: 14px; padding: 14px; min-width: 0; }
+.ec-hint { color: var(--text-2); font-size: 13px; margin: 0; }
+.ec[data-tone="warning"] { border-color: var(--warning, var(--border)); }
+.ec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: start; }
+.ec-switch { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-block: 2px; cursor: pointer; }
+.ec-switch span { display: grid; gap: 2px; min-width: 0; }
+.ec-switch b { font-size: 14px; font-weight: 500; }
+.ec-switch small { color: var(--text-3); font-size: 12.5px; }
+.ec-switch input[type="checkbox"] { appearance: none; flex: none; width: 40px; height: 24px; border-radius: var(--radius-pill); background: var(--active); border: 1px solid var(--border); position: relative; cursor: pointer; transition: background var(--dur) var(--ease); }
+.ec-switch input[type="checkbox"]::after { content: ""; position: absolute; inset-block-start: 2px; inset-inline-start: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--text-2); transition: transform var(--dur) var(--ease), background var(--dur) var(--ease); }
+.ec-switch input[type="checkbox"]:checked { background: var(--ink); border-color: var(--ink); }
+.ec-switch input[type="checkbox"]:checked::after { background: var(--on-ink); transform: translateX(16px); }
+[dir="rtl"] .ec-switch input[type="checkbox"]:checked::after { transform: translateX(-16px); }
+.ec-switch input[type="checkbox"]:disabled { opacity: .5; cursor: not-allowed; }
+.ec-switch input[type="checkbox"]:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.ec-line { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg); }
+.ec-line-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.ec-line-en { font-size: 13px; color: var(--text-2); }
+.ec-actions { position: sticky; inset-block-end: calc(-1 * var(--space-4)); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0; background: linear-gradient(to top, var(--sidebar) 70%, transparent); z-index: 2; }
+.ec-actions small { color: var(--text-2); font-size: 12px; flex: 1 1 200px; }
+.ec-status { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+.ws-edit-intro { padding: 4px 2px; }
+.ws-edit > .adv-link { border-radius: var(--radius-lg); }
+.ws-edit .plan { gap: var(--space-3); }
+.ws-edit .plan-head { padding-inline: 2px; }
+.ws-edit .plan-actions { padding-inline: 0; }
+.ws-edit input[type="range"] { accent-color: var(--ink); width: 100%; }
+.plan-swatches input[type="color"] { width: 32px; height: 32px; padding: 0; border: 1px solid var(--border-strong, var(--border)); border-radius: 50%; background: none; overflow: hidden; cursor: pointer; }
+.plan-swatches input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.plan-swatches input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 50%; }

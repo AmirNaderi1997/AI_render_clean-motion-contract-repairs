@@ -1154,13 +1154,31 @@ def caption_windows(state: dict, placements: list[dict], end_all: float) -> list
         gap = current[1] - previous[2]
         if (0 < gap <= CAPTION_GAP_HOLD and previous[3] is not None and current[3] is not None):
             windows[index] = (current[0], previous[2], current[2], current[3])
+    looks = state.get("caption_looks") or {}
+    if looks:
+        windows = [({**line, "look": looks[cid]} if cid in looks else line, start, stop, cover)
+                   for cid, (line, start, stop, cover) in zip(caption_ids(windows), windows)]
     return windows
+
+
+def caption_ids(windows: list[tuple]) -> list[str]:
+    """Stable ids of the caption windows, in order: ``caption:l<line>:<n>`` (n-th window of that line).
+
+    The project timeline and the user's looks (``state["caption_looks"]``) are keyed by these."""
+    seen: dict[str, int] = {}
+    ids = []
+    for line, _start, _stop, _cover in windows:
+        key = f"caption:l{line['i']}"
+        ids.append(f"{key}:{seen.get(key, 0)}")
+        seen[key] = seen.get(key, 0) + 1
+    return ids
 
 
 def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration: float, *,
                   font: str = "Ray ExtraBlack", font_file: Optional[Path] = None,
                   fonts_dir: Optional[Path] = None, source_duration: Optional[float] = None,
-                  end_card_at: Optional[float] = None) -> str:
+                  end_card_at: Optional[float] = None, only_covers: bool = False,
+                  frames: Optional[dict] = None) -> str:
     """Return the ASS text for the title, captions and the end card.
 
     Caption timing follows the visible source cards. Each frame uses the
@@ -1171,6 +1189,14 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
     With ``end_card_at`` the video cuts to the end card (see
     ``render_end_card``) at that time: captions stop there and the card's
     CTA box and text are added on top of it.
+
+    A caption may carry the user's ``look`` (x, y, scale, colour; see ``caption_windows``): the whole caption (box and
+    text) is then moved to ``x, y`` (its centre), scaled and recoloured. Where the caption hides a source card, that
+    cover stays where the card is, so moving a caption never uncovers the English text. Without looks the output is
+    exactly what it always was.
+
+    ``only_covers`` draws only those covers (no Persian caption text or box): the base the editing preview
+    draws live captions on. ``frames`` (a dict) receives each caption's un-looked frame, keyed by window index.
     """
     text_colour = _ass_colour(TEXT_COLOUR)
     caption_style = BOX_STYLES.get(state.get("caption_box") or "", BOX_STYLES["black"])
@@ -1227,7 +1253,8 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
 
     def place(layer: int, t0: float, t1: float, cy: float, item: int, style: tuple[str, str],
               *, absorb: tuple[float, float], floor: float = 0.0, reach: float = 0.0,
-              source_box: Optional[dict] = None) -> tuple[float, float]:
+              source_box: Optional[dict] = None, caption: Optional[int] = None,
+              look: Optional[dict] = None) -> tuple[float, float]:
         """Draw one source-sized card; retain a fixed font size per phrase."""
         lines, widths, layout_size = layouts[item]
         lines_ink = ink_rows[item]
@@ -1258,10 +1285,30 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
             half, top, bottom, anchors = extents(layout_size)
             top = max(floor, top)
             left, right = W / 2 - half, W / 2 + half
+        centre_x, centre_y = (left + right) / 2, (top + bottom) / 2
+        if caption is not None and frames is not None:
+            frames[caption] = {"x": centre_x, "y": centre_y, "w": right - left, "h": bottom - top, "size": draw_size,
+                                 "lines": list(lines), "cover": bool(source_box), "box_color": box_colour, "text_color": text_col}
+        if caption is not None and only_covers:
+            if source_box:
+                events.append(_rounded_rect(layer, t0, t1, left, top, right, bottom, box_colour, 0))
+            return top, bottom
+        k = 1.0
+        if look:
+            k = float(look.get("scale", 1.0))
+            nx, ny = look.get("x", centre_x), look.get("y", centre_y)
+            if source_box and (nx, ny, k) != (centre_x, centre_y, 1.0):
+                events.append(_rounded_rect(layer, t0, t1, left, top, right, bottom, box_colour, 0))
+            left, right = nx + k * (left - centre_x), nx + k * (right - centre_x)
+            top, bottom = ny + k * (top - centre_y), ny + k * (bottom - centre_y)
+            anchors = [ny + k * (a - centre_y) for a in anchors]
+            x = nx + k * (x - centre_x)
+            draw_size = max(1, round(draw_size * k))
+            text_col = look.get("color") or text_col
         if source_box:
             events.append(_rounded_rect(layer, t0, t1, left, top, right, bottom, box_colour, 0))
         else:
-            rect(layer, t0, t1, left, top, right, bottom, box_colour)
+            events.append(_rounded_rect(layer, t0, t1, left, top, right, bottom, box_colour, radius * k))
         for line, y in zip(lines, anchors):
             text(layer + 1, t0, t1, x, y, line, draw_size, text_col)
         return top, bottom
@@ -1337,10 +1384,10 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
             stable = {"cx": (left + right) / 2, "cy": (top + bottom) / 2,
                       "w": right - left, "h": bottom - top}
             place(3, t0, t1, line_y, k, caption_style, absorb=(t0, t1),
-                  source_box={"box": stable, "fit_box": stable})
+                  source_box={"box": stable, "fit_box": stable}, caption=k, look=line.get("look"))
         else:
             place(3, t0, t1, line_y, k, caption_style, absorb=(t0, t1), floor=title_floor,
-                  reach=reach, source_box=source_box)
+                  reach=reach, source_box=source_box, caption=k, look=line.get("look"))
 
     if end_card_at is not None:
         events += end_card_events(str(state.get("cta_number") or ""), end_card_at, duration, W, H,
@@ -1424,6 +1471,7 @@ def render(
     music: Optional[Path] = None,
     logo: Optional[Path] = None,
     on_progress: Optional[Callable[[int], None]] = None,
+    only_covers: bool = False,
 ) -> Path:
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
@@ -1438,7 +1486,7 @@ def render(
     font_file = (fonts_dir / "RAY-EXTRABLACK.TTF") if fonts_dir else None
     ass_text = plan_overlays(state, placements, W, H, duration, font_file=font_file,
                              fonts_dir=fonts_dir, source_duration=source_duration,
-                             end_card_at=card_at if end_card else None)
+                             end_card_at=card_at if end_card else None, only_covers=only_covers)
     ass.write_text(ass_text, encoding="utf-8")
 
     inputs = ["-i", str(video)]

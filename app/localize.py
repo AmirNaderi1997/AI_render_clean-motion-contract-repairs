@@ -189,6 +189,63 @@ def update(project_id: str, changes: dict) -> dict:
         return save(state)
 
 
+def render_style(state: dict, version: int) -> dict:
+    """The state as render number ``version`` draws it: box colours are the project's choice, else the next colour."""
+    from engine import localize as media
+
+    names = list(media.BOX_STYLES)
+    caption_box = state.get("caption_box") or names[version % len(names)]
+    return {**state, "caption_box": caption_box, "title_box": state.get("title_box") or caption_box}
+
+
+def next_version(project_id: str) -> int:
+    return len(list((_dir(project_id) / "exports").glob("localized_v*.mp4"))) + 1
+
+
+def caption_windows(state: dict) -> tuple[list[tuple], float, float]:
+    """(caption windows, output duration, time the end card starts) exactly as the renderer will draw them.
+
+    The windows come without the user's looks, so ids and geometry always describe the un-edited captions."""
+    from engine import localize as media
+
+    _w, _h, source_duration = media.probe_video(_dir(state["id"]) / state["source"])
+    placements = state.get("placements") or []
+    duration, card_at = media.output_timing(state, placements, source_duration)
+    end_all = max(0.01, (card_at if state.get("end_card", True) else duration) - 0.02)
+    return media.caption_windows({**state, "caption_looks": {}}, placements, end_all), duration, card_at
+
+
+def set_caption_looks(project_id: str, ops: list[dict]) -> dict:
+    """Where captions sit on the frame: each op is one caption's complete look ``{"id", "x"?, "y"?, "scale"?, "color"?}``
+    or ``{"id", "reset": true}``. Saved on the project only; nothing is rendered or generated (the output is marked
+    as needing a re-render because its fingerprint changes)."""
+    from engine import caption_looks, localize as media
+
+    with _lock:
+        if project_id in _running:
+            raise ValueError("project is busy")
+        state = load(project_id)
+        if not state.get("lines"):
+            raise ValueError("analyze the video first")
+        windows, _duration, _card_at = caption_windows(state)
+        known = set(media.caption_ids(windows))
+        looks = dict(state.get("caption_looks") or {})
+        for op in ops:
+            element_id = str(op.get("id") or "")
+            if element_id not in known:
+                raise ValueError(f"unknown caption: {element_id[:40]}")
+            look = {} if op.get("reset") else caption_looks.clean_look({k: op.get(k) for k in caption_looks.LOOK_KEYS})
+            if look:
+                looks[element_id] = look
+            else:
+                looks.pop(element_id, None)
+        if looks:
+            state["caption_looks"] = looks
+        else:
+            state.pop("caption_looks", None)
+        return save(state)
+
+
 def _start(project_id: str, target, status: str) -> None:
     with _lock:
         if project_id in _running:
@@ -428,10 +485,7 @@ def _render(project_id: str) -> None:
         current["progress"] = 40 + int(pct * 0.6)
         save(current)
 
-    # Box colours: the project's choice, else the next colour each render.
-    names = list(media.BOX_STYLES)
-    caption_box = state.get("caption_box") or names[version % len(names)]
-    style = {**state, "caption_box": caption_box, "title_box": state.get("title_box") or caption_box}
+    style = render_style(state, version)
     media.render(
         video, style, placements, out, work_dir=root / "work",
         fonts_dir=PROJECT_ROOT / "presets" / "fonts",

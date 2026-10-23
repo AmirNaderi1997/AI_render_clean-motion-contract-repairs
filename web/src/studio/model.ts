@@ -73,7 +73,7 @@ export const TOOL_LABELS: Record<string, string> = {
   creative_review: "Reviewing creative directions",
   creative_storyboard: "Developing the selected storyboard",
   motion_generation: "Generating motion",
-  motion_so: "Motion Agent",
+  motion_so: "کلیپ موشن هوشمند",
   visual_analysis: "Analyzing visual content",
   visual_review: "Reviewing visual quality",
   translation: "Preparing the translation",

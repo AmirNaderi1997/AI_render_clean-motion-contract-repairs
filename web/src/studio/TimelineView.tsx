@@ -59,6 +59,43 @@ function CaptionEditor({ project, element, duration, onChanged, look, onLook }: 
   </div>;
 }
 
+/**
+ * Localize caption editor: where the caption sits, how big it is and its colour. The translation is edited in the
+ * Localize settings. Saving only stores the look; the video changes when it is rendered again (nothing starts here).
+ */
+function LocalizeCaptionEditor({ project, element, locked: busyProject, onChanged, look, onLook }: { project: StudioProject; element: DocElement; locked: boolean; onChanged: () => void; look: Look; onLook: (look: Look) => void }) {
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+  React.useEffect(() => { setError(""); }, [element.id]);
+  const locked = busy || busyProject;
+  const savedLook = (element.props.look as Look | undefined) ?? {};
+  const changed = JSON.stringify(look) !== JSON.stringify(savedLook);
+  const frame = element.props.frame as { box_color?: string; text_color?: string } | null | undefined;
+  async function send(op: { id: string; reset?: boolean; x?: number; y?: number; scale?: number; color?: string }) {
+    setBusy(true); setError("");
+    try { await api.editLocalizeCaptions(project.id, [op]); onChanged(); }
+    catch (e) { setError(friendlyError(e, "edit the caption")); }
+    finally { setBusy(false); }
+  }
+  if (!frame) return <small className="tl-note">جای زیرنویس روی تصویر فقط برای ویدیوهای عمودی ۱۰۸۰×۱۹۲۰ قابل تغییر است. ترجمه را در تنظیمات Localize عوض کنید.</small>;
+  return <div className="tl-editor">
+    <div className="tl-look">
+      <div className="field"><label htmlFor="tl-scale">اندازه: {Math.round((look.scale ?? 1) * 100)}٪</label>
+        <input id="tl-scale" type="range" min={40} max={300} step={5} disabled={locked} value={Math.round((look.scale ?? 1) * 100)} onChange={event => onLook({ ...look, scale: Number(event.target.value) / 100 })}/></div>
+      <div className="field"><label htmlFor="tl-color">رنگ متن</label>
+        <input id="tl-color" type="color" disabled={locked} value={look.color ?? frame.text_color ?? "#FFFFFF"} onChange={event => onLook({ ...look, color: event.target.value.toUpperCase() })}/></div>
+      <small className="field-hint">جای زیرنویس را مستقیم روی تصویر بکشید و از گوشهٔ آن اندازه را عوض کنید. کادری که متن انگلیسی منبع را می‌پوشاند سر جایش می‌ماند.</small>
+      {!lookIsEmpty(look) ? <button type="button" className="btn btn-sm btn-secondary" disabled={locked} onClick={() => onLook({})}>برگرداندن جا، اندازه و رنگ</button> : null}
+    </div>
+    {error ? <div className="notice" data-tone="error" role="alert">{error}</div> : null}
+    <div className="action-buttons">
+      <button className="btn btn-sm" disabled={locked || !changed} onClick={() => void send(lookIsEmpty(look) ? { id: element.id, reset: true } : { id: element.id, ...look })}>{busy ? "در حال ذخیره…" : "ذخیرهٔ تغییر"}</button>
+      {element.props.edited ? <button className="btn btn-sm btn-secondary" disabled={locked} onClick={() => void send({ id: element.id, reset: true })}>بازگرداندن نسخهٔ اصلی</button> : null}
+    </div>
+    <small className="tl-note">{busyProject ? "تا پایان کار پروژه ویرایش قفل است." : "ذخیره فقط جای زیرنویس را نگه می‌دارد؛ رندر یا ساخت صدا شروع نمی‌شود. برای دیدن تغییر در ویدیوی نهایی، پروژه را دوباره رندر کنید (صدا دوباره ساخته نمی‌شود، چون متن عوض نشده)."}</small>
+  </div>;
+}
+
 /** Upper-panel picture editor (styles 2 and 3): your own file, the library, an AI image from a prompt, or none. */
 function PictureEditor({ project, element, onChanged }: { project: StudioProject; element: DocElement; onChanged: () => void }) {
   const [form, setForm] = React.useState<PictureForm>(() => pictureForm(element));
@@ -171,6 +208,7 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
   const [latestFile, setLatestFile] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState<Look>({});
   const [base, setBase] = React.useState<CleanBase | null>(null);
+  const [revision, setRevision] = React.useState(0);     // bumped when the timeline changed without the project record changing (Localize looks)
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const laneRef = React.useRef<HTMLDivElement>(null);
 
@@ -182,11 +220,11 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
     // The newest rendered file, listed directly: a plan version awaiting approval does not hide it.
     if (project.engine === "talking") api.studioOutputs(project.id).then(items => { if (active) setLatestFile(items[items.length - 1]?.file ?? null); }).catch(() => undefined);
     return () => { active = false; };
-  }, [project.id, project.current_version, project.updated_at]);
+  }, [project.id, project.current_version, project.updated_at, revision]);
 
   // The caption-free preview: captions are drawn live on it, so the one being edited is the one that is shown.
   React.useEffect(() => {
-    if (project.engine !== "talking") return;
+    if (project.engine !== "talking" && project.engine !== "localize") return;
     let active = true, timer: ReturnType<typeof setTimeout> | undefined;
     const poll = (first: boolean) => (first ? api.startStudioCleanBase(project.id) : api.studioCleanBase(project.id)).then(value => {
       if (!active) return;
@@ -210,7 +248,8 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
   const width = Math.max(1, doc.duration * zoom);
   const element = findElement(doc, selected);
   const captionElements = doc.tracks.filter(t => t.id === "captions").flatMap(t => t.elements);
-  const editingLocked = planPhase(project) === "analyzing" || planPhase(project) === "rendering";
+  const localizeBusy = project.engine === "localize" && ["queued", "analyzing", "rendering", "paused"].includes(String(doc.basis.workflow));
+  const editingLocked = planPhase(project) === "analyzing" || planPhase(project) === "rendering" || localizeBusy;
   const seek = (seconds: number) => {
     setTime(seconds);
     if (synced && videoRef.current) videoRef.current.currentTime = seconds;
@@ -236,8 +275,12 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
     </div> : null}
     {base && (base.state === "building" || base.state === "missing") ? <div className="notice" role="status"><span className="spinner"/> در حال ساخت پیش‌نمایش ویرایش (ویدیو بدون زیرنویس)… تا آماده شدن، آخرین ویدیوی رندرشده نمایش داده می‌شود.</div>
       : live ? <div className="notice" role="status">پیش‌نمایش ویرایش: زیرنویس‌ها روی ویدیوی بدون زیرنویس زنده کشیده می‌شوند؛ همان زیرنویسی که جابه‌جا می‌کنید همان است که رندر می‌شود.</div>
+      : base?.state === "unsupported" && project.engine === "localize" ? <div className="notice" role="status">پیش‌نمایش بدون زیرنویس ساخته نشد: {base.reason || "صدای دوبله هنوز آماده نیست"} ویرایش روی قاب با آخرین ویدیوی رندرشده انجام می‌شود؛ زیرنویس قبلی در ویدیو دیده می‌شود و کادرها جای زیرنویس جدید را نشان می‌دهند.</div>
       : base?.state === "failed" ? <div className="notice" data-tone="warning" role="status">ساخت پیش‌نمایش ویرایش ناموفق بود؛ ویرایش روی قاب با ویدیوی رندرشده انجام می‌شود.</div> : null}
     {notice === "no-video" && !live ? <div className="notice" role="status">ویدیو هنوز رندر نشده؛ تایم‌لاین نشان می‌دهد چه چیزی ساخته می‌شود.</div>
+      : notice === "different-version" && project.engine === "localize" ? <div className="notice" data-tone="warning" role="status">
+          تغییرات این پروژه هنوز در ویدیوی رندرشده نیست؛ ویدیو با رندر دوبارهٔ پروژه به‌روز می‌شود.
+        </div>
       : notice === "different-version" ? <div className="notice" data-tone="warning" role="status">
           این تایم‌لاین نسخهٔ {doc.basis.plan_version ?? "فعلی"} برنامه است{doc.basis.rendered_version ? `؛ ویدیوی بالا از نسخهٔ ${doc.basis.rendered_version} رندر شده` : "؛ ویدیوی بالا از نسخهٔ دیگری رندر شده"} و زمان‌ها ممکن است با آن یکی نباشند.
         </div>
@@ -283,6 +326,7 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
         {element.source.in != null ? <span dir="ltr"> ({clock(element.source.in)}–{clock(element.source.out || 0)} در فایل اصلی)</span> : null}</p> : null}
       <p className="tl-meta">تغییر: {element.edit.via.length ? element.edit.via.map(item => VIA_LABEL[item] || item).join("، ") : "فعلاً قابل تغییر نیست"}</p>
       {element.type === "music" && element.props.defaults ? <MusicEditor project={project} element={element} onChanged={onChanged}/>
+        : element.type === "caption" && project.engine === "localize" ? <LocalizeCaptionEditor project={project} element={element} locked={localizeBusy} onChanged={() => { setRevision(value => value + 1); onChanged(); }} look={draft} onLook={setDraft}/>
         : element.type === "caption" && element.props.original ? <CaptionEditor project={project} element={element} duration={doc.content_duration} onChanged={onChanged} look={draft} onLook={setDraft}/>
         : element.type === "picture" && element.props.editable ? <PictureEditor project={project} element={element} onChanged={onChanged}/>
         : <>{element.edit.note ? <small className="tl-note">{element.edit.note}</small> : null}

@@ -9,7 +9,9 @@ export const SCALE_MAX = 3;
 
 export interface Rect { x: number; y: number; w: number; h: number }
 export interface Look { x?: number; y?: number; scale?: number; color?: string }
-export interface CaptionFrame { font?: string; font_file?: string | null; x: number; y: number; size: number; boxed: boolean; x_locked: boolean; rect: Rect; now: Rect }
+export interface CaptionFrame { font?: string; font_file?: string | null; x: number; y: number; size: number; boxed: boolean; x_locked: boolean; rect: Rect; now: Rect;
+  /** Localize: the caption is a solid box (its colour), its text in the box's own lines. */
+  box_color?: string; text_color?: string; lines?: string[]; covers_english?: boolean }
 
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 

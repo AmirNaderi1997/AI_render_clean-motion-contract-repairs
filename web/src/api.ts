@@ -1129,6 +1129,10 @@ export const api = {
   async editStudioTimeline(id: string, versionId: string, ops: TimelineOp[]): Promise<StudioProject> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/timeline`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId, ops }) }));
   },
+  /** Localize: where captions sit on the frame. Saved on the project only; it starts no render and no voice generation. */
+  async editLocalizeCaptions(id: string, ops: TimelineOp[]): Promise<void> {
+    await j(await authFetch(`${BASE}/studio/projects/${id}/localize-captions`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ ops }) }));
+  },
   async studioDocument(id: string): Promise<ProjectDocument> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/document`));
   },

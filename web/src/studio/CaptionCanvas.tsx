@@ -110,7 +110,9 @@ export function CaptionCanvas({ boxRef, captions, time, selectedId, draft, onSel
         role="button" tabIndex={0} aria-label={`زیرنویس: ${item.text}`} aria-pressed={active}
         onPointerDown={event => down(event, item, "move")} onPointerMove={event => move(event, item)} onPointerUp={event => up(event, item)}
         onKeyDown={event => { if (event.key === "Enter" || event.key === " ") onSelect(item.id); }}>
-        <span dir="auto" data-boxed={(live && frame.boxed) || undefined}>{item.text}</span>
+        {live && frame.box_color
+          ? <span dir="auto" data-solid style={{ background: frame.box_color, color: color || frame.text_color, borderRadius: 13 * (displayed.width / FRAME_W) * (((active ? draft.scale : (item.props.look as Look)?.scale) ?? 1)) }}>{(frame.lines?.length ? frame.lines : [item.text]).join("\n")}</span>
+          : <span dir="auto" data-boxed={(live && frame.boxed) || undefined}>{item.text}</span>}
         {active && !disabled ? <i className="cc-handle" aria-label="تغییر اندازه"
           onPointerDown={event => down(event, item, "resize")} onPointerMove={event => move(event, item)} onPointerUp={event => up(event, item)}/> : null}
       </div>;

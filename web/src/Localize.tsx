@@ -108,8 +108,7 @@ function NewProject({ onCreated }: { onCreated: (p: LocalizeProject) => void }) 
   );
 }
 
-/** The project's settings and Persian lines. Also embedded in the studio's Edit tab (`embedded` leaves out the video, which the Preview tab shows). */
-export function ProjectEditor({ id, onChanged, embedded }: { id: string; onChanged: () => void; embedded?: boolean }) {
+function ProjectEditor({ id, onChanged }: { id: string; onChanged: () => void }) {
   const [project, setProject] = React.useState<LocalizeProject | null>(null);
   const [draft, setDraft] = React.useState<LocalizeProject | null>(null);
   const [error, setError] = React.useState("");
@@ -178,7 +177,7 @@ export function ProjectEditor({ id, onChanged, embedded }: { id: string; onChang
   }
 
   return (
-    <div className={embedded ? "card loc-embedded" : "card"} dir="rtl">
+    <div className="card" dir="rtl">
       <div className="section-header">
         <h2>{project.name}</h2>
         <span className="tag">{STATUS_LABELS[project.status]}{(busy || project.status === "paused") && project.stage ? ` — ${STAGE_LABELS[project.stage] || project.stage}` : ""}{["analyzing", "rendering", "paused"].includes(project.status) && project.progress ? ` ${project.progress}%` : ""}</span>
@@ -192,7 +191,7 @@ export function ProjectEditor({ id, onChanged, embedded }: { id: string; onChang
       {project.status === "error" && <div className="errors">{project.message}</div>}
       {error && <div className="errors">{error}</div>}
 
-      {!embedded && project.output && project.status === "done" && (
+      {project.output && project.status === "done" && (
         <div className="row" style={{ alignItems: "flex-start" }}>
           <AuthenticatedMedia as="video" src={api.localizeOutputUrl(id)} controls style={{ maxHeight: 520, borderRadius: 8 }} />
           <button className="btn-secondary" onClick={() => api.downloadAuthenticated(api.localizeOutputUrl(id), `${project.name.replace(/\.[^.]+$/, "")}_fa.mp4`)}>
