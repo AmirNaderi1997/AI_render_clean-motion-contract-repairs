@@ -83,7 +83,7 @@ def _time(seconds: float) -> str:
 
 
 def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, estimate: dict | None,
-                  has_logo: bool) -> dict:
+                  has_logo: bool, slots: list[dict] | None = None) -> dict:
     """Plain-language plan from the Talking engine's public state after analysis."""
     style = str(status.get("style") or "talking_1")
     info = STYLES.get(style, STYLES["talking_1"])
@@ -98,8 +98,13 @@ def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, 
         line = sentences[index] if isinstance(index, int) and 0 <= index < len(sentences) else None
         beats.append({"role": beat.get("role", ""), "intent": beat.get("intent", ""), "visual": beat.get("visual", ""),
                       "sentence": index, "at": _time(line["start"]) if line else "", "text": line["text"] if line else ""})
-    pictures = [{"sentence": item.get("i"), "title": item.get("title", ""), "visual_type": item.get("visual_type", "")}
-                for item in status.get("storyboard") or []] if info["pictures"] else []
+    if info["pictures"] and slots is not None:
+        # The real picture slots of the render plan (what the renderer will use), not the motion storyboard.
+        pictures = [{"sentence": item.get("i"), "title": item.get("label") or "", "source": item.get("source") or "card",
+                     "new": item.get("source") == "ai_planned"} for item in slots]
+    else:
+        pictures = [{"sentence": item.get("i"), "title": item.get("title", ""), "source": "card", "new": False}
+                    for item in status.get("storyboard") or []] if info["pictures"] else []
     concepts = []
     if chosen:
         concepts.append({"id": chosen.get("id") or "chosen", "name": chosen.get("name", ""), "angle": chosen.get("angle", ""),
@@ -135,11 +140,12 @@ def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, 
         "format": {"aspect": "9:16", "resolution": "1080×1920", "fps": 30},
         "engines": ["تحلیل گفتار و کارگردان خلاق", f"موتور تدوین «{info['label']}»"] +
                    (["تصویرسازی برای بخش‌ها"] if info["pictures"] else []),
-        "estimate": {"render": estimate, "paid_media": info["pictures"],
+        "estimate": {"render": estimate, "paid_media": info["pictures"], "new_images": sum(1 for p in pictures if p["new"]),
                      "note": ("تصاویر بخش‌هایی که فایل یا تصویر کتابخانه ندارند با هوش مصنوعی ساخته می‌شوند و ممکن است هزینه داشته باشند."
                               if info["pictures"] else "رندر روی سرور انجام می‌شود و هزینهٔ مدل جدیدی ندارد.")},
         "concepts": concepts,
         "timeline_edits": status.get("timeline_edits") or {},
+        "broll_edits": status.get("broll_edits") or {},
         "style_options": [{"id": key, "label": value["label"], "summary": value["summary"], "complexity": value["complexity"]}
                           for key, value in STYLES.items()],
     }
@@ -198,7 +204,7 @@ def approve(state: dict, version_id: str) -> dict:
 # -- manual plan edits ----------------------------------------------------------------------------
 
 EDITABLE = {"hook", "hook_highlight", "look", "accent_color", "caption_font", "zoom", "key_moments",
-            "logo_enabled", "logo_motion", "name", "tagline", "cta", "concept_id", "style", "timeline_edits"}
+            "logo_enabled", "logo_motion", "name", "tagline", "cta", "concept_id", "style", "timeline_edits", "broll_edits"}
 
 
 def talking_edits(content: dict, edits: dict, status: dict) -> dict:
@@ -273,6 +279,16 @@ def talking_edits(content: dict, edits: dict, status: dict) -> dict:
             applied.append(f"{label}: «{value}»" if value else f"{label} حذف شد")
     if touched:
         engine["render_settings"] = settings
+    if "broll_edits" in edits:
+        from app import broll_edits as pictures
+        if style not in {"talking_2", "talking_3"} and edits["broll_edits"]:
+            raise PlanError("تصویر بالا فقط در سبک‌های ۲ و ۳ وجود دارد.")
+        try:
+            engine["broll_edits"] = pictures.clean(edits["broll_edits"])
+        except pictures.EditError as exc:
+            raise PlanError(str(exc))
+        count = len(engine["broll_edits"])
+        applied.append(f"ویرایش تصویر بالا: {count} مورد" if count else "ویرایش تصویر بالا پاک شد")
     if "timeline_edits" in edits:
         from app import timeline_edits as layer
         try:
@@ -310,6 +326,9 @@ def summary_text(content: dict, version: dict) -> str:
     render = (content.get("estimate") or {}).get("render")
     if render:
         lines.append(f"• زمان رندر تخمینی: {round(render['low_s'] / 60, 1)} تا {round(render['high_s'] / 60, 1)} دقیقه")
+    new_images = (content.get("estimate") or {}).get("new_images") or 0
+    if new_images:
+        lines.append(f"• {new_images} تصویر تازه بعد از تأیید شما با هوش مصنوعی ساخته می‌شود (هزینهٔ مدل؛ تأیید برنامه یک‌جا برای همهٔ آن‌هاست)")
     edited = len(content.get("timeline_edits") or {})
     if edited:
         lines.append(f"• ویرایش دستی روی تایم‌لاین: {edited} مورد")

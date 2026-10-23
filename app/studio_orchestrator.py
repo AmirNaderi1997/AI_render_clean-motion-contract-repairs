@@ -702,6 +702,17 @@ def _talking_context(job) -> tuple[Path, dict, list[dict]]:
     return video, status, sentences
 
 
+def _planned_slots(job) -> list[dict] | None:
+    """The picture slots the renderer will use (nothing is generated); None when the plan cannot be read."""
+    from app import talking_reel
+    try:
+        planned = talking_reel.plan_render(job.dir, job.dir / "raw" / job.raw_name, prepare_media=False)
+    except Exception as exc:
+        log.warning("picture slots unavailable: %s", type(exc).__name__)
+        return None
+    return planned.slots if planned.style in {"talking_2", "talking_3"} else None
+
+
 def _plan_frames(job_dir: Path, video: Path, content: dict, sentences: list[dict]) -> dict:
     """Style previews on a real frame, one per concept and one per style; failures are skipped, not faked."""
     import hashlib
@@ -753,8 +764,9 @@ async def _refresh_plan(conversation_id: str, user_key: str, project: dict, job,
         seconds = float((await asyncio.to_thread(execute, "inspect_media", {"path": str(video)}))["duration"])
     estimate = render_stats.estimate(f"talking:{status.get('style')}", seconds)
     has_logo = bool(talking_reel.custom_logo(job.dir) or brand_profile.logo_path(user_key))
+    slots = await asyncio.to_thread(_planned_slots, job)
     content = creative_plan.build_talking(status, sentences=sentences, video_seconds=seconds, estimate=estimate,
-                                          has_logo=has_logo)
+                                          has_logo=has_logo, slots=slots)
     content["frames"] = await asyncio.to_thread(_plan_frames, job.dir, video, content, sentences)
     state, created = creative_plan.add_version(project["state"], content, source=source, note=note)
     state.update(plan_pending=False, source_seconds=seconds)
@@ -807,8 +819,9 @@ def _reanalyze_talking(conversation_id: str, user_key: str, project: dict, job, 
         if concept is None:
             raise creative_plan.PlanError("این ایده در برنامه پیدا نشد.")
     # Timeline edits belong to the previous decisions (their ids point at its captions): start clean.
-    if talking_reel.load(job.dir).get("timeline_edits"):
-        talking_reel.update(job.dir, {"timeline_edits": {}})
+    stale = {key: {} for key in ("timeline_edits", "broll_edits") if talking_reel.load(job.dir).get(key)}
+    if stale:
+        talking_reel.update(job.dir, stale)
     talking_reel.analyze(job.dir, job.dir / "raw" / job.raw_name, style=style,
                          request=project["state"].get("request", ""), concept=concept)
     latest = run(repo.get_project(project["id"], user_key))
@@ -826,6 +839,41 @@ def _validate_timeline_edits(job, edits: dict) -> None:
         layer.validate(planned.plan, planned.transcript["sentences"], edits, planned.plan.duration)
     except layer.EditError as exc:
         raise creative_plan.PlanError(str(exc))
+
+
+def _validate_broll_edits(job, edits: dict) -> None:
+    """Picture edits must name slots the AI planned and use files that exist (uploads of this project, library)."""
+    from app import broll_edits as layer, talking_reel
+    planned = talking_reel.plan_render(job.dir, job.dir / "raw" / job.raw_name, prepare_media=False, apply_edits=False)
+    if planned.hyperframes:
+        raise creative_plan.PlanError("در این حالت پنل بالای سبک ۲ یک صحنهٔ موشن است و تصویر جایگزین در آن نمایش داده نمی‌شود.")
+    library = {str(item["path"]) for item in talking_reel._library_pictures()}
+    try:
+        layer.validate(planned.decisions, edits, uploads={p.name for p in talking_reel.user_media(job.dir)}, library=library)
+    except layer.EditError as exc:
+        raise creative_plan.PlanError(str(exc))
+
+
+async def edit_pictures(project_id: str, user_key: str, version_id: str, ops: list[dict]) -> dict:
+    """Picture edits for the upper panel. Each op is a slot's complete choice; "reset" restores the AI's.
+    The result is a new plan version; new AI images are made only after that version is approved."""
+    from app import broll_edits as layer, talking_reel
+    project = await repo.get_project(project_id, user_key)
+    job = jobstore.get(project.get("external_ref")) if project["engine"] == "talking" else None
+    if not job:
+        raise creative_plan.PlanError("پروژهٔ صحبتی پیدا نشد.")
+    edits = {key: dict(value) for key, value in (talking_reel.load(job.dir).get("broll_edits") or {}).items()}
+    for op in ops:
+        slot = str(op.get("slot"))
+        if op.get("reset"):
+            edits.pop(slot, None)
+        else:
+            edits[slot] = {key: value for key, value in op.items() if key in {"source", "media", "library", "visual", "label"}}
+    try:
+        edits = layer.clean(edits)
+    except layer.EditError as exc:
+        raise creative_plan.PlanError(str(exc))
+    return await edit_plan(project_id, user_key, version_id, {"broll_edits": edits})
 
 
 async def edit_timeline(project_id: str, user_key: str, version_id: str, ops: list[dict]) -> dict:
@@ -874,6 +922,8 @@ async def edit_plan(project_id: str, user_key: str, version_id: str, edits: dict
     result = creative_plan.talking_edits(version["content"], edits, status)
     if "timeline_edits" in result["engine"]:
         await asyncio.to_thread(_validate_timeline_edits, job, result["engine"]["timeline_edits"])
+    if result["engine"].get("broll_edits"):
+        await asyncio.to_thread(_validate_broll_edits, job, result["engine"]["broll_edits"])
     if result["engine"]:
         await asyncio.to_thread(talking_reel.update, job.dir, result["engine"])
     if result["profile"]:

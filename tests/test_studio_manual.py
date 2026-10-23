@@ -264,3 +264,34 @@ def test_manual_editing_replaces_requested_revision_without_running_engine(store
     assert _answer_manual_checkpoint(c['id'], 'u', p, 'هوک جدید', 'q')
     q = run(store.get_project(p['id'], 'u'))['state']['manual_checkpoint']
     assert q['id'] != 'q' and q['revision_text'] == 'هوک جدید'
+
+
+def test_a_damaged_local_store_is_recovered_not_read_as_empty(tmp_path, monkeypatch):
+    """Two processes writing at once left valid JSON followed by stray bytes; reading that as empty wiped everything."""
+    import json
+    monkeypatch.setattr(studio_store, 'DB_AVAILABLE', False)
+    monkeypatch.setattr(studio_store, 'ROOT', tmp_path)
+    monkeypatch.setattr(studio_store, 'FALLBACK', tmp_path / 'studio.json')
+    good = studio_store._empty(); good['conversations']['c1'] = {'id': 'c1', 'user_key': 'u', 'title': 'نگه دار'}
+    (tmp_path / 'studio.json').write_text(json.dumps(good) + '\n  ]\n }')
+    assert studio_store._read()['conversations']['c1']['title'] == 'نگه دار'
+    assert json.loads((tmp_path / 'studio.json').read_text())['conversations']['c1']      # repaired on disk
+    assert list(tmp_path.glob('studio.damaged-*.json'))                                    # the damaged copy is kept
+    (tmp_path / 'studio.json').write_text('{"conversations": {"x"')                        # nothing intact to recover
+    with pytest.raises(RuntimeError):
+        studio_store._read()
+    assert (tmp_path / 'studio.json').read_text().startswith('{"conversations": {"x"')     # never overwritten with an empty store
+
+
+def test_concurrent_writers_never_interleave_bytes(tmp_path, monkeypatch):
+    import json, threading
+    monkeypatch.setattr(studio_store, 'ROOT', tmp_path)
+    monkeypatch.setattr(studio_store, 'FALLBACK', tmp_path / 'studio.json')
+    sizes = (5, 5000, 50)
+    def write(n):
+        for _ in range(30):
+            data = studio_store._empty(); data['messages']['m'] = ['x' * 300] * n
+            studio_store._write(data)
+    threads = [threading.Thread(target=write, args=(n,)) for n in sizes]
+    [t.start() for t in threads]; [t.join() for t in threads]
+    assert json.loads((tmp_path / 'studio.json').read_text())['messages']['m'][0].startswith('x')

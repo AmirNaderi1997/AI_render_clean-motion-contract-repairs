@@ -54,3 +54,29 @@ test("form hints catch empty text, bad numbers, out-of-range and too-short capti
   assert.match(captionProblem({ text: "x", start: "1", end: "12" }, 10), /مدت ویدیو/);
   assert.match(captionProblem({ text: "x", start: "1", end: "1.1" }, 10), /۰٫۳/);
 });
+
+import { pictureForm, pictureOp, pictureProblem } from "../src/studio/timeline.ts";
+
+const picture = (over = {}) => ({ id: "picture:s3", type: "picture", start: 5, end: 9, label: "", text: "", source: {}, edit: { via: ["timeline"], note: "" },
+  props: { sentence: 3, editable: true, edited: false, hidden: false, prompt: "a compass", original: { source: "ai_planned", visual: "a compass", label: "قطب‌نما" }, current: null, ...over } });
+
+test("a picture form starts from the AI's prompt and becomes a reset when nothing is overridden", () => {
+  const element = picture();
+  assert.deepEqual(pictureForm(element), { source: "ai", media: "", library: "", visual: "a compass" });
+  assert.deepEqual(pictureOp(element, pictureForm(element)), { slot: 3, reset: true });
+  assert.deepEqual(pictureOp(element, { source: "ai", media: "", library: "", visual: " a red door " }), { slot: 3, source: "ai", visual: "a red door" });
+  assert.deepEqual(pictureOp(element, { source: "upload", media: "mine.png", library: "", visual: "" }), { slot: 3, source: "upload", media: "mine.png" });
+  assert.deepEqual(pictureOp(element, { source: "library", media: "", library: "assets/a.png", visual: "" }), { slot: 3, source: "library", library: "assets/a.png" });
+  assert.deepEqual(pictureOp(element, { source: "hidden", media: "", library: "", visual: "" }), { slot: 3, source: "hidden" });
+});
+
+test("a saved choice is shown again, and incomplete forms are flagged before saving", () => {
+  const saved = picture({ edited: true, current: { source: "upload", media: "mine.png" } });
+  assert.equal(pictureForm(saved).source, "upload");
+  assert.equal(pictureForm(saved).media, "mine.png");
+  assert.equal(pictureForm(picture({ hidden: true, edited: true, current: { source: "hidden" } })).source, "hidden");
+  assert.match(pictureProblem({ source: "ai", media: "", library: "", visual: "ab" }), /توضیح/);
+  assert.match(pictureProblem({ source: "upload", media: "", library: "", visual: "" }), /انتخاب/);
+  assert.match(pictureProblem({ source: "library", media: "", library: "", visual: "" }), /کتابخانه/);
+  assert.equal(pictureProblem({ source: "hidden", media: "", library: "", visual: "" }), "");
+});

@@ -639,3 +639,89 @@ async def edit_project_timeline(request: Request, project_id: str, body: Timelin
     except KeyError: raise HTTPException(404, 'project not found')
     except PlanError as exc: raise HTTPException(422, str(exc))
     except ValueError as exc: raise HTTPException(409, str(exc))
+
+
+# -- Upper-panel pictures (styles 2 and 3) -----------------------------------------------------------
+
+class PictureOp(BaseModel):
+    model_config = {"extra": "forbid"}
+    slot: int = Field(ge=0, le=9999)
+    source: Literal["upload", "library", "ai", "hidden"] | None = None
+    media: str | None = Field(default=None, max_length=80)
+    library: str | None = Field(default=None, max_length=220)
+    visual: str | None = Field(default=None, max_length=700)
+    label: str | None = Field(default=None, max_length=80)
+    reset: bool | None = None
+
+
+class PictureEdit(BaseModel):
+    version_id: str = Field(min_length=8, max_length=64)
+    ops: list[PictureOp] = Field(min_length=1, max_length=20)
+
+
+@router.patch('/projects/{project_id}/pictures')
+async def edit_project_pictures(request: Request, project_id: str, body: PictureEdit):
+    from app.creative_plan import PlanError
+    from app.studio_orchestrator import edit_pictures
+    try:
+        return _public_project(await edit_pictures(project_id, _user(request), body.version_id,
+                                                    [op.model_dump(exclude_none=True) for op in body.ops]))
+    except KeyError: raise HTTPException(404, 'project not found')
+    except PlanError as exc: raise HTTPException(422, str(exc))
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
+
+@router.post('/projects/{project_id}/media', status_code=201)
+async def upload_project_picture(request: Request, project_id: str, file: UploadFile = File(...)):
+    """Add a picture of the user's own to a talking project (the folder styles 2 and 3 already read uploads from)."""
+    import hashlib
+    from PIL import Image, UnidentifiedImageError
+    from app import talking_reel
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    job = jobstore.get(project.get('external_ref')) if project['engine'] == 'talking' else None
+    if not job: raise HTTPException(404, 'project not found')
+    suffix = Path(file.filename or '').suffix.lower()
+    if suffix not in {'.png', '.jpg', '.jpeg', '.webp'}: raise HTTPException(422, 'Upload a PNG, JPG or WebP picture')
+    data = await file.read(MAX_BYTES['image'] + 1)
+    if not data or len(data) > MAX_BYTES['image']: raise HTTPException(413 if data else 422, 'Picture is empty or too large')
+    name = f"upload_{hashlib.sha256(data).hexdigest()[:16]}{suffix}"
+    folder = job.dir / talking_reel.MEDIA_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / name
+    if not target.is_file():
+        temporary = folder / f".{name}.part"
+        temporary.write_bytes(data)
+        try:
+            with Image.open(temporary) as image: image.verify()
+        except (UnidentifiedImageError, OSError):
+            temporary.unlink(missing_ok=True); raise HTTPException(422, 'The file is not a valid image')
+        temporary.replace(target)
+    return {'name': name, 'size': len(data)}
+
+
+@router.get('/projects/{project_id}/pictures/{slot}')
+async def project_picture(request: Request, project_id: str, slot: int):
+    """The picture the renderer will use for a slot (404 while it is still to be generated)."""
+    from app import talking_reel
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    job = jobstore.get(project.get('external_ref')) if project['engine'] == 'talking' else None
+    if not job: raise HTTPException(404, 'picture not found')
+    try:
+        planned = await asyncio.to_thread(talking_reel.plan_render, job.dir, job.dir / 'raw' / job.raw_name, prepare_media=False)
+    except ValueError:
+        raise HTTPException(404, 'picture not found')
+    item = next((s for s in planned.slots if int(s['i']) == slot), None)
+    path = Path(item['file']).resolve() if item and item.get('file') else None
+    allowed = [job.dir.resolve(), (talking_reel.PROJECT_ROOT / 'assets').resolve()]
+    if not path or not path.is_file() or not any(path.is_relative_to(root) for root in allowed):
+        raise HTTPException(404, 'picture not found')
+    return FileResponse(path, headers={'Cache-Control': 'private, max-age=300'})
+
+
+@router.get('/library/pictures')
+async def library_pictures(request: Request):
+    from app import talking_reel
+    return [{'path': item['path'], 'name': item.get('filename') or Path(item['path']).name, 'tags': (item.get('tags') or [])[:6]}
+            for item in talking_reel._library_pictures()][:200]

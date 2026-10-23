@@ -1,9 +1,9 @@
 import React from "react";
-import { api, DocElement, ProjectDocument, StudioProject } from "../api";
+import { api, DocElement, LibraryPicture, ProjectDocument, StudioProject } from "../api";
 import { currentVersion, planPhase } from "./plan";
 import { AuthenticatedMedia } from "../AuthenticatedMedia";
 import { friendlyError } from "../ui";
-import { CaptionForm, TYPE_LABEL, VIA_LABEL, captionForm, captionOp, captionProblem, clock, findElement, playerMatches, stackRows, syncNotice, ticks } from "./timeline";
+import { CaptionForm, PictureForm, TYPE_LABEL, VIA_LABEL, captionForm, captionOp, captionProblem, clock, findElement, pictureForm, pictureOp, pictureProblem, playerMatches, stackRows, syncNotice, ticks } from "./timeline";
 
 const HEADER = 92;   // px, sticky track labels
 
@@ -43,6 +43,60 @@ function CaptionEditor({ project, element, duration, onChanged }: { project: Stu
       {element.props.edited ? <button className="btn btn-sm btn-secondary" disabled={locked} onClick={() => void send({ id: element.id, reset: true })}>بازگرداندن نسخهٔ اصلی</button> : null}
     </div>
     <small className="tl-note">{phase === "rendering" ? "تا پایان رندر ویرایش قفل است." : "هر تغییر یک نسخهٔ جدید از برنامه می‌سازد و برای دیده‌شدن در ویدیو باید دوباره تأیید شود."}</small>
+  </div>;
+}
+
+/** Upper-panel picture editor (styles 2 and 3): your own file, the library, an AI image from a prompt, or none. */
+function PictureEditor({ project, element, onChanged }: { project: StudioProject; element: DocElement; onChanged: () => void }) {
+  const [form, setForm] = React.useState<PictureForm>(() => pictureForm(element));
+  const [library, setLibrary] = React.useState<LibraryPicture[]>([]);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const fileInput = React.useRef<HTMLInputElement>(null);
+  const slot = Number(element.props.sentence);
+  React.useEffect(() => { setForm(pictureForm(element)); setError(""); }, [element.id, element.props.current, element.props.hidden]);
+  React.useEffect(() => { void api.libraryPictures().then(setLibrary).catch(() => setLibrary([])); }, []);
+  const phase = planPhase(project);
+  const version = currentVersion(project);
+  const locked = busy || !version || phase === "analyzing" || phase === "rendering";
+  const problem = pictureProblem(form);
+  const hasPreview = !element.props.hidden && !element.props.needs_generation;
+  const save = async (op: ReturnType<typeof pictureOp>) => {
+    if (!version) return;
+    setBusy(true); setError("");
+    try { await api.editStudioPictures(project.id, version.id, [op]); onChanged(); }
+    catch (e) { setError(friendlyError(e, "edit the picture")); }
+    finally { setBusy(false); }
+  };
+  async function pickFile(file?: File) {
+    if (!file) return;
+    setBusy(true); setError("");
+    try { const result = await api.uploadStudioPicture(project.id, file); setForm(current => ({ ...current, source: "upload", media: result.name })); }
+    catch (e) { setError(friendlyError(e, "upload the picture")); }
+    finally { setBusy(false); if (fileInput.current) fileInput.current.value = ""; }
+  }
+  const sources: [PictureForm["source"], string][] = [["ai", "ساخت با هوش مصنوعی"], ["upload", "فایل من"], ...(library.length ? [["library", "کتابخانه"] as [PictureForm["source"], string]] : []), ["hidden", "بدون تصویر"]];
+  return <div className="tl-editor">
+    {hasPreview ? <div className="tl-picture"><AuthenticatedMedia as="img" src={api.studioPictureUrl(project.id, slot)} alt="تصویر فعلی" loading="lazy"/></div>
+      : <small className="tl-note">{element.props.hidden ? "این بخش بدون تصویر است و گوینده در قاب می‌ماند." : "این تصویر هنوز ساخته نشده؛ بعد از تأیید برنامه ساخته می‌شود."}</small>}
+    <div className="segmented" role="group" aria-label="منبع تصویر">{sources.map(([key, label]) => <button key={key} type="button" disabled={locked}
+      aria-pressed={form.source === key} onClick={() => setForm({ ...form, source: key })}>{label}</button>)}</div>
+    {form.source === "ai" ? <div className="field"><label htmlFor="pic-prompt">توضیح تصویر (انگلیسی بهتر کار می‌کند)</label>
+      <textarea id="pic-prompt" className="input" dir="auto" rows={3} maxLength={600} disabled={locked} value={form.visual} onChange={event => setForm({ ...form, visual: event.target.value })}/>
+      <small className="field-hint">یک تصویر تازه بعد از تأیید برنامه ساخته می‌شود و ممکن است هزینهٔ مدل داشته باشد. تأیید برنامه یک‌جا برای همهٔ تصویرهای جدید است.</small></div> : null}
+    {form.source === "upload" ? <div className="field"><input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => void pickFile(event.target.files?.[0])}/>
+      <button type="button" className="btn btn-sm btn-secondary" disabled={locked} onClick={() => fileInput.current?.click()}>{form.media ? "انتخاب فایل دیگر" : "انتخاب تصویر از دستگاه"}</button>
+      {form.media ? <small className="field-hint" dir="ltr">{form.media}</small> : null}</div> : null}
+    {form.source === "library" ? <div className="field"><label htmlFor="pic-library">تصویر کتابخانه</label>
+      <select id="pic-library" className="input" disabled={locked} value={form.library} onChange={event => setForm({ ...form, library: event.target.value })}>
+        <option value="">انتخاب کنید…</option>{library.map(item => <option key={item.path} value={item.path}>{item.name}</option>)}</select></div> : null}
+    {error ? <div className="notice" data-tone="error" role="alert">{error}</div> : null}
+    <div className="action-buttons">
+      <button className="btn btn-sm" disabled={locked || Boolean(problem)} onClick={() => void save(pictureOp(element, form))}>{busy ? "در حال ذخیره…" : "ذخیرهٔ تصویر"}</button>
+      {element.props.edited ? <button className="btn btn-sm btn-secondary" disabled={locked} onClick={() => void save({ slot, reset: true })}>بازگرداندن پیشنهاد اصلی</button> : null}
+    </div>
+    {problem ? <small className="field-error">{problem}</small> : null}
+    <small className="tl-note">{phase === "rendering" ? "تا پایان رندر ویرایش قفل است." : "هر تغییر یک نسخهٔ جدید از برنامه می‌سازد و برای دیده‌شدن در ویدیو باید تأیید شود. زمان نمایش تصویر با برش‌های گفتار تعیین می‌شود."}</small>
   </div>;
 }
 
@@ -121,7 +175,7 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
             <div className="tl-head" dir="rtl">{rowIndex === 0 ? track.label : ""}</div>
             <div className="tl-lane" style={{ width }}>
               {row.map(item => <button key={item.id} type="button" className="tl-el" data-type={item.type} aria-pressed={item.id === selected}
-                data-edited={item.props.edited || undefined} data-deleted={item.props.deleted || undefined}
+                data-edited={item.props.edited || undefined} data-deleted={(item.props.deleted || item.props.hidden) || undefined}
                 style={{ left: item.start * zoom, width: Math.max(4, (item.end - item.start) * zoom) }}
                 title={`${item.label}${item.text ? ` — ${item.text}` : ""}`} onClick={() => pick(item)}>
                 <span dir="auto">{item.text || item.label}</span>
@@ -140,7 +194,8 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
       {element.source?.label ? <p className="tl-meta">منبع: {element.source.label}{element.source.file ? ` · ${element.source.file}` : ""}
         {element.source.in != null ? <span dir="ltr"> ({clock(element.source.in)}–{clock(element.source.out || 0)} در فایل اصلی)</span> : null}</p> : null}
       <p className="tl-meta">تغییر: {element.edit.via.length ? element.edit.via.map(item => VIA_LABEL[item] || item).join("، ") : "فعلاً قابل تغییر نیست"}</p>
-      {element.type === "caption" ? <CaptionEditor project={project} element={element} duration={doc.content_duration} onChanged={onChanged}/>
+      {element.type === "caption" && element.props.original ? <CaptionEditor project={project} element={element} duration={doc.content_duration} onChanged={onChanged}/>
+        : element.type === "picture" && element.props.editable ? <PictureEditor project={project} element={element} onChanged={onChanged}/>
         : <>{element.edit.note ? <small className="tl-note">{element.edit.note}</small> : null}
           <small className="tl-note">ویرایش مستقیم این نوع عنصر روی تایم‌لاین هنوز اضافه نشده است.</small></>}
     </section> : <p className="tl-hint">روی هر بخش بزنید تا جزئیات آن و راه تغییرش را ببینید.</p>}

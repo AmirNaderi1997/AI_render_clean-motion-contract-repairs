@@ -311,3 +311,27 @@ def test_timeline_edit_becomes_a_new_version_awaiting_approval_and_resets_with_r
     run(s.o.edit_plan(s.p["id"], "u", v3["id"], {"concept_id": "c2"}))
     assert s.engine["timeline_edits"] == {}   # edits belong to the previous decisions
     assert s.calls["start"] == 0
+
+
+def test_picture_edit_becomes_a_new_version_and_costs_nothing_until_approved(studio, monkeypatch):
+    s = studio
+    monkeypatch.setattr(s.o, "_validate_broll_edits", lambda job, edits: None)
+    s.engine["style"] = "talking_2"
+    run(s.o.sync_conversation(s.c["id"], "u"))
+    v1 = creative_plan.current(project(s)["state"])["id"]
+    run(s.o.edit_pictures(s.p["id"], "u", v1, [{"slot": 2, "source": "ai", "visual": "a brand new idea"},
+                                              {"slot": 5, "source": "hidden"}]))
+    p = project(s)
+    v2 = creative_plan.current(p["state"])
+    assert v2["n"] == 2 and not creative_plan.is_approved(p["state"])
+    assert s.engine["broll_edits"] == {"2": {"source": "ai", "visual": "a brand new idea"}, "5": {"source": "hidden"}}
+    assert v2["content"]["broll_edits"] == s.engine["broll_edits"]
+    # one op is that slot's whole choice; reset restores the AI's
+    run(s.o.edit_pictures(s.p["id"], "u", v2["id"], [{"slot": 5, "reset": True}, {"slot": 2, "source": "hidden"}]))
+    assert s.engine["broll_edits"] == {"2": {"source": "hidden"}}
+    assert s.calls["start"] == 0 and s.calls["analyze"] == []        # nothing rendered, nothing generated
+    with pytest.raises(creative_plan.PlanError):
+        run(s.o.edit_pictures(s.p["id"], "u", v1, [{"slot": 2, "reset": True}]))      # stale version
+    v3 = creative_plan.current(project(s)["state"])["id"]
+    run(s.o.edit_plan(s.p["id"], "u", v3, {"style": "talking_3"}))
+    assert s.engine["broll_edits"] == {}                              # picture choices belong to the previous decisions

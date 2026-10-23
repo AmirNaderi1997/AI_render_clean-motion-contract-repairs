@@ -185,14 +185,15 @@ export interface PlanContent {
   duration_s: number;
   style: { id: string; label: string; summary: string; complexity: string };
   look: { preset: string; grade: Record<string, number>; accent_color: string; caption_font: string; zoom: number; key_moments: boolean };
-  captions: string; motion: string; broll: string; pictures: { sentence: number; title: string; visual_type: string }[];
+  captions: string; motion: string; broll: string; pictures: { sentence: number; title: string; source: string; new: boolean }[];
   audio: { music: string; voice: string; sfx: string };
   brand: { name: string; tagline: string; cta: string; logo: { enabled: boolean; motion: string; has_logo: boolean } };
   format: { aspect: string; resolution: string; fps: number };
   engines: string[];
-  estimate: { render: { low_s: number; high_s: number; samples: number } | null; paid_media: boolean; note: string };
+  estimate: { render: { low_s: number; high_s: number; samples: number } | null; paid_media: boolean; new_images?: number; note: string };
   concepts: PlanConcept[];
   timeline_edits: Record<string, { text?: string; start?: number; end?: number; deleted?: boolean }>;
+  broll_edits: Record<string, { source: PictureSource; media?: string; library?: string; visual?: string; label?: string }>;
   style_options: { id: string; label: string; summary: string; complexity: string }[];
   frames?: Record<string, string>;
 }
@@ -201,7 +202,7 @@ export interface PlanState { versions: PlanVersion[]; approved_id: string | null
 export type PlanEdits = Partial<{
   hook: string; hook_highlight: string[]; look: string; accent_color: string; caption_font: string; zoom: number;
   key_moments: boolean; logo_enabled: boolean; logo_motion: string; name: string; tagline: string; cta: string;
-  concept_id: string; style: string; timeline_edits: PlanContent["timeline_edits"];
+  concept_id: string; style: string; timeline_edits: PlanContent["timeline_edits"]; broll_edits: PlanContent["broll_edits"];
 }>;
 /** Engine-neutral project timeline (app/project_document.py). Read-only in this phase. */
 export interface DocElement {
@@ -217,6 +218,9 @@ export interface ProjectDocument {
   basis: { plan_version: number | null; rendered_version: number | null; workflow: string | null; synced: boolean | null };
   stale_edits: string[]; edit_count: number; notes: string[];
 }
+export type PictureSource = "upload" | "library" | "ai" | "hidden";
+export interface PictureOp { slot: number; source?: PictureSource; media?: string; library?: string; visual?: string; label?: string; reset?: boolean }
+export interface LibraryPicture { path: string; name: string; tags: string[] }
 export interface TimelineOp { id: string; text?: string; start?: number; end?: number; deleted?: boolean; reset?: boolean }
 export interface BrandProfile {
   name: string; tagline: string; cta: string; accent_color: string; caption_font: string; logo_motion: string;
@@ -1100,6 +1104,17 @@ export const api = {
   },
   async editStudioPlan(id: string, versionId: string, edits: PlanEdits): Promise<StudioProject> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/plan`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId, edits }) }));
+  },
+  async editStudioPictures(id: string, versionId: string, ops: PictureOp[]): Promise<StudioProject> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/pictures`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId, ops }) }));
+  },
+  async uploadStudioPicture(id: string, file: File): Promise<{ name: string; size: number }> {
+    const form = new FormData(); form.append("file", file);
+    return j(await authFetch(`${BASE}/studio/projects/${id}/media`, { method: "POST", body: form }));
+  },
+  studioPictureUrl(id: string, slot: number): string { return `${BASE}/studio/projects/${id}/pictures/${slot}`; },
+  async libraryPictures(): Promise<LibraryPicture[]> {
+    return j(await authFetch(`${BASE}/studio/library/pictures`));
   },
   async editStudioTimeline(id: string, versionId: string, ops: TimelineOp[]): Promise<StudioProject> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/timeline`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId, ops }) }));

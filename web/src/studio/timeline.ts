@@ -1,5 +1,5 @@
 /** Pure helpers for the project timeline view (type imports only, unit-tested with `node --test`). */
-import type { DocElement, ProjectDocument, TimelineOp } from "../api";
+import type { DocElement, PictureOp, PictureSource, ProjectDocument, TimelineOp } from "../api";
 
 export const TYPE_LABEL: Record<string, string> = {
   clip: "برش تصویر", picture: "تصویر بالا", title: "عنوان", caption: "زیرنویس", card: "کارت متنی", chips: "فهرست",
@@ -79,5 +79,32 @@ export function captionProblem(form: CaptionForm, duration: number): string {
   if (!Number.isFinite(start) || !Number.isFinite(end)) return "زمان شروع و پایان باید عدد باشد.";
   if (start < 0 || end > duration) return "زمان باید داخل مدت ویدیو باشد.";
   if (end - start < 0.3) return "هر زیرنویس دست‌کم ۰٫۳ ثانیه باید نمایش داده شود.";
+  return "";
+}
+
+/** What the user chose for a picture slot. Only the field of the chosen source is used. */
+export interface PictureForm { source: PictureSource; media: string; library: string; visual: string }
+
+export function pictureForm(element: DocElement): PictureForm {
+  const current = element.props.current as Partial<PictureForm> | null | undefined;
+  return { source: current?.source ?? (element.props.hidden ? "hidden" : "ai"), media: current?.media ?? "", library: current?.library ?? "",
+           visual: current?.visual ?? String(element.props.original?.visual ?? element.props.prompt ?? "") };
+}
+
+/** The op for a slot, or a reset when the form is exactly the AI's own prompt (nothing to override). */
+export function pictureOp(element: DocElement, form: PictureForm): PictureOp {
+  const slot = Number(element.props.sentence);
+  const original = element.props.original as { source: string; visual: string };
+  if (form.source === "ai" && form.visual.trim() === original.visual.trim() && original.source.startsWith("ai")) return { slot, reset: true };
+  if (form.source === "ai") return { slot, source: "ai", visual: form.visual.trim() };
+  if (form.source === "upload") return { slot, source: "upload", media: form.media };
+  if (form.source === "library") return { slot, source: "library", library: form.library };
+  return { slot, source: "hidden" };
+}
+
+export function pictureProblem(form: PictureForm): string {
+  if (form.source === "ai" && form.visual.trim().length < 3) return "توضیح تصویر را بنویسید.";
+  if (form.source === "upload" && !form.media) return "یک تصویر انتخاب یا آپلود کنید.";
+  if (form.source === "library" && !form.library) return "یک تصویر از کتابخانه انتخاب کنید.";
   return "";
 }

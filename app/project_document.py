@@ -32,6 +32,7 @@ TRACKS = {   # id -> (kind, Persian label), in display order
 }
 
 PICTURE_SOURCES = {
+    "hidden": "بدون تصویر",
     "upload": "فایل شما", "library": "کتابخانه", "ai": "ساخته‌شده با هوش مصنوعی",
     "ai_planned": "با هوش مصنوعی ساخته می‌شود (هنوز ساخته نشده)", "motion_so": "موشن Motion.so", "motion": "موشن HyperFrames",
     "card": "کارت متنی",
@@ -74,11 +75,20 @@ def talking_document(job_dir: Path, video: Path) -> dict:
                    "bw": bool(getattr(shot, "bw", False)), "push": bool(getattr(shot, "push", False)), "cold_open": cold},
             via=["chat"], note="برش‌ها از گفتار ساخته می‌شوند (مکث و کلمه‌های اضافه حذف می‌شوند)؛ برش دستی در مرحلهٔ بعد اضافه می‌شود."))
 
-    # The upper picture panel of the split styles: one element per contiguous run of the same slot.
+    # The upper picture panel of the split styles: one element per contiguous run of the same slot, showing the
+    # AI's choice with the user's picture edit (broll_edits) laid over it.
     if split_style:
         slots = {int(s["i"]): s for s in planned.slots}
+        picture_edits = state.get("broll_edits") or {}
+        effective = ({int(s["i"]): s for s in talking_reel.plan_render(job_dir, video, prepare_media=False).slots}
+                     if picture_edits else slots)
+        ai_choice = {int(item["i"]): item for item in (planned.decisions.get("broll") or [])}
         full = getattr(plan, "full_pictures", set())
         cards = getattr(plan, "card_pictures", set())
+        # With HyperFrames on, style 2's upper panel is an authored motion scene painted over a placeholder, so a
+        # replacement picture would never appear: the picture editor is offered only where it has an effect.
+        motion_scene = bool(planned.hyperframes)
+        editable = style in {"talking_2", "talking_3"} and not motion_scene
         run: list = []
 
         def close_run():
@@ -86,18 +96,29 @@ def talking_document(job_dir: Path, video: Path) -> dict:
                 return
             slot = run[0].slot
             info = slots.get(slot, {})
-            kind = info.get("source") or ("motion" if planned.hyperframes else "card")
+            edit = picture_edits.get(str(slot))
+            hidden = bool(edit and edit.get("source") == "hidden")
+            shown = effective.get(slot, {}) if not hidden else {}
+            kind = shown.get("source") or info.get("source") or ("motion" if planned.hyperframes else "card")
             picture = run[0].picture
             layout = ("تمام‌قاب" if any(id(s) in full for s in run) else
                       "کارت کج" if picture in cards else "بالای قاب")
+            plan_item = ai_choice.get(slot, {})
+            file_name = shown.get("file") or info.get("file")
             tracks["panel"].append(_element(
                 f"picture:s{slot}", "picture", run[0].out_start, run[-1].out_start + run[-1].length,
-                info.get("label") or (sentences[slot]["text"][:40] if slot is not None and slot < len(sentences) else "تصویر"),
-                source={"kind": kind, "label": PICTURE_SOURCES.get(kind, kind),
-                        "file": Path(picture).name if picture else None},
-                props={"layout": layout, "sentence": slot},
-                via=["chat"] if style in {"talking_2", "talking_3"} else [],
-                note="برای عوض یا حذف کردن این تصویر در چت بگویید، مثلاً «تصویر جملهٔ ۳ را عوض کن»."))
+                shown.get("label") or info.get("label") or (sentences[slot]["text"][:40] if slot is not None and slot < len(sentences) else "تصویر"),
+                source={"kind": "hidden" if hidden else kind, "label": "بدون تصویر" if hidden else PICTURE_SOURCES.get(kind, kind),
+                        "file": Path(file_name).name if file_name and not hidden else None},
+                props={"layout": layout, "sentence": slot, "edited": bool(edit), "hidden": hidden,
+                       "prompt": plan_item.get("visual", ""), "editable": editable,
+                       "needs_generation": kind == "ai_planned" and not hidden, "motion_scene": motion_scene,
+                       "original": {"source": info.get("source") or "card", "visual": plan_item.get("visual", ""),
+                                    "label": info.get("label", "")},
+                       "current": picture_edits.get(str(slot))},
+                via=(["timeline", "chat"] if editable else ["chat"] if motion_scene else []),
+                note=("تصویر این بخش را همین‌جا عوض یا حذف کنید؛ تصویر تازه بعد از تأیید برنامه ساخته می‌شود." if editable else
+                      "این بخش یک صحنهٔ موشن طراحی‌شده است، نه تصویر؛ تغییرش را در چت بخواهید." if motion_scene else "")))
             run.clear()
 
         for shot in plan.shots:
@@ -192,7 +213,7 @@ def talking_document(job_dir: Path, video: Path) -> dict:
         "schema": SCHEMA, "engine": "talking", "style": style,
         "canvas": {"width": 1080, "height": 1920, "fps": 30},
         "duration": _r(total), "content_duration": _r(plan.duration),
-        "stale_edits": stale, "edit_count": len(edits) - len(stale),
+        "stale_edits": stale, "edit_count": len(edits) - len(stale) + len(state.get("broll_edits") or {}),
         "tracks": [{"id": key, "kind": TRACKS[key][0], "label": TRACKS[key][1], "elements": sorted(items, key=lambda e: e["start"])}
                    for key, items in tracks.items() if items],
     }

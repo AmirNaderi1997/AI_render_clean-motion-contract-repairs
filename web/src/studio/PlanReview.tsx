@@ -8,6 +8,7 @@ import { PHASE_LABEL, SOURCE_LABEL, estimateText, planPhase, restoreEdits, roleL
 const LOOKS: [string, string][] = [["default", "پیش‌فرض سبک"], ["natural", "طبیعی"], ["warm", "گرم"], ["cool", "سرد و ملایم"], ["cinematic", "سینمایی"]];
 const ACCENTS = ["#F5B800", "#FFFFFF", "#A8CF80", "#FF6B4A", "#4DA3FF"];
 const FONTS: [string, string][] = [["default", "Ray (فونت سبک)"], ["Vazirmatn", "وزیرمتن"]];
+const PICTURE_SOURCE: Record<string, string> = { upload: "فایل شما", library: "کتابخانه", ai: "ساخته‌شده", ai_planned: "ساخته می‌شود", motion_so: "Motion.so", card: "کارت متنی" };
 const LOGO_MOTIONS: [string, string][] = [["pop", "پاپ"], ["fade", "محو"], ["slide", "حرکت نرم"]];
 
 /** A style preview: one frame of the upload drawn with the style's own text, boxes and colours (engine/style_frames.py). */
@@ -170,7 +171,8 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
     <Section title="جزئیات تولید">
       <dl className="plan-facts">
         <dt>حرکت و موشن</dt><dd>{plan.motion}</dd>
-        <dt>تصاویر مکمل</dt><dd>{plan.broll}{plan.pictures.length ? <ul>{plan.pictures.map((item, index) => <li key={index}>{item.title}</li>)}</ul> : null}</dd>
+        <dt>تصاویر مکمل</dt><dd>{plan.broll}{plan.pictures.length ? <ul>{plan.pictures.map((item, index) => <li key={index}>{item.title || `جملهٔ ${(item.sentence ?? 0) + 1}`}{" · "}{PICTURE_SOURCE[item.source] || item.source}</li>)}</ul> : null}
+          {plan.estimate.new_images ? <small className="field-hint">{plan.estimate.new_images} تصویر تازه بعد از تأیید همین نسخه ساخته می‌شود؛ تأیید برنامه، تأیید یک‌جای همهٔ آن‌هاست. هر تصویر را می‌توانید در تایم‌لاین عوض یا حذف کنید.</small> : null}</dd>
         <dt>صدا</dt><dd>{plan.audio.voice} · {plan.audio.sfx}{plan.audio.music ? ` · موسیقی: ${plan.audio.music}` : ""}</dd>
         <dt>قالب</dt><dd>{plan.format.aspect} · {plan.format.resolution} · {plan.format.fps}fps · حدود {Math.round(plan.duration_s)} ثانیه منبع</dd>
         <dt>موتورها</dt><dd>{plan.engines.join("، ")}</dd>

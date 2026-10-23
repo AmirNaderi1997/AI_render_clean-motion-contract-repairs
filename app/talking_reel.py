@@ -40,7 +40,7 @@ DEFAULTS = {
     },
 }
 EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions", "storyboard", "render_settings",
-            "timeline_edits"}
+            "timeline_edits", "broll_edits"}
 _lock = threading.Lock()
 _running: set[str] = set()
 _cancel_events: dict[str, threading.Event] = {}
@@ -223,6 +223,10 @@ def update(job_dir: Path, changes: dict) -> dict:
             if key == "timeline_edits":
                 from app import timeline_edits
                 state[key] = timeline_edits.clean(value)
+                continue
+            if key == "broll_edits":
+                from app import broll_edits
+                state[key] = broll_edits.clean(value)
                 continue
             if key in {"captions", "storyboard"}:
                 decisions_key = _decisions_key(str(state.get("style") or "talking_1"))
@@ -655,6 +659,8 @@ def resolve_pictures(job_dir: Path, decisions: dict, style: str, *,
         entry = {"i": slot["i"], "label": slot.get("label") or "", "source": "card", "file": None}
         if slot.get("media") in uploads:
             entry.update(source="upload", file=str(uploads[slot["media"]]))
+        elif slot.get("library") and (PROJECT_ROOT / slot["library"]).is_file():
+            entry.update(source="library", file=str(PROJECT_ROOT / slot["library"]))
         else:
             words = set((slot.get("label") or "").split()) | set(slot.get("visual", "").lower().split())
             match = next((a for a in library if words & {str(t).lower() for t in a.get("tags") or []}), None)
@@ -812,7 +818,8 @@ def plan_render(job_dir: Path, video: Path, *, prepare_media: bool = True, apply
     ``apply_edits`` False returns the plan as the AI made it, without the user's timeline edits."""
     state = load(job_dir)
     style = str(state.get("style") or "talking_1")
-    planned = (_plan_split(job_dir, video, style, prepare_media=prepare_media) if style in SPLIT_STYLES
+    planned = (_plan_split(job_dir, video, style, prepare_media=prepare_media,
+                           broll_edits=state.get("broll_edits") if apply_edits else None) if style in SPLIT_STYLES
                else _plan_talking_1(job_dir, video, prepare_media=prepare_media))
     if apply_edits and state.get("timeline_edits"):
         from app import timeline_edits
@@ -855,7 +862,7 @@ def _plan_talking_1(job_dir: Path, video: Path, *, prepare_media: bool) -> Plann
     return PlannedReel("talking_1", media, transcript, decisions, settings, plan)
 
 
-def _plan_split(job_dir: Path, video: Path, style: str, *, prepare_media: bool) -> PlannedReel:
+def _plan_split(job_dir: Path, video: Path, style: str, *, prepare_media: bool, broll_edits: dict | None = None) -> PlannedReel:
     from app.config import settings
     from engine.talking_reel import get_style
     _brain_name, decisions_key, _music = SPLIT_STYLES[style]
@@ -869,6 +876,9 @@ def _plan_split(job_dir: Path, video: Path, style: str, *, prepare_media: bool) 
                  "hook": load(job_dir).get("hook2") or decisions["hook"]}
     render_settings = state.get("render_settings") or DEFAULTS["render_settings"]
     decisions = _apply_timeline_choices(decisions, style, render_settings)
+    if broll_edits:
+        from app import broll_edits as broll_layer
+        decisions = broll_layer.apply(decisions, broll_edits)
     motion_panels={}
     panel_manifest=job_dir/'generated'/'motion_so'/'talking_panels.json'
     if style=='talking_2' and panel_manifest.is_file():
