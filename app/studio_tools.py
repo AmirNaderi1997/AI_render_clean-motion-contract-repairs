@@ -6,6 +6,7 @@ touch project engines.  No shell or arbitrary endpoint execution is exposed.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -39,6 +40,7 @@ class TalkingInput(ToolInput):
     user_key: str
     style: str | None = None      # None: the creative director chooses from the content
     request: str = Field("", max_length=2000)
+    transcript: dict | None = None    # a transcript prepared by long-video discovery: the clip is not transcribed again
 
 
 class ContentInput(ToolInput):
@@ -108,6 +110,10 @@ def _talking(args: TalkingInput) -> dict:
     job = jobs.create_job(user_id=args.user_key)
     with open(Path(args.source_path), "rb") as source:
         jobs.save_raw(job, args.filename, source, expected_size=Path(args.source_path).stat().st_size)
+    if args.transcript and args.transcript.get("words"):
+        from brain.transcribe import file_hash
+        seeded = {**args.transcript, "file_hash": file_hash(job.dir / "raw" / job.raw_name), "requested_language": "fa", "engine": "whisper"}
+        (job.dir / "transcript.json").write_text(json.dumps(seeded, ensure_ascii=False))
     talking_reel.analyze(job.dir, job.dir / "raw" / job.raw_name, style=args.style, request=args.request)
     return {"external_ref": job.id, "status": "analyzing", "style": args.style}
 

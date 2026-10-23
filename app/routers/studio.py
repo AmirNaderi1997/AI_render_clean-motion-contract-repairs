@@ -958,3 +958,138 @@ async def music_file(name: str):
     path = talking_reel.resolve_music(entry['path']) if entry else None
     if not path: raise HTTPException(404, 'music not found')
     return FileResponse(path, headers={'Cache-Control': 'public, max-age=86400'})
+
+
+# -- Long-video content discovery ---------------------------------------------------------------------
+
+def _discovery_dir(request: Request, analysis_id: str):
+    from app import long_video
+    try:
+        return long_video.locate(analysis_id, _user(request))
+    except KeyError:
+        raise HTTPException(404, "analysis not found")
+
+
+@router.get("/conversations/{conversation_id}/discovery")
+async def conversation_discovery(request: Request, conversation_id: str):
+    from app import long_video
+    try:
+        conversation = await repo.get_conversation(conversation_id, _user(request))
+    except KeyError:
+        raise HTTPException(404, "conversation not found")
+    pointer = (conversation.get("state") or {}).get("discovery")
+    if not pointer:
+        return {"analysis": None}
+    directory = _discovery_dir(request, pointer["analysis_id"])
+    return {"analysis": await asyncio.to_thread(long_video.view, directory)}
+
+
+@router.get("/discovery/{analysis_id}")
+async def discovery_view(request: Request, analysis_id: str):
+    from app import long_video
+    return await asyncio.to_thread(long_video.view, _discovery_dir(request, analysis_id))
+
+
+@router.get("/discovery/{analysis_id}/transcript")
+async def discovery_transcript(request: Request, analysis_id: str, offset: int = 0, limit: int = 200, kind: str = "enhanced"):
+    directory = _discovery_dir(request, analysis_id)
+    source = directory / ("transcript.json" if kind == "enhanced" else "raw.json")
+    if not source.is_file():
+        return {"version": None, "total": 0, "segments": []}
+    data = json.loads(source.read_text())
+    segments = data["segments"][max(0, offset):max(0, offset) + max(1, min(limit, 500))]
+    keep = ("id", "start", "end", "text", "enhanced_text", "flags", "uncertain", "confidence", "language", "speaker")
+    return {"version": data.get("version"), "kind": kind, "total": len(data["segments"]), "segments": [{k: s.get(k) for k in keep if k in s} for s in segments]}
+
+
+@router.post("/discovery/{analysis_id}/resume")
+async def discovery_resume(request: Request, analysis_id: str):
+    from app import long_video
+    directory = _discovery_dir(request, analysis_id)
+    long_video.start(directory)
+    return {"resumed": True}
+
+
+@router.post("/discovery/{analysis_id}/stop")
+async def discovery_stop(request: Request, analysis_id: str):
+    from app import long_video
+    _discovery_dir(request, analysis_id)
+    long_video.stop(analysis_id)
+    return {"stopping": True}
+
+
+class CandidateEdit(BaseModel):
+    model_config = {"extra": "forbid"}
+    title: str | None = Field(default=None, max_length=300)
+    hook: str | None = Field(default=None, max_length=500)
+    summary: str | None = Field(default=None, max_length=600)
+    category: str | None = Field(default=None, max_length=40)
+    hidden: bool | None = None
+    ranges: list[list[float]] | None = Field(default=None, max_length=6)
+
+
+@router.patch("/discovery/{analysis_id}/candidates/{candidate_id}")
+async def discovery_edit(request: Request, analysis_id: str, candidate_id: str, body: CandidateEdit):
+    from app import long_video
+    directory = _discovery_dir(request, analysis_id)
+    try:
+        return await asyncio.to_thread(long_video.edit_candidate, directory, candidate_id, body.model_dump(exclude_none=True))
+    except KeyError:
+        raise HTTPException(404, "candidate not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.post("/discovery/{analysis_id}/candidates/{candidate_id}/start")
+async def discovery_start_candidate(request: Request, analysis_id: str, candidate_id: str):
+    from app import long_video
+    directory = _discovery_dir(request, analysis_id)
+    try:
+        return await asyncio.to_thread(long_video.start_candidate, directory, candidate_id)
+    except KeyError:
+        raise HTTPException(404, "candidate not found")
+    except Exception as exc:
+        raise HTTPException(500, f"ساخت چت تدوین انجام نشد: {str(exc)[:200]}")
+
+
+class MoreRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    focus: str = Field(default="", max_length=300)
+
+
+@router.post("/discovery/{analysis_id}/more")
+async def discovery_more(request: Request, analysis_id: str, body: MoreRequest):
+    from app import long_video
+    directory = _discovery_dir(request, analysis_id)
+    try:
+        long_video.request_more(directory, body.focus or "محتوای مستقل دیگری که قبلاً پیشنهاد نشده")
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    return {"started": True}
+
+
+def _candidate(directory, candidate_id: str):
+    from app import long_video
+    analysis = long_video.load(directory)
+    cand = next((c for c in analysis["candidates"] if c["id"] == candidate_id), None)
+    if cand is None:
+        raise HTTPException(404, "candidate not found")
+    return analysis, cand
+
+
+@router.get("/discovery/{analysis_id}/candidates/{candidate_id}/thumb")
+async def discovery_thumb(request: Request, analysis_id: str, candidate_id: str):
+    from app import long_video
+    directory = _discovery_dir(request, analysis_id)
+    analysis, cand = _candidate(directory, candidate_id)
+    path = await asyncio.to_thread(long_video.thumbnail, directory, cand, Path(analysis["source_path"]))
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+
+@router.get("/discovery/{analysis_id}/candidates/{candidate_id}/preview")
+async def discovery_preview(request: Request, analysis_id: str, candidate_id: str):
+    from app import long_video
+    directory = _discovery_dir(request, analysis_id)
+    analysis, cand = _candidate(directory, candidate_id)
+    path = await asyncio.to_thread(long_video.preview, directory, cand, Path(analysis["source_path"]))
+    return FileResponse(path, media_type="video/mp4")
