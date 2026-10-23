@@ -202,3 +202,24 @@ def test_segments_the_model_failed_to_correct_are_retried_before_discovery(analy
     long_video._run(analysis.directory)
     transcript = json.loads((analysis.directory / "transcript.json").read_text())["segments"]
     assert all("not_enhanced" not in s["flags"] for s in transcript) and all("کلمه" in s["enhanced_text"] for s in transcript)
+
+
+def test_correction_falls_back_to_a_steadier_route_and_stops_at_its_deadline():
+    calls = []
+    def ask(schema, system, user, route=None, **kw):
+        calls.append(route)
+        if route == "transcript_correction":
+            raise RuntimeError("503 high demand")
+        data = json.loads(user)
+        return discovery.EnhancedBatch(items=[{"id": s["id"], "text": s["text"]} for s in data["segments"]])
+    segments = [{"id": f"s{i}", "start": i, "end": i + 1, "text": f"متن شمارهٔ {i}", "words": []} for i in range(20)]
+    out = discovery.enhance_segments(segments, ask=ask)
+    assert all("not_enhanced" not in s["flags"] for s in out) and "creative_revision" in calls and calls[0] == "transcript_correction"
+    late = discovery.enhance_segments(segments, ask=ask, deadline=0.0)          # a deadline in the past: nothing is asked
+    assert all("not_enhanced" in s["flags"] and s["enhanced_text"] == s["text"] for s in late)
+
+
+def test_spelling_repairs_pass_the_guard_but_a_different_sentence_does_not():
+    raw = "سی سال پیش همه پساندازم را گزاشتم رو یک فروشکاه اینلاین لباز ورزشی"
+    assert discovery.accept_enhancement(raw, "سی ماه پیش همه پس‌اندازم را گذاشتم روی یک فروشگاه اینترنتی لوازم ورزشی.")
+    assert not discovery.accept_enhancement(raw, "امروز دربارهٔ مدیریت زمان و تمرکز در محل کار صحبت می‌کنم و چند راه ساده می‌گویم.")

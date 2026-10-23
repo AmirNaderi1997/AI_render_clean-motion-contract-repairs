@@ -55,7 +55,14 @@ def ask_text(topic: str, words: int, interview: bool, english: bool) -> str:
 
 async def speak(text: str, voice: str, path: Path) -> None:
     import edge_tts
-    await edge_tts.Communicate(text, voice, rate="+0%").save(str(path))
+    for attempt in range(8):                      # the speech service is reached over a flaky link: retry with a growing pause
+        try:
+            await asyncio.wait_for(edge_tts.Communicate(text, voice, rate="+0%").save(str(path)), 120)
+            return
+        except Exception as exc:
+            print(f"tts retry {attempt + 1}: {type(exc).__name__}", flush=True)
+            await asyncio.sleep(min(60, 5 * (attempt + 1)))
+    raise RuntimeError("speech service unreachable")
 
 
 def duration(path: Path) -> float:
@@ -70,14 +77,21 @@ def main() -> None:
     parser.add_argument("--interview", action="store_true")
     parser.add_argument("--english-terms", action="store_true")
     parser.add_argument("--pauses", action="store_true")
+    parser.add_argument("--cache", help="folder that keeps the written text and the speech, so a failed run resumes instead of starting over")
     args = parser.parse_args()
     target = args.minutes * 60
-    work = Path(tempfile.mkdtemp(prefix="talk-"))
+    work = Path(args.cache) if args.cache else Path(tempfile.mkdtemp(prefix="talk-"))
+    work.mkdir(parents=True, exist_ok=True)
     parts, total, index = [], 0.0, 0
     voices = {"الف": "fa-IR-DilaraNeural", "ب": "fa-IR-FaridNeural"}
     while total < target:
         topic = TOPICS[index % len(TOPICS)]
-        text = ask_text(topic, 260, args.interview, args.english_terms and index % 3 == 1)
+        text_file = work / f"text{index:03d}.txt"
+        if text_file.is_file():
+            text = text_file.read_text()
+        else:
+            text = ask_text(topic, 260, args.interview, args.english_terms and index % 3 == 1)
+            text_file.write_text(text)
         lines = []
         if args.interview:
             for raw in text.splitlines():
@@ -93,7 +107,8 @@ def main() -> None:
             if not said:
                 continue
             path = work / f"p{len(parts):04d}.mp3"
-            asyncio.run(speak(said, voice, path))
+            if not path.is_file() or path.stat().st_size < 1000:
+                asyncio.run(speak(said, voice, path))
             parts.append(path)
             total += duration(path)
             if args.pauses:

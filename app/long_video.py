@@ -222,9 +222,14 @@ class _Enhancer:
         import queue
         self.directory, self.queue, self.done, self.errors = directory, queue.Queue(), set(), []
         (directory / "enhanced").mkdir(exist_ok=True)
+        self.started = time.monotonic()
+        self.budget = max(240.0, 0.6 * load(directory)["duration"])        # the correction never holds up discovery for longer than this
         self.thread = threading.Thread(target=self._work, daemon=True, name="discovery-enhance")
         self.thread.start()
         self.seen: set[int] = set()
+
+    def deadline(self) -> float:
+        return self.started + self.budget
 
     def submit(self, index: int) -> None:
         if index not in self.seen:
@@ -242,7 +247,7 @@ class _Enhancer:
                 if not path.is_file():
                     chunk = json.loads((self.directory / "chunks" / f"{index:04d}.json").read_text())
                     context = self._tail(index)
-                    enhanced = discovery.enhance_segments(chunk["segments"], context)
+                    enhanced = discovery.enhance_segments(chunk["segments"], context, deadline=self.deadline())
                     path.write_text(json.dumps(enhanced, ensure_ascii=False))
                 self.done.add(index)
             except Exception as exc:
@@ -272,7 +277,7 @@ class _Enhancer:
                 missing = [i for i, s in enumerate(items) if "not_enhanced" in s.get("flags", [])]
                 if missing:                                   # a provider error the first time is not a reason to ship uncorrected text
                     retried = discovery.enhance_segments([{k: v for k, v in items[i].items() if k not in {"enhanced_text", "flags", "uncertain", "changed"}} for i in missing],
-                                                         items[:1] if not missing[0] else [items[missing[0] - 1]])
+                                                         items[:1] if not missing[0] else [items[missing[0] - 1]], deadline=self.deadline() + 120)
                     for i, fixed in zip(missing, retried):
                         items[i] = fixed
                     enhanced_path.write_text(json.dumps(items, ensure_ascii=False))

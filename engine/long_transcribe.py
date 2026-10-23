@@ -39,6 +39,22 @@ class Stopped(RuntimeError):
     """The caller asked the run to stop (cancellation)."""
 
 
+def cpu_threads() -> int:
+    """Whisper uses half the cores by default: the web app and the renders share this machine. ``LONGVIDEO_CPU_THREADS`` overrides."""
+    forced = os.environ.get("LONGVIDEO_CPU_THREADS", "").strip()
+    if forced.isdigit() and int(forced) > 0:
+        return int(forced)
+    return max(1, min(4, (os.cpu_count() or 2) // 2))
+
+
+def _lower_priority() -> None:
+    """Make this worker thread yield to the API and the renders (Linux per-thread nice; ignored elsewhere)."""
+    try:
+        os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 10)
+    except (AttributeError, OSError):
+        pass
+
+
 def choose_model(duration_s: float, cpu_count: Optional[int] = None) -> str:
     """The model that fits this machine and this video. ``LONGVIDEO_WHISPER_MODEL`` overrides everything."""
     forced = os.environ.get("LONGVIDEO_WHISPER_MODEL", "").strip()
@@ -94,13 +110,14 @@ def _model(name: str, device: str, compute: str):
         if key not in _MODELS:
             from faster_whisper import WhisperModel
             root = Path(os.environ.get("WHISPER_LOCAL_MODELS_DIR", "/root/.cache/editor-whisper")) / name
+            threads = cpu_threads()
             if (root / "model.bin").is_file():
-                _MODELS[key] = WhisperModel(str(root), device=device, compute_type=compute)
+                _MODELS[key] = WhisperModel(str(root), device=device, compute_type=compute, cpu_threads=threads)
             else:
                 try:                                   # a cached model must not wait on the network (the hub can be unreachable)
-                    _MODELS[key] = WhisperModel(name, device=device, compute_type=compute, local_files_only=True)
+                    _MODELS[key] = WhisperModel(name, device=device, compute_type=compute, cpu_threads=threads, local_files_only=True)
                 except Exception:
-                    _MODELS[key] = WhisperModel(name, device=device, compute_type=compute)
+                    _MODELS[key] = WhisperModel(name, device=device, compute_type=compute, cpu_threads=threads)
         return _MODELS[key]
 
 
@@ -172,6 +189,7 @@ def transcribe_long(video: Path, work: Path, *, language: Optional[str] = None, 
     language_hint = language
     emit("transcription.started", {"duration_s": duration, "chunks": len(chunks), "model": name, "resumed": any((work / "chunks" / f"{i:04d}.json").is_file() for i in range(len(chunks)))})
     with _RUN_LOCK:
+        _lower_priority()
         for index, span in enumerate(chunks):
             if should_stop and should_stop():
                 raise Stopped("transcription stopped")

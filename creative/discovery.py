@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 from typing import Callable, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -24,7 +25,8 @@ from . import llm
 log = logging.getLogger(__name__)
 WINDOW_S = 420.0              # transcript shown to the model per window
 WINDOW_OVERLAP_S = 45.0
-ENHANCE_BATCH = 36            # segments per enhancement call
+ENHANCE_BATCH = 14            # segments per enhancement call: small, so one provider error costs little and a retry is cheap
+ENHANCE_ROUTES = ("transcript_correction", "creative_revision")     # the light model first, a steadier one when it fails
 MIN_CLIP_S, MAX_CLIP_S = 10.0, 150.0
 CATEGORIES = ("آموزشی", "داستان", "انگیزشی", "نکتهٔ کاربردی", "دیدگاه تند", "مثال و تجربه", "پرسش و پاسخ", "طنز", "تحلیل", "سایر")
 FILLERS = ("خب", "خوب", "ببینید", "ببین", "یعنی", "حالا", "بله", "آره", "می‌گم", "میگم")
@@ -92,24 +94,36 @@ def accept_enhancement(raw: str, enhanced: str) -> bool:
     if not enhanced.strip():
         return False
     ratio = len(enhanced) / max(1, len(raw))
-    return 0.6 <= ratio <= 1.5 and overlap(raw, enhanced) >= 0.55
+    if not 0.6 <= ratio <= 1.5:
+        return False
+    # Speech-recognition fixes change spellings (many words differ) while the letters stay close; a rewrite changes both.
+    import difflib
+    similar = difflib.SequenceMatcher(None, _plain(raw), _plain(enhanced), autojunk=False).ratio()
+    return overlap(raw, enhanced) >= 0.55 or similar >= 0.72
 
 
-def enhance_segments(segments: list[dict], context: list[dict] | None = None, ask: Optional[Callable] = None) -> list[dict]:
+def enhance_segments(segments: list[dict], context: list[dict] | None = None, ask: Optional[Callable] = None, deadline: Optional[float] = None) -> list[dict]:
     """Add ``enhanced_text`` / ``flags`` to each segment (in place semantics: returns new dicts). Raw text is kept untouched."""
     ask = ask or llm.ask
     out = []
     for start in range(0, len(segments), ENHANCE_BATCH):
         batch = segments[start:start + ENHANCE_BATCH]
+        if deadline is not None and time.monotonic() > deadline:       # out of time: the rest keeps its raw words, marked as such
+            by_id = {}
+            for seg in batch:
+                out.append({**seg, "enhanced_text": seg["text"], "flags": ["not_enhanced"], "uncertain": [], "changed": False})
+            continue
         before = (context or [])[-3:] if start == 0 else out[-3:]
         request = llm.dumps({"previous_lines": [s.get("enhanced_text") or s["text"] for s in before],
                              "segments": [{"id": s["id"], "text": s["text"]} for s in batch]})
-        try:
-            result = ask(EnhancedBatch, ENHANCE, request, route="transcript_correction", tokens=6000, attempts=3)
-            by_id = {item.id: item for item in result.items}
-        except Exception as exc:
-            log.warning("transcript enhancement unavailable for a batch: %s", exc)
-            by_id = {}
+        by_id = {}
+        for route in ENHANCE_ROUTES:
+            try:
+                result = ask(EnhancedBatch, ENHANCE, request, route=route, tokens=5000, attempts=2)
+                by_id = {item.id: item for item in result.items}
+                break
+            except Exception as exc:
+                log.warning("transcript enhancement on %s failed for a batch: %s", route, exc)
         for seg in batch:
             item = by_id.get(seg["id"])
             enhanced, flags = seg["text"], []
@@ -119,9 +133,10 @@ def enhance_segments(segments: list[dict], context: list[dict] | None = None, as
                 enhanced = item.text
                 flags.extend(["uncertain"] if item.uncertain else [])
             else:
-                flags.append("rejected_change")                # the model rewrote too much: keep the raw words
+                flags.append("rejected_change")                # the model rewrote too much: keep the raw words (its attempt is kept for review)
             out.append({**seg, "enhanced_text": enhanced, "flags": flags,
-                        "uncertain": (item.uncertain if item else []), "changed": enhanced != seg["text"]})
+                        "uncertain": (item.uncertain if item else []), "changed": enhanced != seg["text"],
+                        **({"proposed": item.text} if "rejected_change" in flags and item else {})})
     return out
 
 

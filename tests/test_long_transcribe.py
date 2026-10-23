@@ -82,3 +82,13 @@ def test_stop_request_keeps_finished_chunks(video, tmp_path, monkeypatch):
     with pytest.raises(lt.Stopped):
         lt.transcribe_long(video, tmp_path, language="fa", model_name="base", should_stop=stop, model=FakeModel())
     assert (tmp_path / "chunks" / "0000.json").is_file() and not (tmp_path / "chunks" / "0001.json").is_file()
+
+
+def test_threads_leave_room_for_the_rest_of_the_machine(monkeypatch):
+    monkeypatch.delenv("LONGVIDEO_CPU_THREADS", raising=False)
+    monkeypatch.setattr(lt.os, "cpu_count", lambda: 4)
+    assert lt.cpu_threads() == 2
+    monkeypatch.setattr(lt.os, "cpu_count", lambda: 16)
+    assert lt.cpu_threads() == 4
+    monkeypatch.setenv("LONGVIDEO_CPU_THREADS", "3")
+    assert lt.cpu_threads() == 3
