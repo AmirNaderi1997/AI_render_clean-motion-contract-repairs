@@ -26,3 +26,9 @@ def test_idea_message_gives_understanding_and_chosen_idea_once():
     text = o._idea_message(plan)
     assert "موضوع: جنگ" in text and "ایدهٔ انتخاب‌شده: «ادعای بی‌مقدمه»" in text and "«زنجیرهٔ علت»" in text
     assert text.count("ادعای بی‌مقدمه") == 1
+
+
+def test_scenario_message_names_graphics_honestly_and_rounds_seconds():
+    board = {"scenes": [{"duration_s": 7.73333333, "narration_text": "متن", "media_prompt": "کارت دو ستونی", "visual_type": "comparison", "media_method": "generate"}]}
+    text = o._scenario_message(board, 8)
+    assert "7.7 ثانیه" in text and "7.73333" not in text and "گرافیک و تایپوگرافی متحرک" in text

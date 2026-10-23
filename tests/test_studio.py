@@ -99,7 +99,9 @@ def test_every_tts_surface_uses_localize_elevenlabs(monkeypatch):
 def test_social_reference_does_not_enter_product_scraper(tmp_path, monkeypatch):
     from app import studio_orchestrator as o
     calls = []
+    said = []
     monkeypatch.setattr(o, '_emit', lambda *a, **kw: None)
+    monkeypatch.setattr(o, '_assistant', lambda cid, user, text: said.append(text))
     monkeypatch.setattr(o, '_creative_direction', lambda *a: None)
     monkeypatch.setattr(o, '_provider', lambda: 'gateway')
     def execute(name, payload):
@@ -110,6 +112,9 @@ def test_social_reference_does_not_enter_product_scraper(tmp_path, monkeypatch):
         o._create_motion('c', 'u', 1, 'ریلز ۱۵ ثانیه درباره هوش مصنوعی با این سبک https://www.instagram.com/reel/test/', [])
     assert calls[0][0] == 'create_storyboard'
     assert '15' in calls[0][1]['prompt']
+    # The link was never scraped as a product page, and the user is told plainly that the reference was NOT seen.
+    assert 'ادعا نکن' in calls[0][1]['prompt'] and [name for name, _ in calls] == ['create_storyboard']
+    assert said and 'رفرنس را نتوانستم ببینم' in said[0] and 'ادعا نمی‌کنم' in said[0]
 
 
 def test_cached_motion_resume_never_generates_missing_scenes(tmp_path, monkeypatch):

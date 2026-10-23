@@ -23,7 +23,8 @@ Return ONLY JSON:
  "emotional_arc": ["<3-5 short phrases describing how the talk moves emotionally>"],
  "key_moments": [{"i": <sentence index>, "why": "<why this line matters>", "emotion": "<surprise|tension|proof|relief|humor|...>"}],
  "proof_points": ["<facts, numbers, names the speaker actually states>"],
- "must_not": ["<ways an edit could distort this talk: claims not to add, nuance not to cut>"]
+ "must_not": ["<ways an edit could distort this talk: claims not to add, nuance not to cut>"],
+ "must_name": ["<2-4 exact Persian terms the narration must say so a viewer knows the topic (e.g. the subject, the object of the change); no filler words>"]
 }
 Choose 3-6 key moments. Everything must be grounded in the transcript."""
 
@@ -41,7 +42,8 @@ Return ONLY JSON:
  "emotional_arc": ["<3-5 phrases: problem felt -> possibility -> proof -> desire -> action>"],
  "key_moments": [],
  "proof_points": ["<verifiable benefits/specs/offers present in the source>"],
- "must_not": ["<claims that would be unverified: prices, guarantees, results not in the source>"]
+ "must_not": ["<claims that would be unverified: prices, guarantees, results not in the source>"],
+ "must_name": ["<2-4 exact Persian terms the narration must say so a viewer knows the topic (e.g. the subject, the object of the change); no filler words>"]
 }"""
 
 UNDERSTAND_IDEA = PRINCIPLES + """
@@ -50,7 +52,8 @@ Task: understand a video idea or brief given as text (and maybe a few images).
 Return ONLY JSON with the same shape as a product brief but kind "idea" (or "images" if the request is mainly about
 supplied images): topic, core_message, audience, goal, tone, emotional_arc, key_moments (empty), proof_points (facts the
 user supplied), must_not (what would misrepresent the brief). If the brief is vague, choose the most useful reading and
-state it in `topic`; do not ask questions."""
+state it in `topic`; do not ask questions. Also include must_name: 2-4 exact Persian terms (the subject and what it changes or
+compares) that the narration must say aloud."""
 
 PROPOSE = PRINCIPLES + """
 
@@ -65,10 +68,14 @@ Return ONLY JSON:
   "hook": "<the first 2-3 seconds: the Persian words and what appears on screen, one or two sentences>",
   "outline": ["<role>: <idea in under 15 words>", "... 4-5 items in order, roles from hook|setup|claim|proof|turn|payoff|cta"],
   "style_hint": "<engine style id when capabilities list styles, else null>",
+  "structure": "<hook_tension_reframe_payoff|problem_agitation_solution|curiosity_gap_reveal|before_after|contrarian_insight|micro_story|emotional_buildup|educational_reveal|product_demonstration|benefit_commercial: pick by goal and content>",
+  "payoff": "<the closing line or image everything builds toward>", "feeling": "<what the viewer feels at the end>",
   "why_it_works": "<one sentence>", "risks": "<one sentence>"}
 ]}
 Rules: be specific to THIS content (name the number, object or contrast), never generic; respect the brief's must_not list;
-no extra commentary, no markdown."""
+the three concepts must differ in hook, message AND ending (and usually in structure), not be one script told three ways;
+look for the unexpected angle a sharp editor would pick, not the obvious one; if a reference style profile is given, every
+concept must be executable in its technique; no extra commentary, no markdown."""
 
 EXPAND = PRINCIPLES + """
 

@@ -5,13 +5,13 @@ import logging
 import os
 import time
 
-from . import capabilities, llm, prompts
-from .schemas import (Beat, Concept, ContentBrief, CreativePlan, CreativeUnavailable, Critique)
+from . import capabilities, llm, prompts, script as scriptwriter
+from .schemas import (Beat, Concept, ContentBrief, CreativePlan, CreativeUnavailable, Critique, ReferenceProfile, ScriptReport)
 
 log = logging.getLogger(__name__)
 
 # Keep the whole creative stage bounded: a slow model must not hold a job hostage.
-DEFAULT_BUDGET_S = 240
+DEFAULT_BUDGET_S = 540
 
 
 def enabled() -> bool:
@@ -102,10 +102,36 @@ def compose_notes(brief: ContentBrief, concept: Concept, critique: Critique) -> 
     return "\n".join(lines)
 
 
-def _direct(kind: str, understand_system: str, source_text: str, caps: str, *, budget_s: float) -> CreativePlan:
+def _write_script(chosen: Concept, brief: ContentBrief, critique: Critique, caps: str, guide: str, used: list[str], started: float,
+                  budget_s: float, source: str, *, duration_s: float, reference: ReferenceProfile | None, depth: str) -> ScriptReport | None:
+    """Videos without speech of their own get a real script: written, measured, independently criticised, bounded rewrites.
+    Falls back to the old single-call expansion only when the writer itself is unavailable."""
+    try:
+        draft, report = scriptwriter.run(brief, chosen, caps, f"{source}\n\n{guide}", duration_s=duration_s, reference=reference,
+                                         depth=depth, used=used, started=started, budget_s=budget_s)
+    except CreativeUnavailable as exc:
+        log.warning("script engine unavailable, using single-call expansion: %s", exc)
+        _expand(chosen, brief, critique, caps, guide, used, started, budget_s, source)
+        return None
+    chosen.beats = scriptwriter.to_beats(draft, duration_s)
+    chosen.visual_language = draft.visual_language or chosen.visual_language
+    chosen.pacing = draft.pacing or chosen.pacing
+    if draft.structure:
+        chosen.structure = draft.structure
+    if draft.ending:
+        chosen.payoff = draft.ending
+    if chosen.beats:
+        chosen.hook = chosen.beats[0].narration or chosen.hook
+    return report
+
+
+def _direct(kind: str, understand_system: str, source_text: str, caps: str, *, budget_s: float, duration_s: float = 30,
+            reference: ReferenceProfile | None = None, depth: str = "fast") -> CreativePlan:
     started = time.monotonic()
     used: list[str] = []
     guide = prompts.STRUCTURE_GUIDE[kind]
+    if reference is not None:
+        source_text += "\n\n" + scriptwriter.reference_digest(reference)
 
     brief = llm.ask(ContentBrief, understand_system, source_text, route=llm.DIRECTOR_ROUTE, tokens=4000, used=used)
     brief.kind = kind  # the caller knows the kind better than the model
@@ -134,10 +160,15 @@ def _direct(kind: str, understand_system: str, source_text: str, caps: str, *, b
 
     chosen = _pick(critique, concepts)
     critique.chosen_id = chosen.id
-    _expand(chosen, brief, critique, caps, guide, used, started, budget_s, source_text)
+    report = None
+    if kind == "talk":
+        _expand(chosen, brief, critique, caps, guide, used, started, budget_s, source_text)
+    else:
+        report = _write_script(chosen, brief, critique, caps, guide, used, started, budget_s, source_text,
+                               duration_s=duration_s, reference=reference, depth=depth)
     style = chosen.style_hint if (kind == "talk" and chosen.style_hint in capabilities.TALKING_STYLES) else None
     return CreativePlan(kind=kind, brief=brief, concepts=concepts, critique=critique, chosen=chosen, style=style,
-                        director_notes=compose_notes(brief, chosen, critique), models=used,
+                        director_notes=compose_notes(brief, chosen, critique), models=used, script=report, reference=reference,
                         elapsed_s=round(time.monotonic() - started, 1))
 
 
@@ -153,16 +184,24 @@ def direct_talk(sentences: list[dict], request: str = "", *, style: str | None =
 
 
 def direct_product(facts: dict | None, request: str, *, image_count: int = 0, duration_s: int = 30,
-                   budget_s: float = DEFAULT_BUDGET_S, assets: list[dict] | None = None) -> CreativePlan:
+                   budget_s: float = DEFAULT_BUDGET_S, assets: list[dict] | None = None,
+                   reference: ReferenceProfile | None = None, depth: str = "fast", excerpt: str = "") -> CreativePlan:
     source = (f"What the user asked for: {request}\nTarget length: {duration_s} seconds. Usable images available: {image_count}.\n"
               f"Verified facts (from the page / user):\n{llm.dumps(facts or {})}\n"
               f"Visually inspected assets (only listed indices may be used):\n{llm.dumps(assets or [])}")
-    return _direct("product", prompts.UNDERSTAND_PRODUCT, source, capabilities.product_capabilities(), budget_s=budget_s)
+    if excerpt:
+        source += f"\n\nSource text of the supplied page (verified: every fact in the script must come from here or from the request):\n{excerpt}"
+    return _direct("product", prompts.UNDERSTAND_PRODUCT, source, capabilities.product_capabilities(), budget_s=budget_s,
+                   duration_s=duration_s, reference=reference, depth=depth)
 
 
 def direct_idea(request: str, *, image_count: int = 0, duration_s: int = 30, budget_s: float = DEFAULT_BUDGET_S,
-                assets: list[dict] | None = None) -> CreativePlan:
+                assets: list[dict] | None = None, reference: ReferenceProfile | None = None, depth: str = "fast",
+                excerpt: str = "") -> CreativePlan:
     kind = "images" if image_count else "idea"
     source = (f"The brief: {request}\nTarget length: {duration_s} seconds. Images supplied by the user: {image_count}.\n"
               f"Visually inspected assets (only listed indices may be used):\n{llm.dumps(assets or [])}")
-    return _direct(kind, prompts.UNDERSTAND_IDEA, source, capabilities.product_capabilities(), budget_s=budget_s)
+    if excerpt:
+        source += f"\n\nSource text of the supplied page (verified: every fact in the script must come from here or from the request):\n{excerpt}"
+    return _direct(kind, prompts.UNDERSTAND_IDEA, source, capabilities.product_capabilities(), budget_s=budget_s,
+                   duration_s=duration_s, reference=reference, depth=depth)

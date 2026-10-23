@@ -29,6 +29,19 @@ _RESET = re.compile(r"reset(?:s)? (?:in )?~?(\d+)\s*s", re.I)
 MAX_COOLDOWN_WAIT_S = 60
 
 
+def _transient_network(exc: Exception) -> bool:
+    # The gateway wraps a dropped connection as a retryable GatewayError. A *timeout* is not retried: it would only repeat the wait.
+    if getattr(exc, "retryable", False) and cooldown_seconds(exc) is None and \
+            any(word in str(exc) for word in ("ConnectError", "RemoteProtocolError", "disconnected")):
+        return True
+    try:
+        import httpx
+    except ImportError:
+        return False
+    return isinstance(exc, (httpx.RemoteProtocolError, httpx.ReadError, httpx.ReadTimeout, httpx.ConnectError, httpx.ConnectTimeout,
+                            httpx.WriteError, httpx.PoolTimeout))
+
+
 def cooldown_seconds(exc: Exception) -> int | None:
     """Seconds the gateway says a rate-limited/busy route needs, when the error states it (429/503 only)."""
     status = getattr(exc, "status", None)
@@ -56,6 +69,8 @@ def ask(schema: type[T], system: str, user: str, *, route: str, tokens: int = 60
         '_Concepts': ('creative_concepts', 'دارم چند ایدهٔ متفاوت برای هوک، روایت و زبان بصری می‌سازم.'),
         'Critique': ('creative_review', 'دارم ایده‌ها را مقایسه و نقاط ضعف روایت و جذابیت بصری را بررسی می‌کنم.'),
         '_Expansion': ('creative_storyboard', 'دارم ایدهٔ منتخب را به صحنه‌ها، ریتم و پیشنهادهای موشن تبدیل می‌کنم.'),
+        'ScriptDraft': ('creative_script', 'دارم متن گفتاری فارسی را می‌نویسم و برای هر جمله تصویرش را مشخص می‌کنم.'),
+        'ScriptReview': ('creative_script_review', 'منتقد مستقل سناریو را می‌خواند و برای هر معیار از خود متن شاهد می‌آورد.'),
     }
     stage, message = stages.get(schema.__name__, (route, 'در حال آماده‌سازی برنامهٔ اجرایی این بخش هستم.'))
     with describe(stage, message):
@@ -83,6 +98,12 @@ def _ask(schema: type[T], system: str, user: str, *, route: str, tokens: int = 6
             prompt = user + "\n\nYour previous reply was cut off or malformed. Return one COMPLETE, more compact JSON object only."
             continue
         except Exception as exc:  # timeouts, 429/503 bursts, disabled routes: never fatal for the job
+            if _transient_network(exc) and attempt < attempts - 1:
+                # A connection the proxy dropped mid-answer (long generations) says nothing about the request: ask again.
+                log.warning("creative %s connection dropped (%s); retrying", route, type(exc).__name__)
+                last = f"connection dropped ({type(exc).__name__})"
+                _sleep(3)
+                continue
             wait = cooldown_seconds(exc)
             if wait is not None and attempt < attempts - 1:
                 # Thin provider capacity: a short cooldown is worth waiting out once, a long one is not.

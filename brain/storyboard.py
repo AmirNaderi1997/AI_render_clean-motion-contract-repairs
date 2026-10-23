@@ -34,6 +34,13 @@ class Scene:
     narrative_role: str = ''
     visual_type: str = 'concept'
     motion_style: str = ''
+    # Script-to-storyboard contract: which script line this scene serves, and why it looks the way it does.
+    script_line: str = ''
+    why_visual: str = ''
+    emotion: str = ''
+    focus: str = ''
+    link_prev: str = ''
+    reference_trait: str = ''
 
     def __post_init__(self):
         import re

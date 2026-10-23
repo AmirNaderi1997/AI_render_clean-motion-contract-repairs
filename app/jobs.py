@@ -1265,6 +1265,21 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
                 moments.append(cursor+length/2);cursor+=length
             report=review_export(out_path,{'direction':creative_direction,'storyboard':board},
                 job.dir/'creative_review',duration=plan.output_duration,moments=moments)
+            reference=(creative_direction or {}).get('reference')
+            if reference and reference.get('status')=='analyzed':
+                # The output file itself is compared with the reference it claims to follow (cuts, colours, look).
+                from creative import fidelity
+                from creative.schemas import ReferenceProfile
+                job.render.message='checking reference fidelity'
+                _write_status(job)
+                try:
+                    fit=fidelity.compare(out_path,ReferenceProfile.model_validate(reference))
+                except Exception as exc:
+                    fit={'status':'unavailable','summary':'مطابقت با رفرنس سنجیده نشد: '+str(exc)[:160],'checks':[],'findings':[]}
+                report['fidelity']=fit
+                if fit['status']=='needs_attention' and report.get('status')=='passed':
+                    report['status']='needs_attention'
+                    report['summary']=((report.get('summary') or '')+' '+fit['summary']).strip()
             job.render.technical_qc['creative_review']=report
             _write_status(job)
             enforce(report)

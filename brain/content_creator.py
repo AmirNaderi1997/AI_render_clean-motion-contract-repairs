@@ -181,6 +181,23 @@ def create_content(
     return {"job_id": job.id, "storyboard": storyboard.to_dict()}
 
 
+def _check_narration_timing(storyboard, segments: list[dict], gen_dir: Path, warnings: list) -> None:
+    """Compare the plan with the real text-to-speech audio: the spoken length is the authority, not the estimate."""
+    from creative import speech
+    texts = {scene.index: scene.narration_text for scene in storyboard.scenes}
+    estimated = sum(speech.speech_seconds(texts.get(row["scene_index"], "")) for row in segments)
+    actual = sum(float(row.get("duration_s") or 0) for row in segments)
+    planned = float(storyboard.total_duration_s or 0)
+    report = {"estimated_s": round(estimated, 2), "actual_s": round(actual, 2), "planned_video_s": planned,
+              **speech.check_audio(estimated, actual)}
+    try:
+        (gen_dir / "narration_check.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
+    except OSError:
+        pass
+    if planned and actual > planned * 1.05:
+        warnings.append(f"نریشن واقعی {actual:.1f} ثانیه شد و از مدت برنامه‌ریزی‌شده ({planned:g} ثانیه) بیشتر است؛ ویدیو با نریشن هماهنگ می‌شود و طولانی‌تر خواهد بود.")
+
+
 def get_storyboard(job_id: str) -> Optional[dict]:
     from app.jobs import get as get_job
     job = get_job(job_id)
@@ -473,6 +490,9 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         except ImportError as exc:
             if any(scene.narration_text for scene in storyboard.scenes):
                 raise RuntimeError("Voiceover requires the ElevenLabs provider") from exc
+
+        if narration_segments and not preset["is_static"]:
+            _check_narration_timing(storyboard, narration_segments, gen_dir, warnings)
 
         if preset["is_static"]:
             if not generated_media:

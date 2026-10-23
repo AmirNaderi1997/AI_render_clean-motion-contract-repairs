@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import asyncio
 import logging
 import re
@@ -141,11 +142,12 @@ def _status_voice(conversation_id: str, seq: int, message: str) -> None:
 
 
 def _page_brief(page: dict) -> dict:
+    from creative.source import article_text
     """Use the configured text model to distinguish product facts from chrome."""
     content = {
         "title": page.get("title"), "description": page.get("description"),
         "structured_products": page.get("structured_products"),
-        "visible_content": page.get("content", [])[:120],
+        "visible_content": article_text(page, 9000).splitlines(),
         "image_alt_texts": [item.get("alt") for item in page.get("images", [])],
     }
     system = """You inspect a source page for a video editor. It may be an encyclopedia article, news,
@@ -175,11 +177,12 @@ Never invent a claim, price, metric or feature. Write concise Persian values."""
 
 
 def _motion_prompt(user_text: str, page: dict | None, facts: dict | None, duration: int = 30, plan=None) -> str:
+    from creative.source import article_text
     source = ""
     if page and facts:
         source = "\n\nVerified landing-page evidence:\n" + json.dumps({
             "url": page.get("url"), "facts": facts,
-            "visible_content": page.get("content", [])[:80],
+            "visible_content": article_text(page, 8000).splitlines(),
         }, ensure_ascii=False)
     direction = ("\n\n" + plan.director_notes + "\nBuild the scenes from this direction: the hook is scene 1, each beat becomes "
                  "one distinct scene, and no scene repeats another's composition.") if plan else ""
@@ -464,7 +467,7 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
 
 
 def _creative_direction(conversation_id: str, text: str, facts: dict | None, assets: list, duration: int,
-                        catalog: list[dict] | None = None):
+                        catalog: list[dict] | None = None, reference=None, excerpt: str = ''):
     """Flows B/C/D: understand the brief, explore concepts, and let the best one drive the storyboard.
     Returns None (and says so) if the creative layer is unavailable; the standard storyboard still runs."""
     import creative
@@ -474,14 +477,56 @@ def _creative_direction(conversation_id: str, text: str, facts: dict | None, ass
           message="در حال تحلیل مخاطب و پیام و سنجیدن چند ایدهٔ خلاقانه هستم.")
     try:
         evidence=[{'index':r['index'],'subject':r['subject']} for r in catalog or []]
-        plan = (creative.direct_product(facts, text, image_count=len(assets), duration_s=duration,assets=evidence) if facts
-                else creative.direct_idea(text, image_count=len(assets), duration_s=duration,assets=evidence))
+        plan = (creative.direct_product(facts, text, image_count=len(assets), duration_s=duration,assets=evidence,reference=reference,depth=_script_depth(),excerpt=excerpt) if facts
+                else creative.direct_idea(text, image_count=len(assets), duration_s=duration,assets=evidence,reference=reference,depth=_script_depth(),excerpt=excerpt))
     except creative.CreativeUnavailable as exc:
         log.warning("creative direction unavailable: %s", exc)
         raise ValueError('طراحی خلاقانه کامل نشد؛ برای جلوگیری از خروجی قالبی، تولید مدیا شروع نشد.') from exc
     _emit(conversation_id, "tool.completed", tool="creative_direction",
           message=f"ایدهٔ انتخاب‌شده: «{plan.chosen.name}» — {plan.chosen.angle}", result={"concept": plan.public()})
     return plan
+
+
+def _script_depth() -> str:
+    """Fast and Premium write to the same standard; Premium only allows the critic one more rewrite round."""
+    value = os.environ.get("CREATIVE_SCRIPT_DEPTH", "fast").strip().lower()
+    return value if value in {"fast", "premium"} else "fast"
+
+
+def _analyze_reference(conversation_id: str, user_key: str, source: str):
+    """Look at the reference for real. Tells the user what was observed, or plainly that nothing could be."""
+    from creative import reference as reference_analysis
+    from tempfile import TemporaryDirectory
+    _emit(conversation_id, "tool.started", tool="reference_analysis",
+          message="دارم ویدیوی رفرنس را واقعاً تحلیل می‌کنم: نماها، ریتم، رنگ و تایپوگرافی.")
+    with TemporaryDirectory(prefix="studio-reference-") as temporary:
+        profile = reference_analysis.analyze(source, Path(temporary))
+    if profile.usable:
+        _emit(conversation_id, "tool.completed", tool="reference_analysis",
+              message=f"رفرنس تحلیل شد: {profile.shot_count} نما، میانگین {profile.avg_shot_s:g} ثانیه برای هر نما.")
+        _assistant(conversation_id, user_key, _reference_message(profile))
+    else:
+        _emit(conversation_id, "tool.completed", tool="reference_analysis", message="رفرنس تحلیل نشد.")
+        _assistant(conversation_id, user_key,
+                   f"**رفرنس را نتوانستم ببینم.** {profile.reason}\n\nتا آن موقع فقط بر اساس موضوع و توضیحات خودت پیش می‌روم "
+                   "و ادعا نمی‌کنم که سبک رفرنس رعایت شده است.")
+    return profile
+
+
+def _reference_message(profile) -> str:
+    rows = [("ریتم", f"{profile.shot_count} نما در {profile.duration_s:g} ثانیه؛ میانگین هر نما {profile.avg_shot_s:g} ثانیه ({profile.cuts_per_second:g} برش در ثانیه)")]
+    for label, value in (("تایپوگرافی", profile.typography), ("چیدمان", profile.composition), ("حرکت", profile.motion_language),
+                         ("گذار", profile.transitions), ("تراکم تصویر", profile.visual_density), ("هوک رفرنس", profile.hook_structure),
+                         ("ساختار روایت", profile.narrative_structure), ("حس کلی", profile.overall_feel)):
+        if value:
+            rows.append((label, value))
+    if profile.palette:
+        rows.append(("رنگ‌های غالب", "، ".join(profile.palette)))
+    rows.append(("صدا", profile.sound))
+    note = f"\n\n{profile.reason}" if profile.reason else ""
+    described = any((profile.typography, profile.composition, profile.motion_language, profile.overall_feel))
+    return ("**رفرنس را دیدم و تحلیل کردم**\n" if described else "**ریتم و رنگ رفرنس را اندازه گرفتم (توصیف بصری انجام نشد)**\n") + "\n".join(f"• {label}: {value}" for label, value in rows if value) + \
+        "\n\nتکنیک و زبان بصری را بازتولید می‌کنم، نه محتوای اختصاصی آن را." + note
 
 
 def _short(value, limit: int = 170) -> str:
@@ -504,27 +549,69 @@ def _idea_message(plan) -> str:
     blocks = ["\n".join(lines), "\n".join(idea)]
     if others:
         blocks.append("ایده‌های دیگری که سنجیدم: " + "، ".join(f"«{name}»" for name in others[:4]))
+    report = getattr(plan, "script", None)
+    if report:
+        blocks.append(_script_report_text(report))
     return "\n\n".join(blocks)
 
 
-def _scenario_message(storyboard: dict, duration: int, *, motion_scenes: int = 0, estimate: float | None = None) -> str:
+_STRUCTURE_FA = {"hook_tension_reframe_payoff": "هوک، تنش، بازچارچوب‌بندی، نتیجه", "problem_agitation_solution": "مسئله، تشدید، راه‌حل",
+                 "curiosity_gap_reveal": "شکاف کنجکاوی و افشا", "before_after": "قبل و بعد", "contrarian_insight": "نگاه خلاف‌انتظار",
+                 "micro_story": "داستان کوتاه", "emotional_buildup": "اوج‌گیری احساسی", "educational_reveal": "آموزش با افشای تدریجی",
+                 "product_demonstration": "نمایش محصول", "benefit_commercial": "تبلیغ مبتنی بر منفعت"}
+_STOPPED_FA = {"cap": "سقف دورهای بازنویسی تمام شد", "time": "سقف زمانی تمام شد", "unavailable": "سرویس بازنویسی پاسخ نداد"}
+_CRITERION_FA = {"hook_strength": "قدرت هوک", "originality": "تازگی ایده", "clarity": "روشنی", "emotional_impact": "اثر احساسی",
+                 "audience_relevance": "ارتباط با مخاطب", "narrative_coherence": "انسجام روایت", "curiosity": "کنجکاوی",
+                 "memorability": "ماندگاری", "natural_persian": "فارسی گفتاری", "visual_potential": "ظرفیت بصری", "timing": "زمان‌بندی",
+                 "payoff_quality": "کیفیت پایان", "reference_alignment": "هماهنگی با رفرنس"}
+
+
+def _script_report_text(report) -> str:
+    """How the script was reached, with the critic's own evidence; no decorative total score."""
+    lines = [f"**نقد مستقل سناریو** — ساختار «{_STRUCTURE_FA.get(report.structure, report.structure or '—')}»، {report.attempts} دور نگارش و نقد"]
+    lines.append(f"زمان نریشن (برآورد فارسی): حدود {report.speech_seconds:g} ثانیه از ظرفیت {report.budget_seconds:g} ثانیه"
+                 + ("" if report.timing_ok else " ⚠ بیشتر از ظرفیت است"))
+    review = report.review
+    if review and review.scores:
+        checked = [s for s in review.scores if s.verified and s.criterion != "reference_alignment"] or review.scores
+        ranked = sorted(checked, key=lambda s: s.score)
+        weak, strong = ranked[:2], ranked[-2:][::-1]
+        for label, rows in (("قوی‌ترین", strong), ("ضعیف‌ترین", weak)):
+            lines.append(f"{label}: " + "؛ ".join(f"{_CRITERION_FA.get(s.criterion, s.criterion)} {s.score:g}/10 («{_short(s.evidence, 60)}»)" for s in rows))
+        if review.summary:
+            lines.append(review.summary)
+    if review and review.verdict == "rewrite" and review.must_fix:
+        lines.append(f"منتقد هنوز این موارد را باز می‌داند ({_STOPPED_FA.get(report.stopped, 'پایان دورها')}): " + "؛ ".join(_short(x, 140) for x in review.must_fix[:3]))
+    if report.deterministic:
+        lines.append("هشدارها: " + "؛ ".join(report.deterministic[:3]))
+    return "\n".join(lines)
+
+
+def _scenario_message(storyboard: dict, duration: int, *, motion_scenes: int = 0, estimate: float | None = None, reference=None) -> str:
     """The scenario the user is asked to approve: every scene with its narration, on-screen text and picture idea."""
     scenes = storyboard.get("scenes", [])
     total = storyboard.get("total_duration_s", duration)
     blocks = [f"**سناریوی پیشنهادی** — {len(scenes)} صحنه، حدود {total:g} ثانیه"]
     for number, scene in enumerate(scenes, 1):
-        rows = [f"**صحنهٔ {number} · {scene.get('duration_s', 0):g} ثانیه**"]
+        rows = [f"**صحنهٔ {number} · {round(float(scene.get('duration_s', 0)), 1):g} ثانیه**"]
         if scene.get("narration_text"):
             rows.append(f"نریشن: «{_short(scene['narration_text'], 220)}»")
         if scene.get("text_overlay"):
             rows.append(f"متن روی تصویر: {_short(scene['text_overlay'], 90)}")
         visual = scene.get("media_prompt") or scene.get("description")
         if visual:
-            kind = {"upload": "فایل شما", "library": "کتابخانه"}.get(scene.get("media_method"), "ساخته‌شده با هوش مصنوعی")
+            graphic = scene.get("visual_type") in {"kinetic_type", "stat", "comparison", "steps", "chat", "map_route", "spec_callout", "before_after"}
+            kind = {"upload": "فایل شما", "library": "کتابخانه"}.get(scene.get("media_method"), "گرافیک و تایپوگرافی متحرک" if graphic else "ساخته‌شده با هوش مصنوعی")
             rows.append(f"تصویر ({kind}): {_short(visual, 170)}")
+        if scene.get("why_visual"):
+            rows.append(f"چرا این تصویر: {_short(scene['why_visual'], 140)}")
+        if scene.get("reference_trait"):
+            rows.append(f"از رفرنس: {_short(scene['reference_trait'], 100)}")
         blocks.append("\n".join(rows))
     cost = ("هزینه: هر کلیپ موشن جداگانه اعتبار مصرف می‌کند و رقم دقیق مشخص نیست." if motion_scenes
             else f"برآورد هزینهٔ تولید: ${estimate:.2f}" if estimate else "هزینهٔ مدل جدیدی برای تصویرها ثبت نشده است.")
+    if reference is not None and not reference.usable:
+        blocks.append("رفرنس تحلیل نشده بود؛ این سناریو از سبک رفرنس پیروی نمی‌کند. برای رعایت سبک، فایل ویدیوی رفرنس را بفرستید.")
     blocks.append(f"{cost}\nبا تأیید، تصویرها، نریشن و رندر نهایی ساخته می‌شود. هر صحنه را در تب Edit عوض کنید یا همین‌جا بگویید چه تغییری بدهم.")
     return "\n\n".join(blocks)
 
@@ -536,10 +623,13 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
     links = _urls(text)
     from urllib.parse import urlsplit
     reference_links = [link for link in links if (urlsplit(link).hostname or '').lower().removeprefix('www.') in {'instagram.com', 'youtu.be', 'youtube.com', 'tiktok.com'}]
-    if reference_links:
-        _emit(conversation_id, 'tool.progress', tool='inspect_url', message='لینک شبکهٔ اجتماعی رفرنس سبک است، نه صفحهٔ محصول. برای بررسی دقیق سبک، فایل رفرنس را آپلود کنید؛ فعلاً توضیحات شما مبنای برنامه است.')
-        text += '\nرفرنس شبکهٔ اجتماعی مشاهده نشده؛ درباره محتوای آن ادعا نکن. بر اساس موضوع و توضیحات کاربر برنامه پیشنهاد بده.'
-        links = [link for link in links if link not in reference_links]
+    links = [link for link in links if link not in reference_links]
+    reference_profile = None
+    reference_videos = [item for item in attachments if item["kind"] == "video"]
+    if reference_videos or reference_links:
+        reference_profile = _analyze_reference(conversation_id, user_key, reference_videos[0]["path"] if reference_videos else reference_links[0])
+        if not reference_profile.usable:
+            text += '\nرفرنس تحلیل نشد؛ درباره سبک یا محتوای آن ادعا نکن و رعایت آن را وانمود نکن.'
     if links:
         wiki = (urlsplit(links[0]).hostname or '').lower().endswith('.wikipedia.org')
         source_message = ('در حال خواندن مقالهٔ ویکی‌پدیا و بررسی متن و منابع تصویری مرتبط با موضوع هستم.' if wiki else
@@ -564,7 +654,8 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
         _emit(conversation_id,'tool.started',tool='inspect_visual_assets',message='دارم خود تصاویر، جزئیات قابل‌مشاهده و ارتباطشان با موضوع را بررسی می‌کنم.')
         catalog = inspect_assets([Path(p) for p in assets],text)
         _emit(conversation_id,'tool.completed',tool='inspect_visual_assets',message=f'{len(catalog)} تصویر برای طراحی صحنه تأیید شد.')
-    plan = _creative_direction(conversation_id, text, facts, assets, duration,catalog)
+    from creative.source import article_text
+    plan = _creative_direction(conversation_id, text, facts, assets, duration,catalog,reference_profile,article_text(page, 8000) if page else '')
     if plan:
         _assistant(conversation_id, user_key, _idea_message(plan))
     prompt = _motion_prompt(text, page, facts, duration, plan)
@@ -594,7 +685,7 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
     run(repo.update_project(project["id"], user_key, status="awaiting_confirmation"))
     _assistant(conversation_id, user_key, _scenario_message(
         result["storyboard"], duration, estimate=estimate,
-        motion_scenes=sum(s.get('motion_engine') == 'motion_so' for s in result['storyboard'].get('scenes', []))))
+        motion_scenes=sum(s.get('motion_engine') == 'motion_so' for s in result['storyboard'].get('scenes', [])), reference=reference_profile))
     if using_motion:
         count=sum(s.get('motion_engine')=='motion_so' for s in result['storyboard'].get('scenes',[]))
         _assistant(conversation_id,user_key,f'کلیپ موشن هوشمند برای {count} صحنه انتخاب شده است؛ هر کلیپ جداگانه اعتبار مصرف می‌کند. تأیید شما اجازه ارسال شرح صحنه و تصاویر مرجع همان صحنه به سرویس موشن را می‌دهد؛ هزینه دقیق از API قابل محاسبه نیست. نریشن و زیرنویس را EditorGPT می‌سازد. هیچ تلاش مجدد خودکاری انجام نمی‌شود.')
