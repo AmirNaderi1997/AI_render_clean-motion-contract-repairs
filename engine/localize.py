@@ -1108,28 +1108,10 @@ def _split_caption_text(text: str, count: int, weights: list[float]) -> list[str
     return [" ".join(words[points[i]:points[i + 1]]) for i in range(count)]
 
 
-def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration: float, *,
-                  font: str = "Ray ExtraBlack", font_file: Optional[Path] = None,
-                  fonts_dir: Optional[Path] = None, source_duration: Optional[float] = None,
-                  end_card_at: Optional[float] = None) -> str:
-    """Return the ASS text for the title, captions and the end card.
+def caption_windows(state: dict, placements: list[dict], end_all: float) -> list[tuple]:
+    """The Persian caption windows as (line, start, stop, source cover or None), in display order.
 
-    Caption timing follows the visible source cards. Each frame uses the
-    detected source ink rectangle, including its stroke, with no padding.
-    Persian glyphs keep their natural proportions and grow to fit the card.
-    Titles and the end card keep their independent layout.
-
-    With ``end_card_at`` the video cuts to the end card (see
-    ``render_end_card``) at that time: captions stop there and the card's
-    CTA box and text are added on top of it.
-    """
-    text_colour = _ass_colour(TEXT_COLOUR)
-    caption_style = BOX_STYLES.get(state.get("caption_box") or "", BOX_STYLES["black"])
-    title_style = BOX_STYLES.get(state.get("title_box") or "", caption_style)
-    radius = 13 * W / 1080
-    source_duration = source_duration if source_duration is not None else duration
-    end_all = max(0.01, (end_card_at if end_card_at is not None else duration) - 0.02)
-
+    Shared by the renderer (``plan_overlays``) and the project timeline, so both show the same captions."""
     # Persian lines and their on-screen windows (never overlapping).
     by_index = {p["i"]: p for p in placements}
     shown = [l for l in state.get("lines", []) if l.get("kind") != "lyrics" and l.get("fa")
@@ -1172,6 +1154,32 @@ def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration:
         gap = current[1] - previous[2]
         if (0 < gap <= CAPTION_GAP_HOLD and previous[3] is not None and current[3] is not None):
             windows[index] = (current[0], previous[2], current[2], current[3])
+    return windows
+
+
+def plan_overlays(state: dict, placements: list[dict], W: int, H: int, duration: float, *,
+                  font: str = "Ray ExtraBlack", font_file: Optional[Path] = None,
+                  fonts_dir: Optional[Path] = None, source_duration: Optional[float] = None,
+                  end_card_at: Optional[float] = None) -> str:
+    """Return the ASS text for the title, captions and the end card.
+
+    Caption timing follows the visible source cards. Each frame uses the
+    detected source ink rectangle, including its stroke, with no padding.
+    Persian glyphs keep their natural proportions and grow to fit the card.
+    Titles and the end card keep their independent layout.
+
+    With ``end_card_at`` the video cuts to the end card (see
+    ``render_end_card``) at that time: captions stop there and the card's
+    CTA box and text are added on top of it.
+    """
+    text_colour = _ass_colour(TEXT_COLOUR)
+    caption_style = BOX_STYLES.get(state.get("caption_box") or "", BOX_STYLES["black"])
+    title_style = BOX_STYLES.get(state.get("title_box") or "", caption_style)
+    radius = 13 * W / 1080
+    source_duration = source_duration if source_duration is not None else duration
+    end_all = max(0.01, (end_card_at if end_card_at is not None else duration) - 0.02)
+
+    windows = caption_windows(state, placements, end_all)
 
     # Large bold text (about 70-80 px at 1080 wide) in a box that hugs it.
     # The text grows (up to about 100 px at 1080 wide) to fill a box that
@@ -1381,6 +1389,23 @@ def render_emoji_png(emojis: str, out: Path, height: int) -> Optional[Path]:
 
 # --- render -----------------------------------------------------------------
 
+def output_timing(state: dict, placements: list[dict], source_duration: float) -> tuple[float, float]:
+    """(output duration, time the video cuts to the end card / source ends) for a Localize render.
+
+    Shared by the renderer and the project timeline."""
+    voice_end = max((p["end"] for p in placements), default=0.0) + 0.5
+    if state.get("end_card", True):
+        # Cut before the source's own CTA appears. The clean Persian end card
+        # replaces it, so English COMMENT / FREE DM text never remains visible.
+        cta_indices = {line["i"] for line in state.get("lines", []) if line.get("kind") == "cta"}
+        card_at = min((p["start"] for p in placements if p["i"] in cta_indices), default=source_duration)
+        card_at = min(source_duration, max(0.0, card_at))
+        card_seconds = float(state.get("end_card_seconds") or END_CARD_SECONDS)
+        return max(card_at + card_seconds, voice_end), card_at
+    # A Persian CTA can outrun the English one; hold the last frame for it.
+    return max(source_duration, voice_end), source_duration
+
+
 def audio_cut_time(lines: list[dict], placements: list[dict]) -> float:
     """Original audio plays until the first Persian clip (e.g. an intro song)."""
     if not placements:
@@ -1405,20 +1430,8 @@ def render(
         raise RuntimeError("Localized rendering needs an ffmpeg with libass (brew install ffmpeg-full)")
     src_w, src_h, source_duration = probe_video(video)
     W, H = output_size(src_w, src_h)
-    voice_end = max((p["end"] for p in placements), default=0.0) + 0.5
     end_card = state.get("end_card", True)
-    if end_card:
-        # Cut before the source's own CTA appears. The clean Persian end card
-        # replaces it, so English COMMENT / FREE DM text never remains visible.
-        cta_indices = {line["i"] for line in state.get("lines", []) if line.get("kind") == "cta"}
-        card_at = min((p["start"] for p in placements if p["i"] in cta_indices), default=source_duration)
-        card_at = min(source_duration, max(0.0, card_at))
-        card_seconds = float(state.get("end_card_seconds") or END_CARD_SECONDS)
-        duration = max(card_at + card_seconds, voice_end)
-    else:
-        # A Persian CTA can outrun the English one; hold the last frame for it.
-        duration = max(source_duration, voice_end)
-        card_at = source_duration
+    duration, card_at = output_timing(state, placements, source_duration)
     hold = max(0.0, duration - card_at)
     work_dir.mkdir(parents=True, exist_ok=True)
     ass = work_dir / "localized.ass"

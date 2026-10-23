@@ -137,7 +137,7 @@ async def open_legacy_project(request: Request, body: LegacyProjectOpen):
         title = str(legacy.get("title") or legacy.get("name") or body.title)
     else:
         job = get_job_for_request(request, body.external_ref)
-        title = str(job.raw_name or (job.plan or {}).get("title") or body.title)
+        title = str(job.raw_name or (job.plan_data or {}).get("title") or body.title)
 
     conversation = await repo.create_conversation(user_key, title)
     project = await repo.create_project(conversation["id"], user_key, body.engine, title,
@@ -579,26 +579,38 @@ async def get_profile_logo(request: Request):
 
 @router.get('/projects/{project_id}/document')
 async def project_document(request: Request, project_id: str):
-    """The project's timeline built from the exact render plan; read-only in this phase."""
+    """The project's timeline, built from the exact render plan of its engine; read-only except captions (talking)."""
     try: project = await repo.get_project(project_id, _user(request))
     except KeyError: raise HTTPException(404, 'project not found')
-    if project['engine'] != 'talking':
-        raise HTTPException(409, 'The timeline is available for talking-head projects first')
-    job = jobstore.get(project.get('external_ref'))
-    if not job: raise HTTPException(404, 'render job not found')
     from app import project_document as documents
-    from app import talking_reel
-    if not talking_reel.load(job.dir).get('analysis_ready'):
-        raise HTTPException(409, 'The timeline appears once the video has been analysed')
+    engine, ref = project['engine'], project.get('external_ref')
+    if not ref: raise HTTPException(409, 'The timeline appears once the project has started')
     try:
-        document = await asyncio.to_thread(documents.talking_document, job.dir, job.dir / 'raw' / job.raw_name)
+        if engine == 'talking':
+            job = jobstore.get(ref)
+            if not job: raise HTTPException(404, 'render job not found')
+            from app import talking_reel
+            if not talking_reel.load(job.dir).get('analysis_ready'):
+                raise HTTPException(409, 'The timeline appears once the video has been analysed')
+            document = await asyncio.to_thread(documents.talking_document, job.dir, job.dir / 'raw' / job.raw_name)
+            plan = project['state'].get('plan') or {}
+            versions = plan.get('versions') or []
+            latest = versions[-1]['n'] if versions else None
+            document['basis'] = {'plan_version': latest, 'rendered_version': plan.get('last_approved_n'),
+                                 'workflow': project['state'].get('workflow'),
+                                 'synced': latest is not None and latest == plan.get('last_approved_n')}
+        elif engine == 'localize':
+            document = await asyncio.to_thread(documents.localize_document, ref)
+        elif engine == 'motion':
+            job = jobstore.get(ref)
+            if not job: raise HTTPException(404, 'render job not found')
+            document = await asyncio.to_thread(documents.motion_document, job)
+        else:
+            raise HTTPException(409, 'No timeline for this kind of project')
+    except FileNotFoundError:
+        raise HTTPException(404, 'project files not found')
     except ValueError as exc:
         raise HTTPException(409, str(exc))
-    plan = project['state'].get('plan') or {}
-    versions = plan.get('versions') or []
-    document['basis'] = {'plan_version': versions[-1]['n'] if versions else None,
-                         'rendered_version': plan.get('last_approved_n'),
-                         'workflow': project['state'].get('workflow')}
     return document
 
 

@@ -207,14 +207,15 @@ export type PlanEdits = Partial<{
 export interface DocElement {
   id: string; type: string; start: number; end: number; label: string; text: string;
   source: { kind?: string; label?: string; file?: string | null; in?: number; out?: number };
-  props: Record<string, any>; edit: { via: ("plan" | "chat" | "timeline")[]; note: string };
+  props: Record<string, any>; edit: { via: ("plan" | "chat" | "timeline" | "advanced")[]; note: string };
 }
 export interface DocTrack { id: string; kind: string; label: string; elements: DocElement[] }
 export interface ProjectDocument {
   schema: number; engine: string; style: string; canvas: { width: number; height: number; fps: number };
   duration: number; content_duration: number; tracks: DocTrack[];
-  basis: { plan_version: number | null; rendered_version: number | null; workflow: string | null };
-  stale_edits: string[]; edit_count: number;
+  /** synced: true = the video was rendered from exactly this timeline; false = it was not; null = unknown. */
+  basis: { plan_version: number | null; rendered_version: number | null; workflow: string | null; synced: boolean | null };
+  stale_edits: string[]; edit_count: number; notes: string[];
 }
 export interface TimelineOp { id: string; text?: string; start?: number; end?: number; deleted?: boolean; reset?: boolean }
 export interface BrandProfile {

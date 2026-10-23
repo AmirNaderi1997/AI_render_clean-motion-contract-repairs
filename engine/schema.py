@@ -313,6 +313,21 @@ class EditPlan(BaseModel):
     def output_frames(self) -> int:
         return round(self.output_duration * self.canvas.fps)
 
+    def segment_frames(self) -> list[tuple[int, int]]:
+        """(start frame, frame count) of each segment on the output timeline.
+
+        A segment starts where the previous one ends, minus the frames the boundary transition shares
+        (a hard cut shares none). The renderer and the project timeline both use this."""
+        overlap = {(t.from_segment_id, t.to_segment_id): t.duration_frames for t in self.transitions}
+        frames, cursor = [], 0
+        for index, segment in enumerate(self.segments):
+            count = round(segment.duration * self.canvas.fps)
+            frames.append((cursor, count))
+            cursor += count
+            if index < len(self.segments) - 1:
+                cursor -= overlap.get((segment.id, self.segments[index + 1].id), 0)
+        return frames
+
 
 # Alias for callers preferring the shorter name.
 Plan = EditPlan

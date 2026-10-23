@@ -124,24 +124,31 @@ export function advancedEditorUrl(project?: StudioProject): string {
   return project.engine === "talking" ? `/talking?job=${project.external_ref}` : project.engine === "localize" ? `/localize?project=${project.external_ref}` : project.external_ref ? `/jobs/${project.external_ref}/render` : "";
 }
 
+/** Which engines have a project timeline: talking once its plan exists, the others once the project has started. */
+export function hasTimeline(project?: StudioProject): boolean {
+  if (!project) return false;
+  return project.engine === "talking" ? hasPlan(project) && Boolean(currentVersion(project)) : Boolean(project.external_ref);
+}
+
 function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () => void }) {
-  const [view, setView] = React.useState<"plan" | "timeline">("plan");
+  const [view, setView] = React.useState<"main" | "timeline">("main");
   if (!project) return <Empty icon="advanced" title="Nothing to edit yet" text="Once EditorGPT creates a project, the controls that apply to it appear here."/>;
   const advanced = advancedEditorUrl(project);
-  // The timeline exists once a plan does: it is built from the same analysis the plan describes.
-  const timeline = hasPlan(project) && Boolean(currentVersion(project));
-  const shown = timeline ? view : "plan";
+  const timeline = hasTimeline(project);
+  const shown = timeline ? view : "main";
   return <div className="ws-edit">
     {timeline ? <div className="segmented ws-edit-views" role="group" aria-label="نمای ویرایش" dir="rtl">
-      <button type="button" aria-pressed={shown === "plan"} onClick={() => setView("plan")}>برنامه</button>
+      <button type="button" aria-pressed={shown === "main"} onClick={() => setView("main")}>{hasPlan(project) ? "برنامه" : "ویرایش"}</button>
       <button type="button" aria-pressed={shown === "timeline"} onClick={() => setView("timeline")}>تایم‌لاین</button>
     </div> : null}
-    {shown === "timeline" ? <TimelineView project={project} onChanged={onSaved}/>
-      : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved}/>
+    {shown === "timeline" ? <TimelineView project={project} onChanged={onSaved} currentOutput={projectOutputUrl(project)}/> : null}
+    {shown === "timeline" ? null : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved}/>
       : <header><h2>Refine this video</h2><p>Ask for caption, pacing, colour or audio changes in the chat. Controls appear here when the current engine supports them.</p></header>}
+    {shown === "timeline" ? null : <>
     {project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}
     {project.external_ref && project.engine!=='localize' ? <MotionScenes jobId={project.external_ref} onSaved={onSaved}/> : null}
-    {advanced
+    </>}
+    {shown === "timeline" ? null : advanced
       ? <NavLink className="adv-link" to={advanced}><Icon name="advanced" size={20}/><span><b>Advanced editor</b><small>Timeline, audio and detailed controls</small></span><Icon name="chevron" size={18}/></NavLink>
       : <p className="ws-hint">Ask for a change in the chat and a new version is created without overwriting this one.</p>}
   </div>;

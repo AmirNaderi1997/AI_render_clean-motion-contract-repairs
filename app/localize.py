@@ -442,6 +442,8 @@ def _render(project_id: str) -> None:
     state = load(project_id)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",
                  placements=placements)
+    from app.project_document import localize_fingerprint
+    state["rendered_fingerprint"] = localize_fingerprint(state)   # lets the timeline tell whether the video is current
     save(state)
 
 

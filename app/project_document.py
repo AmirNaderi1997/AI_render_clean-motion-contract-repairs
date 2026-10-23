@@ -196,3 +196,222 @@ def talking_document(job_dir: Path, video: Path) -> dict:
         "tracks": [{"id": key, "kind": TRACKS[key][0], "label": TRACKS[key][1], "elements": sorted(items, key=lambda e: e["start"])}
                    for key, items in tracks.items() if items],
     }
+
+
+# -- Localize -----------------------------------------------------------------------------------
+
+def localize_fingerprint(state: dict) -> str:
+    """Hash of everything that changes a Localize render's picture or sound."""
+    import hashlib
+    import json
+    relevant = {
+        "lines": [(l.get("i"), l.get("start"), l.get("end"), l.get("fa"), l.get("kind"), len(l.get("covers") or []))
+                  for l in state.get("lines") or []],
+        "placements": [(p.get("i"), p.get("start"), p.get("end"), p.get("tempo")) for p in state.get("placements") or []],
+        **{k: state.get(k) for k in ("title", "title_layout", "title_emojis", "title_box", "caption_box", "end_card",
+                                      "end_card_seconds", "cta_number", "music", "voice_provider")},
+    }
+    return hashlib.sha256(json.dumps(relevant, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def localize_document(project_id: str) -> dict:
+    """Timeline of a Localize project from the same functions the renderer uses (engine.localize)."""
+    from app import localize as store
+    from engine import localize as media
+
+    state = store.load(project_id)
+    if not state.get("lines"):
+        raise ValueError("The timeline appears once the video has been analysed")
+    root = store._dir(project_id)
+    _w, _h, source_duration = media.probe_video(root / state["source"])
+    placements = state.get("placements") or []
+    end_card = state.get("end_card", True)
+    duration, card_at = media.output_timing(state, placements, source_duration)
+    end_all = max(0.01, (card_at if end_card else duration) - 0.02)
+    tracks: dict[str, list[dict]] = {key: [] for key in LOCALIZE_TRACKS}
+    names = {"video": ("video", "ویدیوی اصلی"), "titles": ("title", "عنوان"), "captions": ("caption", "زیرنویس فارسی"),
+             "voice": ("audio", "دوبله فارسی"), "audio": ("audio", "صدای اصلی"), "music": ("music", "موسیقی"),
+             "outro": ("video", "پایان")}
+
+    tracks["video"].append(_element("source", "clip", 0, card_at, "ویدیوی منبع",
+                                    source={"kind": "upload", "label": state.get("name") or "ویدیو", "in": 0.0, "out": _r(card_at)},
+                                    via=["advanced"], note="ویدیوی منبع بدون برش پخش می‌شود."))
+    if end_card:
+        number = str(state.get("cta_number") or "").strip() or "31"
+        tracks["outro"].append(_element("end_card", "cta", card_at, duration, "کارت پایانی",
+                                        text=media.END_CARD_LINES[0].format(n=number), props={"cta_number": number},
+                                        via=["advanced"], note="شمارهٔ کارت پایانی را در ویرایشگر Localize عوض کنید."))
+    elif duration > source_duration + 0.05:
+        tracks["outro"].append(_element("hold", "clip", source_duration, duration, "ثابت‌ماندن آخرین فریم",
+                                        note="تا پایان دوبلهٔ فارسی آخرین فریم نگه داشته می‌شود."))
+
+    title = (state.get("title") or "").strip()
+    layout = state.get("title_layout") or {}
+    if title:
+        tracks["titles"].append(_element("title", "title", layout.get("start", 0.0), layout.get("end", min(duration, 6.0)), "عنوان",
+                                         text=title + (" " + state["title_emojis"] if state.get("title_emojis") else ""),
+                                         via=["advanced", "chat"]))
+
+    seen: dict[str, int] = {}
+    for line, start, stop, cover in media.caption_windows(state, placements, end_all):
+        key = f"caption:l{line['i']}"
+        n = seen.get(key, 0); seen[key] = n + 1
+        tracks["captions"].append(_element(
+            f"{key}:{n}", "caption", start, stop, f"خط {line['i'] + 1}", text=line["fa"],
+            props={"line": line["i"], "english": line.get("en", ""), "covers_english": cover is not None, "kind": line.get("kind")},
+            via=["advanced", "chat"], note="ترجمه را در ویرایشگر Localize یا با چت اصلاح کنید؛ متن انگلیسی منبع: «" + str(line.get("en", ""))[:80] + "»"))
+
+    for placed in placements:
+        line = next((l for l in state["lines"] if l["i"] == placed["i"]), {})
+        tracks["voice"].append(_element(
+            f"voice:l{placed['i']}", "audio", placed["start"], placed["end"], f"دوبلهٔ خط {placed['i'] + 1}", text=line.get("fa", ""),
+            props={"tempo": placed.get("tempo"), "line": placed["i"]}, via=["advanced"],
+            note="صدای هر خط جدا ساخته می‌شود؛ بازسازی یک جمله ممکن است هزینهٔ صدا داشته باشد."))
+    if placements:
+        cut = media.audio_cut_time(state["lines"], placements)
+        if cut > 0.05:
+            tracks["audio"].append(_element("original_audio", "audio", 0, cut, "صدای اصلی تا شروع دوبله",
+                                            source={"kind": "upload", "label": state.get("name") or "ویدیو"}))
+    from app.localize import resolve_music
+    music = resolve_music(state.get("music"))
+    if music:
+        tracks["music"].append(_element("music", "music", 0, duration, music.stem.replace("_", " "),
+                                        source={"kind": "library", "label": music.name}, via=["advanced"]))
+
+    output = state.get("output")
+    fingerprint = localize_fingerprint(state)
+    rendered = state.get("rendered_fingerprint")
+    return {
+        "schema": SCHEMA, "engine": "localize", "style": None,
+        "canvas": {"width": media.output_size(_w, _h)[0], "height": media.output_size(_w, _h)[1], "fps": 30},
+        "duration": _r(duration), "content_duration": _r(card_at),
+        "notes": ([] if placements else ["صدای دوبله بعد از ساخت صدا به تایم‌لاین اضافه می‌شود."]),
+        "stale_edits": [], "edit_count": 0,
+        # None = unknown (rendered before this was recorded): the player is not claimed to match.
+        "basis": {"plan_version": None, "rendered_version": None, "workflow": state.get("status"),
+                  "synced": (rendered == fingerprint) if (output and rendered) else None},
+        "tracks": [{"id": key, "kind": names[key][0], "label": names[key][1], "elements": sorted(items, key=lambda e: e["start"])}
+                   for key, items in tracks.items() if items],
+    }
+
+
+LOCALIZE_TRACKS = ("video", "titles", "captions", "voice", "audio", "music", "outro")
+
+
+# -- Motion (generic Edit Plan engine) ----------------------------------------------------------
+
+MOTION_TRACKS = {"video": ("video", "صحنه‌ها"), "panel": ("broll", "B-roll"), "titles": ("title", "هوک و عنوان"),
+                 "captions": ("caption", "زیرنویس"), "graphics": ("motion", "گذارها"), "voice": ("audio", "نریشن"),
+                 "sfx": ("audio", "افکت صوتی"), "music": ("music", "موسیقی")}
+CAPTION_STYLE = {"normal": "معمولی", "emphasis": "تأکیدی", "cta": "دعوت به اقدام", "cover": "تیتر ابتدایی"}
+
+
+def _file_seconds(path: str) -> float:
+    try:
+        from engine.probe import probe_duration
+        return float(probe_duration(Path(path))) if Path(path).is_file() else 0.0
+    except Exception:
+        return 0.0
+
+
+def motion_document(job) -> dict:
+    """Timeline of a Motion project from its Edit Plan (what the MLT renderer consumes), or, before a render
+    plan exists, from the approved storyboard (clearly marked as a plan, not a render)."""
+    from app import jobs as jobstore
+    from engine.schema import validate_plan
+
+    tracks: dict[str, list[dict]] = {key: [] for key in MOTION_TRACKS}
+    storyboard_path = Path(job.dir) / "storyboard.json"
+    scenes = []
+    if storyboard_path.is_file():
+        import json
+        scenes = json.loads(storyboard_path.read_text()).get("scenes") or []
+    try:
+        data = jobstore.load_plan(job)
+    except FileNotFoundError:
+        data = None
+    plan = None
+    if data is not None:
+        plan, errors = validate_plan(data, base_dir=Path(job.dir), check_media=False)
+        if plan is None:
+            raise ValueError("The saved plan is not valid: " + "; ".join(errors[:2]))
+
+    if plan is None:
+        if not scenes:
+            raise ValueError("The timeline appears once the storyboard or plan exists")
+        cursor = 0.0
+        for index, scene in enumerate(scenes):
+            length = float(scene.get("duration_s") or 0)
+            tracks["video"].append(_element(
+                f"scene:{index}", "clip", cursor, cursor + length, f"صحنه {index + 1}", text=scene.get("text_overlay") or "",
+                source={"kind": scene.get("media_method") or "card", "label": scene.get("media_method") or ""},
+                props={"description": scene.get("description", ""), "planned": True}, via=["chat"],
+                note="این برنامهٔ استوری‌بورد است؛ بعد از تولید دارایی‌ها به برنامهٔ رندر تبدیل می‌شود."))
+            if scene.get("narration_text"):
+                tracks["voice"].append(_element(f"narration:{index}", "audio", cursor, cursor + length, f"نریشن صحنه {index + 1}",
+                                                text=scene["narration_text"], props={"planned": True}, via=["chat"]))
+            cursor += length
+        duration, fps = cursor, 30
+        notes = ["این تایم‌لاین از استوری‌بورد ساخته شده؛ هنوز برنامهٔ رندر وجود ندارد."]
+        canvas = {"width": 1080, "height": 1920, "fps": 30}
+    else:
+        fps = plan.canvas.fps
+        placed = plan.segment_frames()
+        effects = {e.segment_id: e.type for e in plan.visual_effects}
+        for index, (segment, (start, count)) in enumerate(zip(plan.segments, placed)):
+            scene = scenes[index] if index < len(scenes) else {}
+            tracks["video"].append(_element(
+                f"segment:{segment.id}", "clip", start / fps, (start + count) / fps, f"صحنه {index + 1}",
+                text=scene.get("text_overlay") or "",
+                source={"kind": "upload", "label": Path(plan.source).name, "in": _r(segment.in_), "out": _r(segment.out)},
+                props={"effect": effects.get(segment.id), "zoom": [segment.zoom.from_, segment.zoom.to]}, via=["chat"],
+                note="جلوهٔ حرکتی و برش این صحنه را در چت عوض کنید."))
+        for transition in plan.transitions:
+            if transition.duration_frames <= 0:
+                continue
+            index = next(i for i, s in enumerate(plan.segments) if s.id == transition.to_segment_id)
+            tracks["graphics"].append(_element(
+                f"transition:{transition.from_segment_id}:{transition.to_segment_id}", "transition",
+                placed[index][0] / fps, (placed[index][0] + transition.duration_frames) / fps,
+                {"crossfade": "محو", "directional": "کشویی", "zoom": "زوم"}.get(transition.type, transition.type),
+                props={"type": transition.type, "frames": transition.duration_frames}, via=["chat"]))
+        duration = plan.output_duration
+        for number, caption in enumerate(plan.captions):
+            tracks["captions"].append(_element(
+                f"caption:{number}", "caption", caption.start, caption.end, CAPTION_STYLE.get(caption.style, caption.style),
+                text=caption.text, props={"style": caption.style, "position": caption.position,
+                                          "highlight": caption.highlighted_word, "locked": caption.locked},
+                via=["chat"], note="متن زیرنویس را با چت اصلاح کنید."))
+        if plan.poster and plan.poster.show_in_video:
+            tracks["titles"].append(_element("poster", "title", 0, duration, "هوک ثابت", text=plan.poster.text,
+                                             props={"persistent": True}, via=["chat"]))
+        if plan.cover:
+            tracks["titles"].append(_element("cover", "title", plan.cover.start, plan.cover.end, "تیتر ابتدایی",
+                                             text=plan.cover.text, via=["chat"]))
+        for number, clip in enumerate(plan.broll):
+            tracks["panel"].append(_element(f"broll:{number}", "picture", clip.at, clip.at + clip.duration, f"B-roll {number + 1}",
+                                            source={"kind": "upload", "label": Path(clip.file).name, "file": Path(clip.file).name},
+                                            props={"query": clip.query}, via=["chat"]))
+        for number, sound in enumerate(plan.sfx):
+            name = Path(sound.file).name
+            length = _file_seconds(sound.file) if Path(sound.file).is_absolute() else _file_seconds(str(Path(job.dir) / sound.file))
+            track = "voice" if name.startswith("narration") else "sfx"
+            tracks[track].append(_element(
+                f"{track}:{number}", "audio", sound.at, min(duration, sound.at + (length or 0.5)),
+                "نریشن" if track == "voice" else name, source={"kind": "generated" if track == "voice" else "library", "label": name},
+                props={"volume_db": sound.volume_db}, via=["chat"]))
+        if plan.music:
+            tracks["music"].append(_element("music", "music", 0, duration, Path(plan.music.file).stem.replace("_", " "),
+                                            source={"kind": "library", "label": Path(plan.music.file).name},
+                                            props={"volume_db": plan.music.volume_db, "ducked": len(plan.music.duck)}, via=["chat"]))
+        notes = []
+        canvas = {"width": plan.canvas.width, "height": plan.canvas.height, "fps": fps}
+
+    return {
+        "schema": SCHEMA, "engine": "motion", "style": None, "canvas": canvas,
+        "duration": _r(duration), "content_duration": _r(duration), "notes": notes, "stale_edits": [], "edit_count": 0,
+        # No render fingerprint is stored for this engine yet, so the player is not claimed to match.
+        "basis": {"plan_version": None, "rendered_version": None, "workflow": job.render.status, "synced": None},
+        "tracks": [{"id": key, "kind": MOTION_TRACKS[key][0], "label": MOTION_TRACKS[key][1],
+                    "elements": sorted(items, key=lambda e: e["start"])} for key, items in tracks.items() if items],
+    }

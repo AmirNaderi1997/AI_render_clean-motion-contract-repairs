@@ -5,7 +5,7 @@ export const TYPE_LABEL: Record<string, string> = {
   clip: "برش تصویر", picture: "تصویر بالا", title: "عنوان", caption: "زیرنویس", card: "کارت متنی", chips: "فهرست",
   moment: "لحظهٔ کلیدی", flash: "فلش نور", motion: "صحنهٔ موشن", audio: "صدا", music: "موسیقی", cta: "دعوت به اقدام", logo: "لوگو",
 };
-export const VIA_LABEL: Record<string, string> = { plan: "برنامه (تب Edit)", chat: "چت", timeline: "همین‌جا روی تایم‌لاین" };
+export const VIA_LABEL: Record<string, string> = { plan: "برنامه (تب Edit)", chat: "چت", timeline: "همین‌جا روی تایم‌لاین", advanced: "ویرایشگر پیشرفته" };
 
 /** "0:05.2" style time, tenths only when useful. */
 export function clock(seconds: number): string {
@@ -40,10 +40,17 @@ export function findElement(doc: ProjectDocument | null, id: string | null): Doc
   return undefined;
 }
 
-/** The video under the timeline shows this document only when it was rendered from the same plan version. */
+/** The video under the timeline is known to show this document only when the server says so. */
 export function playerMatches(doc: ProjectDocument): boolean {
-  const { plan_version, rendered_version } = doc.basis;
-  return plan_version != null && plan_version === rendered_version;
+  return doc.basis.synced === true;
+}
+
+/** What to tell the user about the video under the timeline. */
+export type SyncNotice = "none" | "no-video" | "different-version" | "unknown";
+export function syncNotice(doc: ProjectDocument, hasVideo: boolean): SyncNotice {
+  if (!hasVideo) return "no-video";
+  if (doc.basis.synced === true) return "none";
+  return doc.basis.synced === false ? "different-version" : "unknown";
 }
 
 /** What the user typed for a caption. Times are text so a half-typed number does not jump around. */

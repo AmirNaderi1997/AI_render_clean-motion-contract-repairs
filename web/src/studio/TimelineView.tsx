@@ -3,7 +3,7 @@ import { api, DocElement, ProjectDocument, StudioProject } from "../api";
 import { currentVersion, planPhase } from "./plan";
 import { AuthenticatedMedia } from "../AuthenticatedMedia";
 import { friendlyError } from "../ui";
-import { CaptionForm, TYPE_LABEL, VIA_LABEL, captionForm, captionOp, captionProblem, clock, findElement, playerMatches, stackRows, ticks } from "./timeline";
+import { CaptionForm, TYPE_LABEL, VIA_LABEL, captionForm, captionOp, captionProblem, clock, findElement, playerMatches, stackRows, syncNotice, ticks } from "./timeline";
 
 const HEADER = 92;   // px, sticky track labels
 
@@ -50,7 +50,7 @@ function CaptionEditor({ project, element, duration, onChanged }: { project: Stu
  * The project timeline: every element of the video on its track, built by the backend from the exact
  * render plan. Captions can be edited here; every other element says how it can be changed today.
  */
-export function TimelineView({ project, onChanged }: { project: StudioProject; onChanged: () => void }) {
+export function TimelineView({ project, onChanged, currentOutput }: { project: StudioProject; onChanged: () => void; currentOutput?: string }) {
   const [doc, setDoc] = React.useState<ProjectDocument | null>(null);
   const [error, setError] = React.useState("");
   const [selected, setSelected] = React.useState<string | null>(null);
@@ -66,14 +66,17 @@ export function TimelineView({ project, onChanged }: { project: StudioProject; o
     api.studioDocument(project.id).then(value => { if (active) setDoc(value); })
       .catch(e => { if (active) { setDoc(null); setError(friendlyError(e, "load the timeline")); } });
     // The newest rendered file, listed directly: a plan version awaiting approval does not hide it.
-    api.studioOutputs(project.id).then(items => { if (active) setLatestFile(items[items.length - 1]?.file ?? null); }).catch(() => undefined);
+    if (project.engine === "talking") api.studioOutputs(project.id).then(items => { if (active) setLatestFile(items[items.length - 1]?.file ?? null); }).catch(() => undefined);
     return () => { active = false; };
   }, [project.id, project.current_version, project.updated_at]);
 
   if (error) return <div className="notice" role="status" dir="rtl">{error}</div>;
   if (!doc) return <div className="tl-loading" role="status"><span className="spinner"/>در حال ساخت تایم‌لاین…</div>;
 
-  const output = latestFile ? `${api.studioOutputUrl(project.id)}?file=${encodeURIComponent(latestFile)}` : undefined;
+  // Talking keeps every render as a numbered file; the other engines expose their latest export.
+  const output = project.engine === "talking"
+    ? (latestFile ? `${api.studioOutputUrl(project.id)}?file=${encodeURIComponent(latestFile)}` : undefined) : currentOutput;
+  const notice = syncNotice(doc, Boolean(output));
   const synced = Boolean(output) && playerMatches(doc);
   const width = Math.max(1, doc.duration * zoom);
   const element = findElement(doc, selected);
@@ -92,10 +95,12 @@ export function TimelineView({ project, onChanged }: { project: StudioProject; o
       <AuthenticatedMedia as="video" ref={videoRef} controls playsInline preload="metadata" src={output}
         onTimeUpdate={(event: React.SyntheticEvent<HTMLVideoElement>) => { if (synced) setTime(event.currentTarget.currentTime); }}/>
     </div> : null}
-    {!output ? <div className="notice" role="status">ویدیو هنوز رندر نشده؛ تایم‌لاین نشان می‌دهد بعد از تأیید برنامه چه چیزی ساخته می‌شود.</div>
-      : !synced ? <div className="notice" data-tone="warning" role="status">
+    {notice === "no-video" ? <div className="notice" role="status">ویدیو هنوز رندر نشده؛ تایم‌لاین نشان می‌دهد چه چیزی ساخته می‌شود.</div>
+      : notice === "different-version" ? <div className="notice" data-tone="warning" role="status">
           این تایم‌لاین نسخهٔ {doc.basis.plan_version ?? "فعلی"} برنامه است{doc.basis.rendered_version ? `؛ ویدیوی بالا از نسخهٔ ${doc.basis.rendered_version} رندر شده` : "؛ ویدیوی بالا از نسخهٔ دیگری رندر شده"} و زمان‌ها ممکن است با آن یکی نباشند.
-        </div> : null}
+        </div>
+      : notice === "unknown" ? <div className="notice" role="status">ویدیوی بالا آخرین خروجی است. این تایم‌لاین از وضعیت فعلی پروژه ساخته شده و مطمئن نیستیم همان را رندر کرده باشد، پس با کلیک روی تایم‌لاین ویدیو جابه‌جا نمی‌شود.</div> : null}
+    {doc.notes?.map(note => <div key={note} className="notice" role="status">{note}</div>)}
 
     <div className="tl-toolbar">
       <span className="tl-time">{clock(time)} / {clock(doc.duration)}</span>

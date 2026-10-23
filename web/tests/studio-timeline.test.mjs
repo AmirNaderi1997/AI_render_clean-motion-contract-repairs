@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clock, ticks, stackRows, playerMatches } from "../src/studio/timeline.ts";
+import { clock, ticks, stackRows, playerMatches, syncNotice } from "../src/studio/timeline.ts";
 
 const el = (id, start, end) => ({ id, type: "caption", start, end, label: "", text: "", source: {}, props: {}, edit: { via: [], note: "" } });
 
@@ -22,11 +22,17 @@ test("overlapping elements go to separate rows, touching ones share a row", () =
   assert.deepEqual(rows.map(row => row.map(item => item.id)), [["a", "c"], ["b"]]);
 });
 
-test("the player is synced only to the plan version it was rendered from", () => {
-  assert.equal(playerMatches({ basis: { plan_version: 3, rendered_version: 3 } }), true);
-  assert.equal(playerMatches({ basis: { plan_version: 4, rendered_version: 3 } }), false);
-  assert.equal(playerMatches({ basis: { plan_version: 1, rendered_version: null } }), false);
+test("the player is synced only when the server says the video was rendered from this timeline", () => {
+  const doc = synced => ({ basis: { plan_version: 3, rendered_version: 3, workflow: null, synced } });
+  assert.equal(playerMatches(doc(true)), true);
+  assert.equal(playerMatches(doc(false)), false);
+  assert.equal(playerMatches(doc(null)), false);   // unknown is never presented as a match
+  assert.equal(syncNotice(doc(true), true), "none");
+  assert.equal(syncNotice(doc(false), true), "different-version");
+  assert.equal(syncNotice(doc(null), true), "unknown");
+  assert.equal(syncNotice(doc(true), false), "no-video");
 });
+
 
 import { captionForm, captionOp, captionProblem } from "../src/studio/timeline.ts";
 
