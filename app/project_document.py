@@ -299,6 +299,9 @@ def localize_fingerprint(state: dict) -> str:
     return hashlib.sha256(json.dumps(relevant, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
+_LOCALIZE_FRAMES: dict = {}
+
+
 def _localize_frames(state: dict, windows: list[tuple], placements: list[dict], w: int, h: int, duration: float,
                      source_duration: float, card_at: float | None) -> dict[int, dict]:
     """Where each Localize caption sits on the frame, read from the overlay the renderer itself lays out (no looks).
@@ -313,12 +316,18 @@ def _localize_frames(state: dict, windows: list[tuple], placements: list[dict], 
         return {}
     fonts_dir = store.PROJECT_ROOT / "presets" / "fonts"
     style = store.render_style({**state, "caption_looks": {}}, store.next_version(state["id"]))
-    raw: dict[int, dict] = {}
-    try:
-        media.plan_overlays(style, placements, w, h, duration, font_file=fonts_dir / "RAY-EXTRABLACK.TTF", fonts_dir=fonts_dir,
-                            source_duration=source_duration, end_card_at=card_at, frames=raw)
-    except Exception:
-        return {}
+    key = (state["id"], localize_fingerprint(style), style["caption_box"], duration, source_duration)
+    raw = _LOCALIZE_FRAMES.get(key)
+    if raw is None:                       # laying the captions out measures every line with libass: seconds, so remembered
+        raw = {}
+        try:
+            media.plan_overlays(style, placements, w, h, duration, font_file=fonts_dir / "RAY-EXTRABLACK.TTF", fonts_dir=fonts_dir,
+                                source_duration=source_duration, end_card_at=card_at, frames=raw)
+        except Exception:
+            return {}
+        if len(_LOCALIZE_FRAMES) >= 8:
+            _LOCALIZE_FRAMES.pop(next(iter(_LOCALIZE_FRAMES)))
+        _LOCALIZE_FRAMES[key] = raw
     looks = state.get("caption_looks") or {}
     ids = media.caption_ids(windows)
     out = {}
@@ -376,7 +385,7 @@ def localize_document(project_id: str) -> dict:
     windows = media.caption_windows({**state, "caption_looks": {}}, placements, end_all)   # the AI's captions, before any look
     ids = media.caption_ids(windows)
     looks = state.get("caption_looks") or {}
-    frames = _localize_frames(state, windows, placements, _w, _h, duration, source_duration, card_at if end_card else None)
+    frames = _localize_frames(state, windows, placements, *media.output_size(_w, _h), duration, source_duration, card_at if end_card else None)
     for index, (element_id, (line, start, stop, cover)) in enumerate(zip(ids, windows)):
         look = looks.get(element_id) or {}
         frame = frames.get(index)
