@@ -205,7 +205,7 @@ def _context(brief: ContentBrief, concept: Concept, reference: ReferenceProfile 
 
 def write(brief, concept, reference, source, caps, duration_s, *, outro_s=0.0, used=None) -> ScriptDraft:
     return llm.ask(ScriptDraft, WRITER, _context(brief, concept, reference, source, caps, duration_s, outro_s),
-                   route=llm.DIRECTOR_ROUTE, tokens=7000, used=used)
+                   route=llm.DIRECTOR_ROUTE, tokens=5500, attempts=4, used=used)
 
 
 def critique(draft: ScriptDraft, brief, concept, reference, measured, *, used=None) -> ScriptReview:
@@ -221,7 +221,7 @@ def rewrite(previous: ScriptDraft, review: ScriptReview, brief, concept, referen
     request = (_context(brief, concept, reference, source, caps, duration_s, outro_s) +
                f"\n\nPrevious script:\n{llm.dumps(previous.model_dump())}\n\nCritic's must_fix:\n{llm.dumps(review.must_fix)}\n"
                f"Structural changes requested: {review.change or ['none']}\nMeasured: {llm.dumps({k: measured[k] for k in ('line_seconds', 'total_speech_s', 'budget_s')})}")
-    return llm.ask(ScriptDraft, WRITER + "\n\n" + REWRITE, request, route=llm.DIRECTOR_ROUTE, tokens=7000, used=used)
+    return llm.ask(ScriptDraft, WRITER + "\n\n" + REWRITE, request, route=llm.DIRECTOR_ROUTE, tokens=5500, attempts=4, used=used)
 
 
 def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, duration_s: float, reference: ReferenceProfile | None = None,
