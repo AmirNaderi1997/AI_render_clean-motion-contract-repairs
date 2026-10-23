@@ -20,7 +20,7 @@ def fast_reference(tmp_path_factory):
     """Eight half-second shots in red/white: a fast, high-contrast reference."""
     folder = tmp_path_factory.mktemp("fid")
     video = make(folder / "ref.mp4", [("red", 0.5), ("white", 0.5)] * 4)
-    return reference.analyze(video, folder, describe=lambda sheet, profile: {"typography": "درشت"}), folder
+    return reference.analyze(video, folder, describe=lambda sheet, profile: {"typography": "درشت"}, describe_frames=lambda sheet: {}), folder
 
 
 def test_a_slow_output_is_flagged_against_a_fast_reference(fast_reference, tmp_path):

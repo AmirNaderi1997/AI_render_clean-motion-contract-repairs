@@ -37,11 +37,11 @@ Project `70c41b10…` (a 60-second documentary from a Wikipedia article), job `1
 
 ## Reference analysis (`creative/reference.py`)
 
-A reference video (attachment, or a link if `yt-dlp` is installed) is analysed for real: ffmpeg scene detection (shot lengths, cuts per second), dominant colours from sampled frames, and a vision description of typography, composition, motion language, transitions, density, hook and narrative. Sound is only measured. If the link cannot be fetched (Instagram/TikTok normally need a login, and `yt-dlp` is not installed on the server) the profile is `unavailable` with a reason, the user is told to upload the file, and the approval message states that the reference was **not** followed. A default style is never substituted silently.
+A reference video (attachment, or a social link fetched through the relay) is analysed for real, frame by frame (a table picture and a per-frame text list are posted in the chat): ffmpeg scene detection (shot lengths, cuts per second), dominant colours from sampled frames, and a vision description of typography, composition, motion language, transitions, density, hook and narrative. Sound is only measured. If the link cannot be fetched (Instagram/TikTok normally need a login, and `yt-dlp` is not installed on the server) the profile is `unavailable` with a reason, the user is told to upload the file, and the approval message states that the reference was **not** followed. A default style is never substituted silently.
 
 ## Not done / limits
 
-- Instagram/TikTok links cannot be downloaded without `yt-dlp` and an account session; the honest fallback is "upload the file".
+- Social links are fetched by the Vercel relay (`deploy/social-relay`, yt-dlp inside). TikTok works as is; YouTube, Vimeo and Instagram need a logged-in cookie session on the relay (see its README); without one the user is asked to upload the file.
 - The vision description depends on the provider; when it times out the profile holds only measured pacing and colour and says so.
 - Choosing another angle or hook from the approval message is not a one-click action yet: edits go through the scene editor or the chat revision flow.
 - Rendering a *draft preview* before the final render (spec step 9–11) is not added; fidelity runs on the finished candidate output.
