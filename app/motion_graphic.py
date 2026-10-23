@@ -88,12 +88,12 @@ def _assistant(conversation_id: str, user_key: str, text: str) -> None:
 
 # ── records ──────────────────────────────────────────────────────────────────
 
-def create(conversation_id: str, user_key: str, request: str, context: str = "") -> dict:
+def create(conversation_id: str, user_key: str, request: str, context: str = "", style: str = "") -> dict:
     motion_id = uuid.uuid4().hex[:12]
     directory = folder(user_key, conversation_id, motion_id)
     directory.mkdir(parents=True, exist_ok=True)
     record = {"id": motion_id, "conversation_id": conversation_id, "user_key": user_key, "request": request.strip()[:4000],
-              "context": context[:8000], "status": "queued", "stage": "queued", "progress": 0, "message": "", "questions": [],
+              "context": context[:9000], "style": style[:2000], "status": "queued", "stage": "queued", "progress": 0, "message": "", "questions": [],
               "versions": [], "current": 0, "error": None, "created_at": time.time(), "pending_change": None, "answers": [], "log": []}
     return save(directory, record)
 
@@ -248,7 +248,7 @@ def _run(directory: Path, change: str) -> None:
     if previous is not None:
         _progress(directory, "writing", 8, "دارم تغییر را روی آخرین نسخه اعمال می‌کنم.", stage="writing")
         _note(directory, "revise", f"دارم این تغییر را اعمال می‌کنم: «{change[:80]}»")
-        page = mg.author(brief, context=record.get("context", ""), previous=previous, change=change, used=used)
+        page = mg.author(brief, context=record.get("context", ""), previous=previous, change=change, style=record.get("style", ""), used=used)
         if page.asks():
             _ask(directory, record, page.questions, change)
             return
@@ -304,7 +304,8 @@ def _plan_and_build(directory: Path, record: dict, brief: str, used: list[str], 
     from creative import motion_graphic as mg
     cid, user, key = record["conversation_id"], record["user_key"], record["id"]
     context = record.get("context", "")
-    fingerprint = _fingerprint(brief, context)
+    style = record.get("style", "")
+    fingerprint = _fingerprint(brief, context, style)
     saved_plan = directory / "plan.json"
     plan = None
     try:
@@ -318,7 +319,7 @@ def _plan_and_build(directory: Path, record: dict, brief: str, used: list[str], 
         _progress(directory, "writing", 6, "دارم از روی درخواست شما طرح کلی و صحنه‌ها را می‌نویسم.", stage="writing", eta=stats["plan_s"] + _remaining(4, 15))
         _note(directory, "plan", "دارم طرح کلی را می‌نویسم: صحنه‌ها، متن‌ها و رنگ‌ها")
         started = time.monotonic()
-        plan = mg.plan(brief, context=context, used=used)
+        plan = mg.plan(brief, context=context, style=style, used=used)
         if _cancelled(key):
             raise _Cancelled()
         if plan.asks():
@@ -366,7 +367,7 @@ def _plan_and_build(directory: Path, record: dict, brief: str, used: list[str], 
                       eta=_remaining(left, plan.duration, extra=(mg.SCENE_ATTEMPTS - attempt + 1) * stats["scene_s"] * 0.7))
 
         try:
-            draft = mg.author_scene(plan, n, brief, context=context, used=used, on_retry=retry)
+            draft = mg.author_scene(plan, n, brief, context=context, used=used, on_retry=retry, style=style)
             _learn("scene_s", (time.monotonic() - started) / tries[0])
             return n, draft, False
         except Exception as exc:
@@ -390,7 +391,7 @@ def _plan_and_build(directory: Path, record: dict, brief: str, used: list[str], 
                           eta=_remaining(len(pending) - finished, plan.duration))
                 if _cancelled(key):
                     raise _Cancelled()
-    build = SimpleNamespace(plan=plan, drafts=drafts, context=context, fingerprint=fingerprint, scenes_dir=scenes_dir)
+    build = SimpleNamespace(plan=plan, drafts=drafts, context=context, style=style, fingerprint=fingerprint, scenes_dir=scenes_dir)
     return mg.assemble_scenes(plan, [drafts[n] for n in range(1, count + 1)]), build
 
 
@@ -446,7 +447,7 @@ def _prepare_and_render(directory: Path, page, brief: str, change: str, used: li
                 _progress(directory, "writing", 38, f"صحنهٔ {n} در حال اصلاح است.", stage="writing",
                           eta=stats["scene_s"] * 1.2 + stats["check_s"] + stats["render_per_s"] * page.duration)
                 try:
-                    draft = mg.author_scene(build.plan, n, brief, context=build.context, used=used, feedback=own[:6])
+                    draft = mg.author_scene(build.plan, n, brief, context=build.context, used=used, feedback=own[:6], style=build.style)
                     outcome = f"صحنهٔ {n} اصلاح شد"
                 except Exception as exc:
                     log.warning("scene %d could not be repaired, using a plain scene: %s", n, str(exc)[:160])
