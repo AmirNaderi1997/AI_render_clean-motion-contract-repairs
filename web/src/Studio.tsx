@@ -366,8 +366,8 @@ export default function Studio() {
               <button className="btn btn-secondary" onClick={() => openWorkspace("edit", current.id)}>بررسی و تغییر برنامه</button>
             </div>
           </section> : null}
-          {pendingAction ? <div className="action-card"><h3>Approve this plan?</h3><p>EditorGPT will create the media, voice-over and final render using the plan above.</p>{pendingAction.estimated_cost_usd != null ? <small className="muted-text">Recorded estimate: ${pendingAction.estimated_cost_usd.toFixed(4)}</small> : null}
-            <div className="action-buttons"><button className="btn" onClick={() => void api.confirmStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "approve the plan")))}>Approve and continue</button><button className="btn btn-secondary" onClick={() => void api.cancelStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "cancel the plan")))}>Cancel</button></div></div> : null}
+          {pendingAction ? <div className="action-card"><h3 dir="rtl">این سناریو تأیید شود؟</h3><p dir="rtl">با تأیید، تصویرها، نریشن و رندر نهایی طبق سناریوی بالا ساخته می‌شود.</p>{pendingAction.estimated_cost_usd != null ? <small className="muted-text" dir="rtl">برآورد ثبت‌شده: ${pendingAction.estimated_cost_usd.toFixed(4)}</small> : null}
+            <div className="action-buttons"><button className="btn" onClick={() => void api.confirmStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "approve the plan")))}>تأیید و ادامه</button><button className="btn btn-secondary" onClick={() => void api.cancelStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "cancel the plan")))}>انصراف</button></div></div> : null}
         </div>
       </div>
       <div className="dock">

@@ -72,15 +72,12 @@ def observe_request(function):
         activity_id = uuid.uuid4().hex
         data = dict(tool=stage, stage=stage, activity_id=activity_id, message=message, thinking=True)
         report(cid, 'tool.started', **data)
-        report(cid, 'agent.narration', narration_id=activity_id, message=message)
+        # The activity step already says what is being done; chat narration is reserved for results (see the orchestrator).
         def waiting():
             while not stopped.wait(15):
                 elapsed = int(time.monotonic() - started)
                 report(cid, 'tool.progress', **{**data, 'elapsed_seconds': elapsed,
-                       'message': f'{message} هنوز منتظر پاسخ سرویس هوش مصنوعی هستم؛ {elapsed} ثانیه گذشته است.'})
-                if elapsed >= 30 and elapsed // 15 % 2 == 0:
-                    report(cid, 'agent.narration', narration_id=activity_id + ':waiting',
-                           message=f'{message} از شروع این درخواست {elapsed} ثانیه گذشته و هنوز پاسخ کامل سرویس نرسیده است؛ درخواست تازه‌ای برای این گزارش ارسال نمی‌کنم.')
+                       'message': f'در انتظار پاسخ سرویس هوش مصنوعی · {elapsed} ثانیه'})
         worker = threading.Thread(target=waiting, daemon=True, name='studio-ai-status')
         worker.start()
         try:
