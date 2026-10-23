@@ -38,7 +38,15 @@ def _load_checkpoint(path: Path, signature: str, provider_name: str) -> dict:
             # Completed scene files are reusable when a failed job is retried
             # with another provider. The storyboard signature is the content
             # identity; provider choice only affects scenes that still need media.
-            if isinstance(data, dict) and data.get("signature") == signature:
+            if isinstance(data, dict):
+                matched = data.get('signature') == signature
+                if not matched:
+                    # Cross-version reuse is permitted only with component
+                    # identities. Never bless a legacy row after input changes.
+                    data['media']=[r for r in data.get('media',[]) if isinstance(r,dict) and r.get('fingerprint')]
+                    data['narration']=[r for r in data.get('narration',[]) if isinstance(r,dict) and r.get('fingerprint')]
+                data['legacy_signature_match']=matched
+                data['signature']=signature
                 data["provider"] = provider_name
                 return data
         except (OSError, ValueError, TypeError):
@@ -74,6 +82,9 @@ def create_content(
     creative_brief: Optional[dict[str, str]] = None,
     user_id: Optional[str] = None,
     source_assets: Optional[list[Path]] = None,
+    creative_plan: dict | None = None,
+    asset_catalog: list[dict] | None = None,
+    duration: float = 30,
 ) -> dict:
     from app.jobs import create_job, _write_status
 
@@ -85,19 +96,35 @@ def create_content(
     content_llm_provider = os.environ.get(
         "CONTENT_LLM_PROVIDER", settings.CONTENT_LLM_PROVIDER
     ).strip().lower()
-    asset_catalog = []
+    asset_catalog = asset_catalog if asset_catalog is not None else []
     if source_assets:
         from brain.product_assets import inspect_assets, catalog_prompt
-        asset_catalog = inspect_assets([Path(item).resolve() for item in source_assets[:20]], prompt)
+        if not asset_catalog:
+            asset_catalog = inspect_assets([Path(item).resolve() for item in source_assets[:20]], prompt)
         prompt += catalog_prompt(asset_catalog)
-    storyboard = generate_storyboard(
-        prompt, ct, language, style, brief,
-        provider_name=content_llm_provider or None,
-    )
+    if creative_plan is not None:
+        from creative.schemas import CreativePlan
+        from creative.production import storyboard_from_plan
+        # public creative state deliberately preserves the chosen concept and
+        # facts. Only the compiler below selects real supported scene actions.
+        plan = CreativePlan.model_validate({**creative_plan,
+            'concepts':creative_plan.get('concepts') or [creative_plan['chosen']],
+            'critique':creative_plan.get('critique') or {'chosen_id':creative_plan['chosen']['id']}})
+        storyboard = storyboard_from_plan(plan,prompt=prompt,language=language,style=style,
+            duration=duration,asset_indices={row['index'] for row in asset_catalog},brief=brief)
+    else:
+        storyboard = generate_storyboard(
+            prompt, ct, language, style, brief,
+            provider_name=content_llm_provider or None,
+        )
+    if storyboard.is_fallback:
+        raise ValueError('برنامه‌ریز سناریو در دسترس نیست؛ پیش‌نویس نمایشی برای تولید نهایی پذیرفته نمی‌شود.')
 
     job = create_job(user_id=user_id)
     generated_dir = job.dir / "generated"
     generated_dir.mkdir(exist_ok=True)
+    if creative_plan:
+        _save_checkpoint(job.dir/'creative_plan.json',creative_plan)
 
     safe_assets: list[str] = []
     if source_assets:
@@ -120,6 +147,7 @@ def create_content(
             asset_map[index] = safe_assets[-1]
         if not safe_assets:
             raise ValueError("No valid source images were supplied")
+        _save_checkpoint(generated_dir/'asset_map.json',asset_map)
         for index, scene in enumerate(storyboard.scenes):
             scene.media_method = "upload"
             if asset_catalog and scene.source_asset_index not in asset_map:
@@ -196,6 +224,10 @@ def update_storyboard(job, scenes: list[dict]) -> Optional[dict]:
     sb_data["total_duration_s"] = round(sum(s.get("duration_s", 0) for s in scenes), 2)
     sb_data["estimated_total_cost"] = round(sum(s.get("estimated_cost", 0) for s in scenes), 4)
 
+    versions=job.dir/'storyboard_versions'
+    versions.mkdir(exist_ok=True)
+    previous=json.loads(sb_path.read_text())
+    _save_checkpoint(versions/f'{time.time_ns()}-{uuid.uuid4().hex[:8]}.json',previous)
     sb_path.write_text(json.dumps(sb_data, indent=2, ensure_ascii=False))
 
     gen_status_path = job.dir / "generation_status.json"
@@ -295,6 +327,8 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         signature = hashlib.sha256(json.dumps(sb_data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         checkpoint_path = gen_dir / "generation_checkpoint.json"
         checkpoint = _load_checkpoint(checkpoint_path, signature, provider_name)
+        from creative.reuse import media_identity, reusable, fingerprint
+        media_pool=list(checkpoint.get('media',[]))
         cached_media = {
             m["scene_index"]: m for m in checkpoint["media"]
             if isinstance(m, dict) and Path(m.get("file_path", "")).is_file()
@@ -306,8 +340,10 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
 
         for scene in storyboard.scenes:
             try:
-                if scene.index in cached_media:
-                    record = cached_media[scene.index]
+                identity=media_identity(scene,job.dir,preset['aspect'],preset['is_static'])
+                reuse=reusable(media_pool,identity,scene.index,legacy=checkpoint.get('legacy_signature_match',False))
+                if reuse:
+                    record = reuse
                 else:
                     if scene.motion_engine=='motion_so':
                         if preset['is_static']:raise ValueError('Motion video scenes are not supported in static posts')
@@ -349,6 +385,8 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                         "duration_s": result.duration_s,
                         "fps": result.fps,
                         "metadata": result.metadata,
+                        "fingerprint":identity,
+                        "reused":False,
                     }
                 if record["cost_usd"] is None:
                     cost_reported = False
@@ -393,17 +431,18 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
             if isinstance(n, dict) and Path(n.get("file_path", "")).is_file()
             and n.get("provider") == "elevenlabs"
         }
+        voice_pool=list(cached_narration.values())
         try:
             from .tts import generate_narration
             for scene in storyboard.scenes:
                 if not isinstance(scene.narration_text, str) or not scene.narration_text.strip():
                     continue
                 try:
-                    if (
-                        scene.index in cached_narration
-                        and cached_narration[scene.index].get("narration_text") == scene.narration_text
-                    ):
-                        record = cached_narration[scene.index]
+                    identity=fingerprint({'text':scene.narration_text,'voice':voice_signature,'language':storyboard.language})
+                    reuse=reusable(voice_pool,identity,scene.index,
+                        legacy=checkpoint.get('legacy_signature_match',False))
+                    if reuse and reuse.get("narration_text") == scene.narration_text:
+                        record = reuse
                     else:
                         voice_kwargs = {
                             "voice_id": _default_elevenlabs_voice(storyboard.language),
@@ -420,6 +459,8 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                             "file_path": tts_result.file_path,
                             "duration_s": tts_result.duration_s,
                             "provider": "elevenlabs",
+                            "fingerprint":identity,
+                            "reused":False,
                         }
                     if preset["is_static"]:
                         record = _fit_post_narration(record, gen_dir, preset, warnings)
@@ -518,6 +559,8 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         plan_data["generation_meta"]["warnings"] = warnings
         plan_data["generation_meta"]["voice_provider"] = voice_provider if narration_segments else None
         plan_data["generation_meta"]["music_source"] = music_source
+        if (job.dir/'creative_plan.json').is_file():
+            plan_data['generation_meta']['creative_plan']=json.loads((job.dir/'creative_plan.json').read_text())
         if not preset["is_static"] and all(scene.media_method == "upload" and scene.motion_engine=='default' for scene in storyboard.scenes):
             from engine.remotion_renderer import scene_config
             plan_data["generation_meta"]["renderer"] = "remotion"

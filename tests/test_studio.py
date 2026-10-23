@@ -122,7 +122,7 @@ def test_cached_motion_resume_never_generates_missing_scenes(tmp_path, monkeypat
 
 def test_narration_cache_records_source_text():
     source = Path(__file__).parents[1].joinpath("brain/content_creator.py").read_text()
-    assert 'cached_narration[scene.index].get("narration_text")' in source
+    assert 'reuse.get("narration_text") == scene.narration_text' in source
     assert '"narration_text": scene.narration_text' in source
 
 

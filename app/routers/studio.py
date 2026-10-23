@@ -137,7 +137,7 @@ async def open_legacy_project(request: Request, body: LegacyProjectOpen):
         title = str(legacy.get("title") or legacy.get("name") or body.title)
     else:
         job = get_job_for_request(request, body.external_ref)
-        title = str(job.raw_name or (job.plan or {}).get("title") or body.title)
+        title = str(job.raw_name or (job.plan_data or {}).get("title") or body.title)
 
     conversation = await repo.create_conversation(user_key, title)
     project = await repo.create_project(conversation["id"], user_key, body.engine, title,
@@ -365,6 +365,112 @@ class ResumeRequest(BaseModel):
     retry_confirmed: bool = Field(default=False,strict=True)
 
 
+class RenderTargetRequest(BaseModel):
+    target: str = Field(pattern="^(server|browser)$")
+
+
+async def _browser_job(request: Request, project_id: str):
+    try:
+        project = await repo.get_project(project_id, _user(request))
+    except KeyError:
+        raise HTTPException(404, "project not found")
+    job = jobstore.get(project.get("external_ref"))
+    if project["engine"] != "motion" or not job:
+        raise HTTPException(409, "This engine currently requires server rendering")
+    return project, job
+
+
+@router.patch('/projects/{project_id}/render-target')
+async def set_render_target(request: Request, project_id: str, body: RenderTargetRequest):
+    project, job = await _browser_job(request, project_id)
+    if job.render.status in {"queued", "running"}:
+        raise HTTPException(409, "A server render is already active; it has not been interrupted")
+    state = {**project["state"], "render_target": body.target}
+    return _public_project(await repo.update_project(project_id, _user(request), state=state))
+
+
+@router.get('/projects/{project_id}/browser-render')
+async def browser_render_manifest(request: Request, project_id: str):
+    _, job = await _browser_job(request, project_id)
+    from app.browser_render import bundle
+    try:
+        manifest, _ = await asyncio.to_thread(bundle, job)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    return manifest
+
+
+@router.get('/projects/{project_id}/browser-render/assets/{asset_id}')
+async def browser_render_asset(request: Request, project_id: str, asset_id: str, revision: str):
+    _, job = await _browser_job(request, project_id)
+    from app.browser_render import bundle
+    try:
+        manifest, files = await asyncio.to_thread(bundle, job)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    if revision != manifest['revision']:
+        raise HTTPException(409, "Project changed; prepare a fresh render")
+    if asset_id not in files:
+        raise HTTPException(404, "asset not found")
+    return FileResponse(files[asset_id])
+
+
+@router.post('/projects/{project_id}/browser-render/output')
+async def browser_render_output(request: Request, project_id: str, revision: str, file: UploadFile = File(...)):
+    project, job = await _browser_job(request, project_id)
+    if project['state'].get('render_target') != 'browser' or job.render.status in {'running', 'queued'}:
+        raise HTTPException(409, 'Browser rendering is not selected, or a server render is active')
+    from app.browser_render import bundle
+    from engine.probe import probe
+    import os
+    import uuid
+    try:
+        manifest, _ = await asyncio.to_thread(bundle, job)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    if revision != manifest['revision']:
+        raise HTTPException(409, 'Project changed; output was not installed')
+    exports = job.dir / 'exports'
+    exports.mkdir(exist_ok=True)
+    output = exports / f'browser_{revision[:20]}.mp4'
+    if output.is_file():
+        return {'output': output.name, 'reused': True}
+    temporary = exports / f'.browser-{uuid.uuid4().hex}.mp4'
+    try:
+        total = 0
+        with temporary.open('wb') as sink:
+            while chunk := await file.read(1024**2):
+                total += len(chunk)
+                if total > 256 * 1024**2:
+                    raise HTTPException(413, 'Browser output exceeds 256 MB')
+                sink.write(chunk)
+        info = await asyncio.to_thread(probe, temporary)
+        videos = [s for s in info.get('streams', []) if s.get('codec_type') == 'video']
+        audio = any(s.get('codec_type') == 'audio' for s in info.get('streams', []))
+        expected_audio = bool(manifest['props'].get('music') or any(s.get('narration') for s in manifest['props']['scenes']))
+        duration = float(info.get('format', {}).get('duration', 0))
+        if not videos or (videos[0].get('width'), videos[0].get('height')) not in {(1080, 1920), (720, 1280)} or abs(duration - manifest['durationInFrames']/30) > .25 or (expected_audio and not audio):
+            raise HTTPException(422, 'Output validation failed: dimensions, duration or audio differ from the plan')
+        # Recheck the revision after upload, not only before it.
+        latest, _ = await asyncio.to_thread(bundle, job)
+        if latest['revision'] != revision:
+            raise HTTPException(409, 'Project changed during upload')
+        os.replace(temporary, output)
+        job.render.status = 'done'
+        job.render.progress = 100
+        job.render.output = output.name
+        job.render.preview = False
+        job.render.message = 'Rendered on user device; media structure validated'
+        if output.name not in job.versions:
+            job.versions.append(output.name)
+        jobstore._write_status(job)
+        await repo.emit(project['conversation_id'], 'tool.completed', {'project_id': project_id, 'tool': 'browser_render', 'message': 'رندر دستگاه دریافت شد؛ مدت، ابعاد و وجود صدا بررسی شد.'})
+        return {'output': output.name, 'reused': False}
+    finally:
+        temporary.unlink(missing_ok=True)
+        await file.close()
+
+
 @router.post('/projects/{project_id}/resume')
 async def resume_stopped_project(request: Request, project_id: str, body: ResumeRequest | None = None):
     confirmed=bool(body and body.retry_confirmed)
@@ -408,7 +514,6 @@ async def accept_output(request: Request, project_id: str, body: AcceptOutputReq
     return {'accepted': True}
 
 
-
 @router.get("/projects/{project_id}/output")
 async def project_output(request: Request, project_id: str, candidate: bool = False, file: str | None = None):
     try: project = await repo.get_project(project_id, _user(request))
@@ -435,6 +540,19 @@ async def project_output(request: Request, project_id: str, candidate: bool = Fa
         path = job.dir / "exports" / job.render.output if job and job.render.output else None
     if not path or not path.is_file(): raise HTTPException(404, "output is not ready")
     return FileResponse(path, media_type="video/mp4", filename=path.name)
+
+
+@router.get('/projects/{project_id}/outputs')
+async def project_outputs(request: Request, project_id: str):
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    job = jobstore.get(project.get('external_ref')) if project['engine'] == 'talking' else None
+    if not job: return []
+    files = [p for p in (job.dir/'exports').glob('talking_reel_v*.mp4')
+             if re.fullmatch(r'talking_reel_v[0-9]+\.mp4', p.name) and p.is_file()
+             and p.resolve().is_relative_to((job.dir/'exports').resolve())]
+    return [{'file': p.name, 'version': int(re.search(r'_v([0-9]+)', p.name)[1])}
+            for p in sorted(files, key=lambda p: int(re.search(r'_v([0-9]+)', p.name)[1]))]
 
 
 @router.get("/projects/{project_id}/assets/{index}")
@@ -579,24 +697,264 @@ async def get_profile_logo(request: Request):
 
 @router.get('/projects/{project_id}/document')
 async def project_document(request: Request, project_id: str):
-    """The project's timeline built from the exact render plan; read-only in this phase."""
+    """The project's timeline, built from the exact render plan of its engine; read-only except captions (talking)."""
     try: project = await repo.get_project(project_id, _user(request))
     except KeyError: raise HTTPException(404, 'project not found')
-    if project['engine'] != 'talking':
-        raise HTTPException(409, 'The timeline is available for talking-head projects first')
-    job = jobstore.get(project.get('external_ref'))
-    if not job: raise HTTPException(404, 'render job not found')
     from app import project_document as documents
-    from app import talking_reel
-    if not talking_reel.load(job.dir).get('analysis_ready'):
-        raise HTTPException(409, 'The timeline appears once the video has been analysed')
+    engine, ref = project['engine'], project.get('external_ref')
+    if not ref: raise HTTPException(409, 'The timeline appears once the project has started')
     try:
-        document = await asyncio.to_thread(documents.talking_document, job.dir, job.dir / 'raw' / job.raw_name)
+        if engine == 'talking':
+            job = jobstore.get(ref)
+            if not job: raise HTTPException(404, 'render job not found')
+            from app import talking_reel
+            if not talking_reel.load(job.dir).get('analysis_ready'):
+                raise HTTPException(409, 'The timeline appears once the video has been analysed')
+            document = await asyncio.to_thread(documents.talking_document, job.dir, job.dir / 'raw' / job.raw_name)
+            plan = project['state'].get('plan') or {}
+            versions = plan.get('versions') or []
+            latest = versions[-1]['n'] if versions else None
+            document['basis'] = {'plan_version': latest, 'rendered_version': plan.get('last_approved_n'),
+                                 'workflow': project['state'].get('workflow'),
+                                 'synced': latest is not None and latest == plan.get('last_approved_n')}
+        elif engine == 'localize':
+            document = await asyncio.to_thread(documents.localize_document, ref)
+        elif engine == 'motion':
+            job = jobstore.get(ref)
+            if not job: raise HTTPException(404, 'render job not found')
+            document = await asyncio.to_thread(documents.motion_document, job)
+        else:
+            raise HTTPException(409, 'No timeline for this kind of project')
+    except FileNotFoundError:
+        raise HTTPException(404, 'project files not found')
     except ValueError as exc:
         raise HTTPException(409, str(exc))
-    plan = project['state'].get('plan') or {}
-    versions = plan.get('versions') or []
-    document['basis'] = {'plan_version': versions[-1]['n'] if versions else None,
-                         'rendered_version': plan.get('last_approved_n'),
-                         'workflow': project['state'].get('workflow')}
     return document
+
+
+class TimelineOp(BaseModel):
+    model_config = {"extra": "forbid"}
+    id: str = Field(min_length=3, max_length=40)
+    text: str | None = Field(default=None, max_length=400)
+    start: float | None = None
+    end: float | None = None
+    deleted: bool | None = None
+    reset: bool | None = None
+    x: float | None = None
+    y: float | None = None
+    scale: float | None = None
+    color: str | None = Field(default=None, max_length=7)
+
+
+class TimelineEdit(BaseModel):
+    version_id: str = Field(min_length=8, max_length=64)
+    ops: list[TimelineOp] = Field(min_length=1, max_length=50)
+
+
+@router.patch('/projects/{project_id}/timeline')
+async def edit_project_timeline(request: Request, project_id: str, body: TimelineEdit):
+    from app.creative_plan import PlanError
+    from app.studio_orchestrator import edit_timeline
+    try:
+        return _public_project(await edit_timeline(project_id, _user(request), body.version_id,
+                                                    [op.model_dump(exclude_none=True) for op in body.ops]))
+    except KeyError: raise HTTPException(404, 'project not found')
+    except PlanError as exc: raise HTTPException(422, str(exc))
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
+
+# -- Upper-panel pictures (styles 2 and 3) -----------------------------------------------------------
+
+class PictureOp(BaseModel):
+    model_config = {"extra": "forbid"}
+    slot: int = Field(ge=0, le=9999)
+    source: Literal["upload", "library", "ai", "hidden"] | None = None
+    media: str | None = Field(default=None, max_length=80)
+    library: str | None = Field(default=None, max_length=220)
+    visual: str | None = Field(default=None, max_length=700)
+    label: str | None = Field(default=None, max_length=80)
+    reset: bool | None = None
+
+
+class PictureEdit(BaseModel):
+    version_id: str = Field(min_length=8, max_length=64)
+    ops: list[PictureOp] = Field(min_length=1, max_length=20)
+
+
+@router.patch('/projects/{project_id}/pictures')
+async def edit_project_pictures(request: Request, project_id: str, body: PictureEdit):
+    from app.creative_plan import PlanError
+    from app.studio_orchestrator import edit_pictures
+    try:
+        return _public_project(await edit_pictures(project_id, _user(request), body.version_id,
+                                                    [op.model_dump(exclude_none=True) for op in body.ops]))
+    except KeyError: raise HTTPException(404, 'project not found')
+    except PlanError as exc: raise HTTPException(422, str(exc))
+    except ValueError as exc: raise HTTPException(409, str(exc))
+
+
+@router.post('/projects/{project_id}/media', status_code=201)
+async def upload_project_picture(request: Request, project_id: str, file: UploadFile = File(...)):
+    """Add a picture of the user's own to a talking project (the folder styles 2 and 3 already read uploads from)."""
+    import hashlib
+    from PIL import Image, UnidentifiedImageError
+    from app import talking_reel
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    job = jobstore.get(project.get('external_ref')) if project['engine'] == 'talking' else None
+    if not job: raise HTTPException(404, 'project not found')
+    suffix = Path(file.filename or '').suffix.lower()
+    if suffix not in {'.png', '.jpg', '.jpeg', '.webp'}: raise HTTPException(422, 'Upload a PNG, JPG or WebP picture')
+    data = await file.read(MAX_BYTES['image'] + 1)
+    if not data or len(data) > MAX_BYTES['image']: raise HTTPException(413 if data else 422, 'Picture is empty or too large')
+    name = f"upload_{hashlib.sha256(data).hexdigest()[:16]}{suffix}"
+    folder = job.dir / talking_reel.MEDIA_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / name
+    if not target.is_file():
+        temporary = folder / f".{name}.part"
+        temporary.write_bytes(data)
+        try:
+            with Image.open(temporary) as image: image.verify()
+        except (UnidentifiedImageError, OSError):
+            temporary.unlink(missing_ok=True); raise HTTPException(422, 'The file is not a valid image')
+        temporary.replace(target)
+    return {'name': name, 'size': len(data)}
+
+
+@router.get('/projects/{project_id}/pictures/{slot}')
+async def project_picture(request: Request, project_id: str, slot: int):
+    """The picture the renderer will use for a slot (404 while it is still to be generated)."""
+    from app import talking_reel
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    job = jobstore.get(project.get('external_ref')) if project['engine'] == 'talking' else None
+    if not job: raise HTTPException(404, 'picture not found')
+    try:
+        planned = await asyncio.to_thread(talking_reel.plan_render, job.dir, job.dir / 'raw' / job.raw_name, prepare_media=False)
+    except ValueError:
+        raise HTTPException(404, 'picture not found')
+    item = next((s for s in planned.slots if int(s['i']) == slot), None)
+    path = Path(item['file']).resolve() if item and item.get('file') else None
+    allowed = [job.dir.resolve(), (talking_reel.PROJECT_ROOT / 'assets').resolve()]
+    if not path or not path.is_file() or not any(path.is_relative_to(root) for root in allowed):
+        raise HTTPException(404, 'picture not found')
+    return FileResponse(path, headers={'Cache-Control': 'private, max-age=300'})
+
+
+@router.get('/library/pictures')
+async def library_pictures(request: Request):
+    from app import talking_reel
+    return [{'path': item['path'], 'name': item.get('filename') or Path(item['path']).name, 'tags': (item.get('tags') or [])[:6]}
+            for item in talking_reel._library_pictures()][:200]
+
+
+# -- Editing preview (the plan rendered without captions) -------------------------------------------
+
+async def _talking_job(request: Request, project_id: str):
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    job = jobstore.get(project.get('external_ref')) if project['engine'] == 'talking' else None
+    if not job: raise HTTPException(404, 'talking project not found')
+    return job
+
+
+async def _clean_base_target(request: Request, project_id: str):
+    """("talking", job) or ("localize", project id): the project whose caption-free preview is asked for."""
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    if project['engine'] == 'localize' and project.get('external_ref'):
+        return 'localize', project['external_ref']
+    job = jobstore.get(project.get('external_ref')) if project['engine'] == 'talking' else None
+    if not job: raise HTTPException(404, 'talking project not found')
+    return 'talking', job
+
+
+@router.post('/projects/{project_id}/clean-base')
+async def start_clean_base(request: Request, project_id: str):
+    """Start (once) the caption-free render the timeline edits captions on; returns its status.
+    Localize builds it from voice clips already made and never asks the voice service for anything."""
+    import asyncio
+    kind, target = await _clean_base_target(request, project_id)
+    if kind == 'localize':
+        from app import localize_clean_base
+        return await asyncio.to_thread(localize_clean_base.ensure, target)
+    from app import clean_base
+    return await asyncio.to_thread(clean_base.ensure, target.dir, target.dir / 'raw' / target.raw_name)
+
+
+@router.get('/projects/{project_id}/clean-base')
+async def clean_base_status(request: Request, project_id: str, key: str | None = None):
+    """Status as JSON; with ``key`` the video file itself."""
+    import asyncio
+    kind, target = await _clean_base_target(request, project_id)
+    if kind == 'localize':
+        from app import localize_clean_base as module
+        if key:
+            path = module.path_for(target, key)
+            if not path: raise HTTPException(404, 'preview is not ready')
+            return FileResponse(path, media_type='video/mp4')
+        return await asyncio.to_thread(module.status, target)
+    from app import clean_base
+    if key:
+        path = clean_base.path_for(target.dir, key)
+        if not path: raise HTTPException(404, 'preview is not ready')
+        return FileResponse(path, media_type='video/mp4')
+    return await asyncio.to_thread(clean_base.status, target.dir, target.dir / 'raw' / target.raw_name)
+
+
+class CaptionLookOp(BaseModel):
+    model_config = {"extra": "forbid"}
+    id: str = Field(min_length=3, max_length=40, pattern=r'^caption:l\d{1,4}:\d{1,3}$')
+    reset: bool | None = None
+    x: float | None = None
+    y: float | None = None
+    scale: float | None = None
+    color: str | None = Field(default=None, max_length=7)
+
+
+class CaptionLookEdit(BaseModel):
+    ops: list[CaptionLookOp] = Field(min_length=1, max_length=50)
+
+
+@router.patch('/projects/{project_id}/localize-captions')
+async def edit_localize_captions(request: Request, project_id: str, body: CaptionLookEdit):
+    """Where Localize captions sit on the frame (position, size, colour). Saved on the project; it starts no render
+    and no voice generation, and the video is marked as needing a re-render."""
+    import asyncio
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, 'project not found')
+    if project['engine'] != 'localize' or not project.get('external_ref'):
+        raise HTTPException(404, 'localize project not found')
+    from app import localize as store
+    try:
+        await asyncio.to_thread(store.set_caption_looks, project['external_ref'], [op.model_dump(exclude_none=True) for op in body.ops])
+    except KeyError: raise HTTPException(404, 'project not found')
+    except ValueError as exc: raise HTTPException(409 if 'busy' in str(exc) else 422, str(exc))
+    return {'ok': True}
+
+
+@router.get('/fonts/{name}')
+async def caption_font_file(name: str):
+    """A caption font the renders use, so the timeline draws captions with the same letters."""
+    from app import fonts
+    path = fonts.path_for(name)
+    if not path: raise HTTPException(404, 'font not found')
+    return FileResponse(path, media_type='font/ttf' if path.suffix.lower() == '.ttf' else 'font/otf',
+                        headers={'Cache-Control': 'public, max-age=86400'})
+
+
+@router.get('/music')
+async def music_library():
+    """The bundled music beds a talking project can choose from."""
+    from app import talking_reel
+    return talking_reel.music_library()
+
+
+@router.get('/music/{name}')
+async def music_file(name: str):
+    from app import talking_reel
+    entry = next((m for m in talking_reel.music_library() if m['path'].rsplit('/', 1)[-1] == name), None)
+    path = talking_reel.resolve_music(entry['path']) if entry else None
+    if not path: raise HTTPException(404, 'music not found')
+    return FileResponse(path, headers={'Cache-Control': 'public, max-age=86400'})

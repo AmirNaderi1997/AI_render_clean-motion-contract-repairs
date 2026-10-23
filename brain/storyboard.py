@@ -31,6 +31,9 @@ class Scene:
     motion_engine: Literal['default','motion_so'] = 'default'
     motion_effort: Literal['light','medium','high'] = 'light'
     motion_background: str = '#101010'
+    narrative_role: str = ''
+    visual_type: str = 'concept'
+    motion_style: str = ''
 
     def __post_init__(self):
         import re

@@ -30,6 +30,7 @@ class LocalizeInput(ToolInput):
     source_path: str
     filename: str
     user_key: str
+    request: str = Field(default='',max_length=2000)
 
 
 class TalkingInput(ToolInput):
@@ -47,6 +48,9 @@ class ContentInput(ToolInput):
     language: str = "fa"
     source_assets: list[str] = Field(default_factory=list, max_length=20)
     creative_brief: dict[str, str] = Field(default_factory=dict)
+    creative_plan: dict | None = None
+    asset_catalog: list[dict] | None = None
+    duration: float = Field(default=30, ge=15, le=90)
 
 
 class ProjectRefInput(ToolInput):
@@ -92,6 +96,9 @@ def _localize(args: LocalizeInput) -> dict:
     from app import localize
     with open(Path(args.source_path), "rb") as source:
         state = localize.create(args.user_key, args.filename, source, "", None)
+    state['creative_plan']={'schema_version':2,'kind':'localize','request':args.request,
+        'limits':['Existing OCR covers and retypes captions; arbitrary graphic recreation is not implemented.']}
+    localize.save(state)
     localize.start_analyze(state["id"])
     return {"external_ref": state["id"], "status": "analyzing"}
 
@@ -110,7 +117,8 @@ def _content(args: ContentInput) -> dict:
     result = create_content(prompt=args.prompt, content_type="reel", language=args.language,
                             style="rafiei_reel", provider_name=args.provider,
                             creative_brief=args.creative_brief, user_id=args.user_key,
-                            source_assets=[Path(item) for item in args.source_assets])
+                            source_assets=[Path(item) for item in args.source_assets],
+                            creative_plan=args.creative_plan,asset_catalog=args.asset_catalog,duration=args.duration)
     return {"external_ref": result["job_id"], "storyboard": result["storyboard"],
             "status": "storyboard_ready"}
 

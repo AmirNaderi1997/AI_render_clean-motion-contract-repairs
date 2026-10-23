@@ -41,6 +41,18 @@ def talk_capabilities(only_style: str | None = None) -> str:
 
 
 def product_capabilities() -> str:
+    motion='Motion.so is NOT available. Use motion_engine=default.'
+    try:
+        from brain.motion_so import configured
+        if configured():
+            motion=('Motion.so is configured: motion_engine=motion_so may be chosen per scene for silent, '
+                'code-based diagrams/line-art motion, light effort; it consumes external credits and requires '
+                'user approval before execution. Captions/narration are added by EditorGPT. '
+                'Do not choose it for stock footage, image editing or a scene requiring unverified media capabilities.')
+    except (ImportError,OSError):
+        pass
     return ("Vertical 9:16 reel built from still images (user uploads or images found on the supplied page, optionally generated "
             "stills) with Persian narration, music, animated Persian text overlays, Ken-Burns and layered motion, "
-            "typographic scenes and the motion recipes below.\n\n" + recipe_digest() + f"\n\nNot available: {NOT_AVAILABLE}")
+            "typographic scenes. default uses the existing fixed-code native/Remotion renderer, not arbitrary generated React. "
+            "Do not claim it can execute every HyperFrames recipe on product images. "
+            +motion+f"\n\nNot available: {NOT_AVAILABLE}")

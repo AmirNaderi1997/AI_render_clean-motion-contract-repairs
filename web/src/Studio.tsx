@@ -7,6 +7,7 @@ import { useStudioLayout } from "./components/hooks";
 import { useTopbarTitle } from "./components/ShellContext";
 import { displayTitle, parseTime, relativeTime } from "./format";
 import { friendlyError } from "./ui";
+import { Resizer, usePanelWidth } from "./components/Resizer";
 import { Composer, PendingFile } from "./studio/Composer";
 import { ManualQuestion } from "./studio/ManualQuestion";
 import { Thread, LocalFileInfo } from "./studio/Thread";
@@ -16,6 +17,9 @@ import { PendingMessage, activeStep, buildTimeline, isProcessing, renderView, th
 import { suggestions, templatePrompts } from "./templateData";
 
 type MobileView = "chat" | WorkspaceTab;
+const WORKSPACE_BOUNDS = { min: 340, max: 1100 };
+/** The chat keeps at least this much room, so the workspace cannot be dragged over it. */
+const MIN_CHAT = 360;
 const lsGet = (key: string, fallback: string) => { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } };
 const lsSet = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* storage unavailable */ } };
 
@@ -47,6 +51,11 @@ export default function Studio() {
   const [stuck, setStuck] = React.useState(true);
   const [now, setNow] = React.useState(() => Date.now());
 
+  const studioRef = React.useRef<HTMLDivElement>(null);
+  const workspaceRef = React.useRef<HTMLElement>(null);
+  const [workspaceWidth, setWorkspaceWidth] = usePanelWidth("editorgpt.workspace.width", WORKSPACE_BOUNDS);
+  const [liveWorkspace, setLiveWorkspace] = React.useState<number | null>(null);
+  const [resizingWorkspace, setResizingWorkspace] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const cursorRef = React.useRef(0);
@@ -56,6 +65,7 @@ export default function Studio() {
   const refreshTimerRef = React.useRef<number | null>(null);
   const listTimerRef = React.useRef<number | null>(null);
   const lastSendRef = React.useRef<{ text: string; ids: string[] } | null>(null);
+  const logoUploadRef = React.useRef(false);
   // Conversation created only so attachments have somewhere to upload; we don't navigate until the user sends.
   const draftIdRef = React.useRef<string | null>(null);
   const activeId = conversationId || null;
@@ -216,9 +226,15 @@ export default function Studio() {
   async function addFiles(input: FileList | File[]) {
     const list = Array.from(input); // snapshot: a live FileList can be emptied while we await
     if (!authenticated) { requireLogin(); return; }
+    const autoLogo = manualQuestion?.key === "logo_asset";
+    if (autoLogo && (logoUploadRef.current || sending)) return;
+    if (autoLogo && (list.length !== 1 || !list[0].type.startsWith("image/"))) {
+      setError("برای لوگو فقط یک تصویر انتخاب کنید."); return;
+    }
+    if (autoLogo) logoUploadRef.current = true;
     setError("");
     let id: string;
-    try { id = await ensureConversation("New media edit", false); } catch (e) { setError(friendlyError(e, "start the conversation")); return; }
+    try { id = await ensureConversation("New media edit", false); } catch (e) { logoUploadRef.current = false; setError(friendlyError(e, "start the conversation")); return; }
     for (const file of list.slice(0, 12)) {
       const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const entry: PendingFile = { key, file, progress: 0, url: URL.createObjectURL(file) };
@@ -226,8 +242,14 @@ export default function Studio() {
       try {
         const attachment = await api.uploadStudioAttachment(id, file, progress => setFiles(value => value.map(item => item.key === key ? { ...item, progress } : item)));
         setFiles(value => value.map(item => item.key === key ? { ...item, progress: 100, attachmentId: attachment.id } : item));
+        if (autoLogo) {
+          await send(undefined, { text: "attached", ids: [attachment.id] });
+          setFiles(value => value.filter(item => item.key !== key));
+          URL.revokeObjectURL(entry.url);
+        }
       } catch (e) { setError(friendlyError(e, "upload attachment")); setFiles(value => value.filter(item => item.key !== key)); URL.revokeObjectURL(entry.url); }
     }
+    if (autoLogo) logoUploadRef.current = false;
   }
   function removeFile(file: PendingFile) { setFiles(value => value.filter(item => item.key !== file.key)); URL.revokeObjectURL(file.url); }
 
@@ -249,7 +271,7 @@ export default function Studio() {
     try {
       const id = await ensureConversation(finalText.slice(0, 70));
       await api.sendStudioMessage(id, finalText, ids, { execution_mode: conversation || !activeId ? (manual ? "manual" : "auto") : undefined, manual_question_id: manualQuestion?.id });
-      if (manualQuestion?.id && finalText === 'approve') setSubmittedQuestionId(manualQuestion.id);
+      if (manualQuestion?.id && (finalText === 'approve' || (manualQuestion.key === 'logo_asset' && finalText === 'attached'))) setSubmittedQuestionId(manualQuestion.id);
       await refresh(id);
       setPending(null); setLocalFiles(list => { list.forEach(file => URL.revokeObjectURL(file.url)); return []; });
     } catch (e) {
@@ -311,7 +333,9 @@ export default function Studio() {
     </div>
   </div>;
 
-  return <div className="studio" data-layout={layout} data-ws={wsVisible ? "open" : "closed"} data-view={mobileView}>
+  const shownWorkspace = liveWorkspace ?? workspaceWidth;
+  return <div className="studio" ref={studioRef} data-layout={layout} data-ws={wsVisible ? "open" : "closed"} data-view={mobileView} data-resizing={resizingWorkspace || undefined}
+    style={layout === "desktop" && wsVisible && shownWorkspace ? { ["--ws-w" as string]: `${shownWorkspace}px` } : undefined}>
     <section className="chat-col" aria-label="Conversation" hidden={layout === "mobile" && mobileView !== "chat"}>
       {layout !== "mobile" ? <header className="chat-head">
         <h1 className="chat-title bidi wrap-safe" dir="auto" title={conversation?.title}>{title}</h1>
@@ -355,7 +379,11 @@ export default function Studio() {
 
     {layout === "tablet" && overlayOpen ? <button className="ws-backdrop" onClick={() => setOverlayOpen(false)} aria-label="Close workspace" tabIndex={-1}/> : null}
     <Workspace conversation={conversation} project={current} projects={projects} onSelectProject={setSelectedProject} tab={wsTab} onTab={setWsTab}
-      sourceAttachment={sourceAttachment} onCancel={stop} onSaved={() => void refresh()} showTabs={layout !== "mobile"} onCollapse={layout === "mobile" ? undefined : closeWorkspace}/>
+      sourceAttachment={sourceAttachment} onCancel={stop} onSaved={() => void refresh()} showTabs={layout !== "mobile"} onCollapse={layout === "mobile" ? undefined : closeWorkspace}
+      panelRef={workspaceRef}
+      resizer={layout === "desktop" && wsVisible ? <Resizer panel={workspaceRef} edge="start" label="عرض پنل پیش‌نمایش" width={shownWorkspace}
+        bounds={() => ({ min: WORKSPACE_BOUNDS.min, max: Math.min(WORKSPACE_BOUNDS.max, (studioRef.current?.clientWidth ?? 1400) - MIN_CHAT) })}
+        onResize={setLiveWorkspace} onDragState={setResizingWorkspace} onCommit={value => { setWorkspaceWidth(value); setLiveWorkspace(null); }}/> : undefined}/>
 
     {layout === "mobile" ? <nav className="studio-tabs" aria-label="Studio views">
       {([["chat", "Chat", "spark"], ["preview", "Preview", "eye"], ["edit", "Edit", "edit"]] as const).map(([id, label, icon]) => <button key={id} aria-current={mobileTab === id ? "page" : undefined}

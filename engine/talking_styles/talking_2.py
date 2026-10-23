@@ -444,6 +444,8 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     ass_text = build_ass(plan, fonts)
     from engine.caption_preferences import caption_font
     ass_text = caption_font(ass_text, settings)
+    from engine.caption_looks import apply as apply_caption_looks
+    ass_text = apply_caption_looks(ass_text, plan.captions)
     title_color = str(settings.get("title_color") or YELLOW)
     if re.fullmatch(r"#[0-9A-Fa-f]{6}", title_color):
         old, new = _colour(YELLOW), _colour(title_color)
@@ -532,11 +534,10 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
     loud = f"loudnorm=I={LOUDNESS}:TP=-1:LRA=8,aresample=48000[aout]"
     if music and music.is_file():
         inputs += ["-i", str(music_bed(music, total + 1.0, work_dir))]
-        vf.append(f"[{next_input}:a]atrim=0:{total:.3f},volume={MUSIC_DB}dB,afade=t=in:d=0.5,"
-                  f"afade=t=out:st={max(0.0, total - 1.6):.3f}:d=1.6,aresample=48000,aformat=channel_layouts=stereo[m]")
-        vf.append("[cpad]aresample=48000,aformat=channel_layouts=stereo,asplit[vo][key]")
-        vf.append("[m][key]sidechaincompress=threshold=0.03:ratio=4:attack=40:release=400[duck]")
-        vf.append(f"[vo][duck]amix=inputs=2:normalize=0:duration=first,{loud}")
+        from engine import music_mix
+        mix = music_mix.resolve("talking_2", render_settings)
+        vf.append(mix.bed(next_input, total))
+        vf.extend(mix.graph(loud))
     else:
         vf.append(f"[cpad]{loud}")
     # Container CPU quotas do not limit FFmpeg's auto-detected host thread count.

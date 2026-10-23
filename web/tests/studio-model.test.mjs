@@ -8,6 +8,23 @@ const msg = (id, role, s, content = "x") => ({ id, role, content, attachments: [
 const ev = (seq, type, s, data = {}) => ({ id: seq, seq, type, data, created_at: at(s) });
 const project = (state = {}, status = "running") => ({ id: "p1", conversation_id: "c", engine: "motion", title: "T", status, current_version: 1, state, created_at: at(0), updated_at: at(0) });
 
+test('uploaded logo approval gate is actionable without waiting for a heartbeat', () => {
+  const args = {sending:false, messages:[msg(1,'user',1,'attached')],
+    events:[ev(1,'message.started',2)], now:T0+3000,
+    project:project({manual_checkpoint:{id:'logo',logo_attachment_id:'image'}},'awaiting_confirmation')};
+  assert.equal(isProcessing(args),false);
+  assert.equal(isProcessing({...args,sending:true}),true);
+});
+
+test('a new render moves its single card after the revision message', () => {
+  const items=buildTimeline({messages:[msg(1,'user',0),msg(2,'user',10,'replace logo')],
+    events:[ev(1,'render.started',1,{project_id:'p1'}),ev(2,'render.started',11,{project_id:'p1'})],
+    projects:[project({last_observed:{status:'running',stage:'rendering',progress:97}})],processing:true});
+  assert.equal(items.filter(i=>i.kind==='render').length,1);
+  assert.equal(items.at(-1).kind,'render');
+  assert.equal(items.at(-1).startedAt,T0+11000);
+});
+
 test('agent narration is persistent conversational text and waiting updates replace one message', () => {
   const events = [ev(1,'tool.started',1,{tool:'creative_motion'}),
     ev(2,'agent.narration',2,{narration_id:'stage',message:'Designing'}),

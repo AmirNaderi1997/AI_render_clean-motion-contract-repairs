@@ -2,11 +2,14 @@ import React from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api, StudioConversation } from "./api";
 import { Icon } from "./components/Icon";
+import { Resizer, usePanelWidth } from "./components/Resizer";
 import { ShellContext } from "./components/ShellContext";
 import { useFocusTrap, useMediaQuery, useVisualViewportHeight } from "./components/hooks";
 import { useAuth } from "./auth/AuthContext";
 import { isLocalDevelopment } from "./auth";
 import { displayTitle, parseTime } from "./format";
+
+const SIDEBAR_BOUNDS = { min: 200, max: 420 };
 
 // Kept so older screens that import { Icon } from "./EditorShell" keep working.
 export { Icon } from "./components/Icon";
@@ -32,6 +35,9 @@ export default function EditorShell() {
   const [conversations, setConversations] = React.useState<StudioConversation[]>([]);
   const [pageTitle, setPageTitle] = React.useState("");
   const sidebarRef = React.useRef<HTMLElement>(null);
+  const [sidebarWidth, setSidebarWidth] = usePanelWidth("editorgpt.sidebar.width", SIDEBAR_BOUNDS);
+  const [liveWidth, setLiveWidth] = React.useState<number | null>(null);
+  const [resizing, setResizing] = React.useState(false);
   const searchRef = React.useRef<HTMLInputElement>(null);
   const kind = routeKind(location.pathname);
 
@@ -76,7 +82,8 @@ export default function EditorShell() {
   const settingsActive = /^\/(settings|new|my-effects|library|style-library|style-learner|fonts|hermes|content|localize|talking)/.test(location.pathname);
 
   return <ShellContext.Provider value={shellValue}>
-    <div className="app" data-collapsed={collapsed || undefined} data-hide-bottom-nav={kind === "studio" || undefined} data-bare={kind === "studio" || undefined}>
+    <div className="app" data-collapsed={collapsed || undefined} data-resizing={resizing || undefined}
+      style={!collapsed && !isMobile && (liveWidth ?? sidebarWidth) ? { ["--sb" as string]: `${liveWidth ?? sidebarWidth}px` } : undefined} data-hide-bottom-nav={kind === "studio" || undefined} data-bare={kind === "studio" || undefined}>
       <a className="skip-link" href="#main-content">Skip to content</a>
 
       <aside ref={sidebarRef} className="sidebar" data-open={drawer || undefined} aria-label="Main navigation" tabIndex={-1}>
@@ -117,6 +124,8 @@ export default function EditorShell() {
             {!isLocalDevelopment ? <button className="icon-btn account-out" onClick={() => void logout()} aria-label="Log out" data-tip="Log out" data-tip-pos="top"><Icon name="logout" size={18}/></button> : null}
           </div> : null}
         </div>
+        {!rail && !isMobile ? <Resizer panel={sidebarRef} edge="end" bounds={() => SIDEBAR_BOUNDS} width={liveWidth ?? sidebarWidth} label="عرض نوار کناری"
+          onResize={setLiveWidth} onDragState={setResizing} onCommit={value => { setSidebarWidth(value); setLiveWidth(null); }}/> : null}
       </aside>
 
       {drawer && isMobile ? <button className="drawer-backdrop" onClick={() => setDrawer(false)} aria-label="Close navigation" tabIndex={-1}/> : null}

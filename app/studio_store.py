@@ -8,6 +8,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import time
+import os
+import logging
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -51,15 +54,39 @@ def _read() -> dict:
     if not FALLBACK.is_file():
         return _empty()
     try:
-        data = json.loads(FALLBACK.read_text())
-        return data if isinstance(data, dict) else _empty()
-    except (OSError, ValueError):
+        text = FALLBACK.read_text()
+    except OSError:
         return _empty()
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = _recover(text)
+    return data if isinstance(data, dict) else _empty()
+
+
+def _recover(text: str) -> dict:
+    """A damaged store must never read as "empty": the next write would erase everything.
+
+    Two processes writing at once can leave a complete JSON document followed by stray bytes. Keep the damaged
+    file for inspection and continue from the intact document at its start; if there is none, stop loudly."""
+    try:
+        data, _end = json.JSONDecoder().raw_decode(text)
+        if not isinstance(data, dict):
+            raise ValueError("not an object")
+    except ValueError as exc:
+        raise RuntimeError(f"The local Studio store {FALLBACK} is damaged and cannot be recovered automatically; "
+                           f"restore it from a backup instead of starting empty") from exc
+    damaged = FALLBACK.with_name(f"studio.damaged-{int(time.time())}.json")
+    damaged.write_text(text)
+    logging.getLogger(__name__).warning("Studio store was damaged; recovered its intact start (copy kept at %s)", damaged)
+    _write(data)
+    return data
 
 
 def _write(data: dict) -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
-    temporary = FALLBACK.with_suffix(".tmp")
+    # One temporary file per writer: concurrent writers can lose an update but can never interleave bytes.
+    temporary = FALLBACK.with_name(f"{FALLBACK.stem}.{os.getpid()}.{threading.get_ident()}.tmp")
     temporary.write_text(json.dumps(data, ensure_ascii=False, indent=1))
     temporary.replace(FALLBACK)
 

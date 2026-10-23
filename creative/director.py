@@ -60,7 +60,7 @@ def _outline_beats(concept: Concept) -> list[Beat]:
 
 
 def _expand(chosen: Concept, brief: ContentBrief, critique: Critique, caps: str, guide: str,
-            used: list[str], started: float, budget_s: float) -> None:
+            used: list[str], started: float, budget_s: float, source: str = "") -> None:
     """Detail only the winner: smaller outputs, fewer tokens, and a result that fits the model's output limit."""
     if time.monotonic() - started > budget_s:
         chosen.beats = chosen.beats or _outline_beats(chosen)
@@ -68,7 +68,7 @@ def _expand(chosen: Concept, brief: ContentBrief, critique: Critique, caps: str,
     try:
         request = llm.dumps({"brief": brief.model_dump(), "concept": chosen.model_dump(exclude={"beats"}),
                              "reviewer_improvements": critique.improvements, "improved_hook": critique.improved_hook})
-        expansion = llm.ask(_Expansion, prompts.EXPAND, request + f"\n\n{guide}\n\nCapabilities:\n{caps}",
+        expansion = llm.ask(_Expansion, prompts.EXPAND, request + f"\n\n{guide}\n\nSource evidence:\n{source}\n\nCapabilities:\n{caps}",
                             route=llm.DIRECTOR_ROUTE, tokens=5000, used=used)
         chosen.beats = expansion.beats[:7] or _outline_beats(chosen)
         chosen.visual_language = expansion.visual_language or chosen.visual_language
@@ -134,7 +134,7 @@ def _direct(kind: str, understand_system: str, source_text: str, caps: str, *, b
 
     chosen = _pick(critique, concepts)
     critique.chosen_id = chosen.id
-    _expand(chosen, brief, critique, caps, guide, used, started, budget_s)
+    _expand(chosen, brief, critique, caps, guide, used, started, budget_s, source_text)
     style = chosen.style_hint if (kind == "talk" and chosen.style_hint in capabilities.TALKING_STYLES) else None
     return CreativePlan(kind=kind, brief=brief, concepts=concepts, critique=critique, chosen=chosen, style=style,
                         director_notes=compose_notes(brief, chosen, critique), models=used,
@@ -153,13 +153,16 @@ def direct_talk(sentences: list[dict], request: str = "", *, style: str | None =
 
 
 def direct_product(facts: dict | None, request: str, *, image_count: int = 0, duration_s: int = 30,
-                   budget_s: float = DEFAULT_BUDGET_S) -> CreativePlan:
+                   budget_s: float = DEFAULT_BUDGET_S, assets: list[dict] | None = None) -> CreativePlan:
     source = (f"What the user asked for: {request}\nTarget length: {duration_s} seconds. Usable images available: {image_count}.\n"
-              f"Verified facts (from the page / user):\n{llm.dumps(facts or {})}")
+              f"Verified facts (from the page / user):\n{llm.dumps(facts or {})}\n"
+              f"Visually inspected assets (only listed indices may be used):\n{llm.dumps(assets or [])}")
     return _direct("product", prompts.UNDERSTAND_PRODUCT, source, capabilities.product_capabilities(), budget_s=budget_s)
 
 
-def direct_idea(request: str, *, image_count: int = 0, duration_s: int = 30, budget_s: float = DEFAULT_BUDGET_S) -> CreativePlan:
-    kind = "images" if image_count and len(request.split()) < 12 else "idea"
-    source = (f"The brief: {request}\nTarget length: {duration_s} seconds. Images supplied by the user: {image_count}.")
+def direct_idea(request: str, *, image_count: int = 0, duration_s: int = 30, budget_s: float = DEFAULT_BUDGET_S,
+                assets: list[dict] | None = None) -> CreativePlan:
+    kind = "images" if image_count else "idea"
+    source = (f"The brief: {request}\nTarget length: {duration_s} seconds. Images supplied by the user: {image_count}.\n"
+              f"Visually inspected assets (only listed indices may be used):\n{llm.dumps(assets or [])}")
     return _direct(kind, prompts.UNDERSTAND_IDEA, source, capabilities.product_capabilities(), budget_s=budget_s)

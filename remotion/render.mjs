@@ -26,7 +26,7 @@ inputProps.font = copyAsset(inputProps.font, "font");
 
 try {
   const serveUrl = await bundle({entryPoint: path.resolve("src/index.jsx"), publicDir});
-  const composition = await selectComposition({serveUrl, id: "ProductReel", inputProps,
+  const composition = await selectComposition({serveUrl, id: inputProps.version === 2 ? "DirectedReel" : "ProductReel", inputProps,
     browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE || undefined});
   await renderMedia({
     composition, serveUrl, inputProps, outputLocation: outputFile,

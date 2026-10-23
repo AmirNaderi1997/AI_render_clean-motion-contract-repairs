@@ -94,7 +94,11 @@ def scene_config(storyboard, media: list[dict], narration: list[dict], job_dir: 
         voice = voices.get(scene.index)
         scenes.append({"asset": scene.source_asset,
                        "title": scene.text_overlay,
+                       "role":scene.narrative_role,"visual_type":scene.visual_type,"motion_style":scene.motion_style,
                        "frames": max(1, round(source["duration_s"] * 30)),
                        "narration": str(Path(voice["file_path"]).relative_to(job_dir)) if voice else None})
-        scenes[-1]["supporting_assets"] = assets[:3]
-    return {"scenes": scenes, "music": music}
+        # Only use relevant assets explicitly selected by the storyboard.
+        # No automatic gallery of unrelated product photos every third scene.
+        scenes[-1]["supporting_assets"] = [scene.source_asset]
+    directed=any(scene.narrative_role for scene in storyboard.scenes)
+    return {"scenes": scenes, "music": music,"version":2 if directed else 1}

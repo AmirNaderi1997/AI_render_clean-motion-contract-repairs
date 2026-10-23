@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -59,6 +60,8 @@ class Cue:
     end: float
     words: list[Word] = field(default_factory=list)
     y: float | None = None   # vertical centre as a fraction of the frame height; None = the role's default
+    scale: float | None = None   # size multiplier; None = the role's size
+    color: str | None = None     # "#RRGGBB" text colour; None = the role's colour
 
 
 def enabled() -> bool:
@@ -116,11 +119,23 @@ def build_spec(cues: list[Cue], width: int, height: int, kinds: dict[str, dict] 
     def kind_of(cue: Cue) -> str:
         if cue.kind not in roles:
             return cue.kind
-        if cue.y is None:
+        if cue.y is None and cue.scale is None and cue.color is None:
             out_kinds.setdefault(cue.kind, roles[cue.kind])
             return cue.kind
-        name = f"{cue.kind}_y{int(round(cue.y * 100))}"   # the same look at another height; plain identifier (engine selectors)
-        out_kinds.setdefault(name, {**roles[cue.kind], "alignment": {**roles[cue.kind]["alignment"], "verticalOffset": cue.y}})
+        role = roles[cue.kind]
+        # The same look with another height, size or colour; a plain identifier (engine selectors).
+        name = cue.kind + "".join([
+            f"_y{int(round(cue.y * 100))}" if cue.y is not None else "",
+            f"_s{int(round(cue.scale * 100))}" if cue.scale is not None else "",
+            f"_c{cue.color.lstrip('#').lower()}" if cue.color else ""])
+        variant = {**role, "alignment": {**role["alignment"], **({"verticalOffset": cue.y} if cue.y is not None else {})},
+                   "vars": dict(role.get("vars") or {})}
+        if cue.scale is not None and "--tscaps-font-size" in variant["vars"]:
+            number, unit = re.match(r"([\d.]+)(\D+)", variant["vars"]["--tscaps-font-size"]).groups()
+            variant["vars"]["--tscaps-font-size"] = f"{float(number) * cue.scale:.2f}{unit}"
+        if cue.color:
+            variant["vars"]["--tscaps-primary-color"] = cue.color
+        out_kinds.setdefault(name, variant)
         return name
 
     names = [kind_of(c) for c in cues if c.words]
@@ -207,11 +222,13 @@ def reel_cues(plan, *, captions: bool = True, hook: bool = True, moments: bool =
                          and len((c.get("key") or "").strip()) >= 5)
             if is_moment:
                 since_moment = 0
+            look = c.get("look") or {}
+            shown = {"y": look["y"] / 1920 if "y" in look else None, "scale": look.get("scale"), "color": look.get("color")}
             if is_moment:
-                cues.append(Cue("moment", start, end, words_for(c["key"], start, end, reveal=min(1.0, (end - start) * 0.6))))
+                cues.append(Cue("moment", start, end, words_for(c["key"], start, end, reveal=min(1.0, (end - start) * 0.6)), **shown))
             elif captions:
                 phrase = " ".join(part for part in (c.get("lead"), c.get("key")) if part)
-                cues.append(Cue("caption", start, end, words_for(phrase, start, end, emphasize=c.get("key") or "")))
+                cues.append(Cue("caption", start, end, words_for(phrase, start, end, emphasize=c.get("key") or ""), **shown))
     return _tidy(cues)
 
 

@@ -16,6 +16,7 @@ and the workflow position under ``workflow`` (see ``WORKFLOW``).
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 import hashlib
 import json
 import time
@@ -83,7 +84,7 @@ def _time(seconds: float) -> str:
 
 
 def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, estimate: dict | None,
-                  has_logo: bool) -> dict:
+                  has_logo: bool, slots: list[dict] | None = None) -> dict:
     """Plain-language plan from the Talking engine's public state after analysis."""
     style = str(status.get("style") or "talking_1")
     info = STYLES.get(style, STYLES["talking_1"])
@@ -98,8 +99,13 @@ def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, 
         line = sentences[index] if isinstance(index, int) and 0 <= index < len(sentences) else None
         beats.append({"role": beat.get("role", ""), "intent": beat.get("intent", ""), "visual": beat.get("visual", ""),
                       "sentence": index, "at": _time(line["start"]) if line else "", "text": line["text"] if line else ""})
-    pictures = [{"sentence": item.get("i"), "title": item.get("title", ""), "visual_type": item.get("visual_type", "")}
-                for item in status.get("storyboard") or []] if info["pictures"] else []
+    if info["pictures"] and slots is not None:
+        # The real picture slots of the render plan (what the renderer will use), not the motion storyboard.
+        pictures = [{"sentence": item.get("i"), "title": item.get("label") or "", "source": item.get("source") or "card",
+                     "new": item.get("source") == "ai_planned"} for item in slots]
+    else:
+        pictures = [{"sentence": item.get("i"), "title": item.get("title", ""), "source": "card", "new": False}
+                    for item in status.get("storyboard") or []] if info["pictures"] else []
     concepts = []
     if chosen:
         concepts.append({"id": chosen.get("id") or "chosen", "name": chosen.get("name", ""), "angle": chosen.get("angle", ""),
@@ -125,9 +131,18 @@ def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, 
         "look": {"preset": look_of(grade), "grade": grade, "accent_color": settings.get("title_color") or "#F5B800",
                  "caption_font": settings.get("caption_font") or "default",
                  "zoom": (settings.get("zoom") or {}).get("amount", 100),
-                 "key_moments": bool(settings.get("key_moments_enabled", True))},
+                 "bottom_shade": settings.get("bottom_shade", 0),
+                 "key_moments": bool(settings.get("key_moments_enabled", True)),
+                 "key_moment_effect": settings.get("key_moment_effect", "grayscale_title"),
+                 "cold_open": bool(settings.get("first_key_moment_enabled", True)),
+                 "cold_open_sentence": settings.get("first_key_moment_sentence"),
+                 "zoom_enabled": bool((settings.get("zoom") or {}).get("enabled", True)),
+                 "zoom_base": (settings.get("zoom") or {}).get("base_scale", 100),
+                 "zoom_close": (settings.get("zoom") or {}).get("close_scale", 140),
+                 "moments": [{"sentence": m["sentence"], "title": m["title"]} for m in status.get("timeline") or []][:40]},
         "captions": info["captions"], "motion": info["motion"], "broll": info["broll"], "pictures": pictures,
-        "audio": {"music": (status.get("music") or "").rsplit("/", 1)[-1], "voice": "صدای اصلی گوینده (بدون نریشن جدید)",
+        "audio": {"music": (status.get("music") or "").rsplit("/", 1)[-1], "music_path": status.get("music") or "",
+                  "mix": _music_mix(style, settings), "voice": "صدای اصلی گوینده (بدون نریشن جدید)",
                   "sfx": info["sfx"]},
         "brand": {"name": status.get("name", ""), "tagline": status.get("title", ""), "cta": status.get("cta", ""),
                   "logo": {"enabled": bool(logo.get("enabled", True)), "motion": logo.get("motion", "pop"),
@@ -135,10 +150,12 @@ def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, 
         "format": {"aspect": "9:16", "resolution": "1080×1920", "fps": 30},
         "engines": ["تحلیل گفتار و کارگردان خلاق", f"موتور تدوین «{info['label']}»"] +
                    (["تصویرسازی برای بخش‌ها"] if info["pictures"] else []),
-        "estimate": {"render": estimate, "paid_media": info["pictures"],
+        "estimate": {"render": estimate, "paid_media": info["pictures"], "new_images": sum(1 for p in pictures if p["new"]),
                      "note": ("تصاویر بخش‌هایی که فایل یا تصویر کتابخانه ندارند با هوش مصنوعی ساخته می‌شوند و ممکن است هزینه داشته باشند."
                               if info["pictures"] else "رندر روی سرور انجام می‌شود و هزینهٔ مدل جدیدی ندارد.")},
         "concepts": concepts,
+        "timeline_edits": status.get("timeline_edits") or {},
+        "broll_edits": status.get("broll_edits") or {},
         "style_options": [{"id": key, "label": value["label"], "summary": value["summary"], "complexity": value["complexity"]}
                           for key, value in STYLES.items()],
     }
@@ -197,7 +214,15 @@ def approve(state: dict, version_id: str) -> dict:
 # -- manual plan edits ----------------------------------------------------------------------------
 
 EDITABLE = {"hook", "hook_highlight", "look", "accent_color", "caption_font", "zoom", "key_moments",
-            "logo_enabled", "logo_motion", "name", "tagline", "cta", "concept_id", "style"}
+            "logo_enabled", "logo_motion", "name", "tagline", "cta", "concept_id", "style", "timeline_edits", "broll_edits",
+            "music", "music_mix", "cold_open", "cold_open_sentence", "key_moment_effect", "zoom_enabled", "zoom_base", "zoom_close", "bottom_shade"}
+
+
+def _music_mix(style: str, settings: dict) -> dict:
+    from engine import music_mix
+    mix = music_mix.resolve(style, settings)
+    return {"volume_db": mix.volume_db, "fade_in": mix.fade_in, "fade_out": mix.fade_out, "duck": mix.duck,
+            "defaults": music_mix.defaults(style)}
 
 
 def talking_edits(content: dict, edits: dict, status: dict) -> dict:
@@ -213,6 +238,12 @@ def talking_edits(content: dict, edits: dict, status: dict) -> dict:
     settings = copy.deepcopy(status.get("render_settings") or {})
     engine, profile, applied = {}, {}, []
     touched = False
+    if 'bottom_shade' in edits:
+        value = edits['bottom_shade']
+        if type(value) not in {int, float} or not 0 <= value <= 60:
+            raise PlanError('شدت فید پایین باید بین صفر تا ۶۰ باشد.')
+        settings['bottom_shade'] = int(value); touched = True
+        applied.append(f"شدت فید پایین: {int(value)}٪")
     if "hook" in edits:
         text = " ".join(str(edits["hook"] or "").split())[:120]
         if not text:
@@ -251,6 +282,33 @@ def talking_edits(content: dict, edits: dict, status: dict) -> dict:
     if "key_moments" in edits:
         settings["key_moments_enabled"] = bool(edits["key_moments"]); touched = True
         applied.append("لحظه‌های کلیدی " + ("روشن" if edits["key_moments"] else "خاموش"))
+    if "cold_open" in edits:
+        settings["first_key_moment_enabled"] = bool(edits["cold_open"]); touched = True
+        applied.append("لحظهٔ کلیدی اول (Cold open) " + ("روشن" if edits["cold_open"] else "خاموش"))
+    if "cold_open_sentence" in edits:
+        raw = edits["cold_open_sentence"]
+        try:
+            settings["first_key_moment_sentence"] = None if raw in (None, "") else max(0, min(9999, int(raw)))
+        except (TypeError, ValueError):
+            raise PlanError("جملهٔ لحظهٔ کلیدی اول باید عدد باشد.")
+        touched = True
+        applied.append("انتخاب لحظهٔ کلیدی اول" if settings["first_key_moment_sentence"] is not None else "لحظهٔ کلیدی اول: پیشنهاد هوش مصنوعی")
+    if "key_moment_effect" in edits:
+        if edits["key_moment_effect"] not in {"grayscale_title", "title_only", "grayscale", "none"}:
+            raise PlanError("نوع افکت لحظه‌های کلیدی معتبر نیست.")
+        settings["key_moment_effect"] = edits["key_moment_effect"]; touched = True
+        applied.append("افکت لحظه‌های کلیدی عوض شد")
+    if "zoom_enabled" in edits:
+        settings.setdefault("zoom", {})["enabled"] = bool(edits["zoom_enabled"]); touched = True
+        applied.append("زوم‌های دوربین " + ("روشن" if edits["zoom_enabled"] else "خاموش"))
+    for field, key, low, high, label in (("zoom_base", "base_scale", 100, 180, "زوم قاب اصلی"), ("zoom_close", "close_scale", 100, 220, "زوم قاب نزدیک")):
+        if field in edits:
+            try:
+                value = max(low, min(high, int(edits[field])))
+            except (TypeError, ValueError):
+                raise PlanError(f"{label} باید عدد باشد.")
+            settings.setdefault("zoom", {})[key] = value; touched = True
+            applied.append(f"{label} {value}٪")
     if "logo_enabled" in edits or "logo_motion" in edits:
         logo = dict(settings.get("outro_logo") or {"enabled": True, "motion": "pop"})
         if "logo_enabled" in edits:
@@ -270,8 +328,46 @@ def talking_edits(content: dict, edits: dict, status: dict) -> dict:
             value = " ".join(str(edits[field] or "").split())[:120]
             engine[key] = value; profile[field] = value
             applied.append(f"{label}: «{value}»" if value else f"{label} حذف شد")
+    if "music" in edits:
+        from app import talking_reel
+        value = str(edits["music"] or "").strip()
+        if value and talking_reel.resolve_music(value) is None:
+            raise PlanError("این موسیقی در کتابخانه پیدا نشد.")
+        engine["music"] = value or None
+        engine["music_chosen"] = True
+        applied.append(f"موسیقی: {Path(value).stem.replace('_', ' ')}" if value else "موسیقی حذف شد")
+    if "music_mix" in edits:
+        from engine import music_mix
+        try:
+            mix = music_mix.clean(edits["music_mix"])
+        except ValueError as exc:
+            raise PlanError(f"تنظیم موسیقی معتبر نیست: {exc}")
+        if mix:
+            settings["music_mix"] = mix
+        else:
+            settings.pop("music_mix", None)
+        touched = True
+        applied.append("بلندی، محو شدن و کاهش خودکار موسیقی" if mix else "تنظیم موسیقی به حالت پیش‌فرض برگشت")
     if touched:
         engine["render_settings"] = settings
+    if "broll_edits" in edits:
+        from app import broll_edits as pictures
+        if style not in {"talking_2", "talking_3"} and edits["broll_edits"]:
+            raise PlanError("تصویر بالا فقط در سبک‌های ۲ و ۳ وجود دارد.")
+        try:
+            engine["broll_edits"] = pictures.clean(edits["broll_edits"])
+        except pictures.EditError as exc:
+            raise PlanError(str(exc))
+        count = len(engine["broll_edits"])
+        applied.append(f"ویرایش تصویر بالا: {count} مورد" if count else "ویرایش تصویر بالا پاک شد")
+    if "timeline_edits" in edits:
+        from app import timeline_edits as layer
+        try:
+            engine["timeline_edits"] = layer.clean(edits["timeline_edits"])
+        except layer.EditError as exc:
+            raise PlanError(str(exc))
+        count = len(engine["timeline_edits"])
+        applied.append(f"ویرایش‌های تایم‌لاین: {count} مورد" if count else "ویرایش‌های تایم‌لاین پاک شد")
     reanalyze = None
     if "concept_id" in edits:
         concept = next((c for c in content.get("concepts") or [] if c.get("id") == edits["concept_id"]), None)
@@ -301,5 +397,11 @@ def summary_text(content: dict, version: dict) -> str:
     render = (content.get("estimate") or {}).get("render")
     if render:
         lines.append(f"• زمان رندر تخمینی: {round(render['low_s'] / 60, 1)} تا {round(render['high_s'] / 60, 1)} دقیقه")
+    new_images = (content.get("estimate") or {}).get("new_images") or 0
+    if new_images:
+        lines.append(f"• {new_images} تصویر تازه بعد از تأیید شما با هوش مصنوعی ساخته می‌شود (هزینهٔ مدل؛ تأیید برنامه یک‌جا برای همهٔ آن‌هاست)")
+    edited = len(content.get("timeline_edits") or {})
+    if edited:
+        lines.append(f"• ویرایش دستی روی تایم‌لاین: {edited} مورد")
     lines.append("\nبرنامه را در تب «Edit» ببینید؛ هر بخش را عوض کنید یا همین‌جا بنویسید چه تغییری بدهم. رندر فقط بعد از تأیید شما شروع می‌شود.")
     return "\n".join(line for line in lines if line)

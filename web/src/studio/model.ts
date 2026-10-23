@@ -73,7 +73,7 @@ export const TOOL_LABELS: Record<string, string> = {
   creative_review: "Reviewing creative directions",
   creative_storyboard: "Developing the selected storyboard",
   motion_generation: "Generating motion",
-  motion_so: "Motion Agent",
+  motion_so: "کلیپ موشن هوشمند",
   visual_analysis: "Analyzing visual content",
   visual_review: "Reviewing visual quality",
   translation: "Preparing the translation",
@@ -209,6 +209,11 @@ export function buildTimeline({ messages, events, projects, pending, processing 
     }
     const renderish = event.type.startsWith("render.") || (["tool.progress", "tool.failed"].includes(event.type) && isRenderStage(event.data.stage));
     if (renderish && projectId && projectIds.has(projectId)) {
+      if (event.type === 'render.started' && placedRender.has(projectId)) {
+        const previous=items.findIndex(item=>item.kind==='render' && item.projectId===projectId);
+        if(previous>=0) items.splice(previous,1);
+        placedRender.delete(projectId);
+      }
       if (!placedRender.has(projectId)) {
         flush();
         placedRender.add(projectId);
@@ -277,6 +282,9 @@ export function isProcessing(args: { sending: boolean; messages: StudioMessage[]
   const { sending, messages, events, project } = args;
   const now = args.now ?? Date.now();
   if (sending) return true;
+  // A persisted approval gate means the worker is waiting for the person,
+  // even if the preceding upload message has no assistant reply yet.
+  if (project?.status === "awaiting_confirmation" && project.state?.manual_checkpoint && !project.state.manual_checkpoint.claimed) return false;
   if (project?.status === "running") return true;
   const last = messages[messages.length - 1];
   if (!last || last.role !== "user") return false;

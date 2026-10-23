@@ -21,6 +21,48 @@ def store(tmp_path, monkeypatch):
 def run(coro): return asyncio.run(coro)
 
 
+def test_legacy_render_gets_plan_without_reapplying_brand_or_starting_jobs(store, monkeypatch, tmp_path):
+    from app import studio_orchestrator as o, talking_reel
+    from types import SimpleNamespace
+    c=run(store.create_conversation('u'))
+    p=run(store.create_project(c['id'],'u','talking','old',{},'job'))
+    monkeypatch.setattr(o.jobstore,'get',lambda _:SimpleNamespace(dir=tmp_path,raw_name='source.mp4'))
+    monkeypatch.setattr(talking_reel,'load',lambda _:{'status':'done','analysis_ready':True,'output':'exports/v1.mp4'})
+    monkeypatch.setattr(talking_reel,'public',lambda s:s)
+    monkeypatch.setattr(talking_reel,'start',lambda *a,**k:pytest.fail('must not render'))
+    monkeypatch.setattr(o,'_apply_brand_defaults',lambda *a:pytest.fail('must preserve existing settings'))
+    async def refresh(cid,user,project,job,**kw):
+        assert not kw['after_analysis']
+        assert project['state']['candidate_output']=='exports/v1.mp4'
+        return await store.update_project(project['id'],user,state={**project['state'],'plan':{'versions':[{'id':'legacy'}]}}),True
+    monkeypatch.setattr(o,'_refresh_plan',refresh)
+    run(o.sync_conversation(c['id'],'u'))
+    assert run(store.get_project(p['id'],'u'))['state']['plan']['versions'][0]['id']=='legacy'
+
+
+def test_logo_replacement_requires_owned_image_before_confirmation(store, monkeypatch):
+    from app import studio_orchestrator as o
+    c=run(store.create_conversation('u'))
+    p=run(store.create_project(c['id'],'u','talking','video',{'attachment_ids':['original']},'job'))
+    monkeypatch.setattr(o,'_resolved_intent',lambda *a,**k:pytest.fail('no model needed'))
+    process_message(c['id'],'u','m','میخوام لوگو رو تغییر بدم',[])
+    session=run(store.get_conversation(c['id'],'u'))['state']['manual_session']
+    assert manual.question(session)['key']=='logo_asset'
+    with pytest.raises(ValueError, match='تصویر لوگو'):
+        manual.answer(c['id'],'u',session,session['question_id'],'attached',[])
+    image=run(store.create_attachment(c['id'],'u',kind='image',filename='logo.png',path='/logo',mime_type='image/png',size_bytes=1))
+    process_message(c['id'],'u','m2','لوگوی جدید',[image['id']])
+    updated=run(store.get_project(p['id'],'u'))
+    assert updated['state']['attachment_ids']==['original']
+    assert updated['state']['manual_checkpoint']['logo_attachment_id']==image['id']
+    assert updated['status']=='awaiting_confirmation'
+
+
+@pytest.mark.parametrize('text',['رنگ لوگو رو تغییر بده','اندازه لوگو رو عوض کن','لوگو را حذف کن'])
+def test_logo_setting_edits_do_not_ask_for_replacement(text):
+    assert not manual.requests_logo_replacement(text)
+
+
 def test_ready_job_applies_attachment_preferences_outside_async_loop(store, monkeypatch, tmp_path):
     from types import SimpleNamespace
     from app import studio_orchestrator as o, talking_reel
@@ -264,3 +306,34 @@ def test_manual_editing_replaces_requested_revision_without_running_engine(store
     assert _answer_manual_checkpoint(c['id'], 'u', p, 'هوک جدید', 'q')
     q = run(store.get_project(p['id'], 'u'))['state']['manual_checkpoint']
     assert q['id'] != 'q' and q['revision_text'] == 'هوک جدید'
+
+
+def test_a_damaged_local_store_is_recovered_not_read_as_empty(tmp_path, monkeypatch):
+    """Two processes writing at once left valid JSON followed by stray bytes; reading that as empty wiped everything."""
+    import json
+    monkeypatch.setattr(studio_store, 'DB_AVAILABLE', False)
+    monkeypatch.setattr(studio_store, 'ROOT', tmp_path)
+    monkeypatch.setattr(studio_store, 'FALLBACK', tmp_path / 'studio.json')
+    good = studio_store._empty(); good['conversations']['c1'] = {'id': 'c1', 'user_key': 'u', 'title': 'نگه دار'}
+    (tmp_path / 'studio.json').write_text(json.dumps(good) + '\n  ]\n }')
+    assert studio_store._read()['conversations']['c1']['title'] == 'نگه دار'
+    assert json.loads((tmp_path / 'studio.json').read_text())['conversations']['c1']      # repaired on disk
+    assert list(tmp_path.glob('studio.damaged-*.json'))                                    # the damaged copy is kept
+    (tmp_path / 'studio.json').write_text('{"conversations": {"x"')                        # nothing intact to recover
+    with pytest.raises(RuntimeError):
+        studio_store._read()
+    assert (tmp_path / 'studio.json').read_text().startswith('{"conversations": {"x"')     # never overwritten with an empty store
+
+
+def test_concurrent_writers_never_interleave_bytes(tmp_path, monkeypatch):
+    import json, threading
+    monkeypatch.setattr(studio_store, 'ROOT', tmp_path)
+    monkeypatch.setattr(studio_store, 'FALLBACK', tmp_path / 'studio.json')
+    sizes = (5, 5000, 50)
+    def write(n):
+        for _ in range(30):
+            data = studio_store._empty(); data['messages']['m'] = ['x' * 300] * n
+            studio_store._write(data)
+    threads = [threading.Thread(target=write, args=(n,)) for n in sizes]
+    [t.start() for t in threads]; [t.join() for t in threads]
+    assert json.loads((tmp_path / 'studio.json').read_text())['messages']['m'][0].startswith('x')

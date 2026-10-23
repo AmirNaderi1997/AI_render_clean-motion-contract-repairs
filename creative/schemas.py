@@ -46,6 +46,7 @@ class ContentBrief(_Model):
     audience: str = ""
     goal: str = ""
     tone: str = ""
+    genre: Literal["education", "story", "motivation", "sales", "explainer", "showcase"] = "explainer"
     emotional_arc: list[str] = Field(default_factory=list)
     key_moments: list[KeyMoment] = Field(default_factory=list)
     proof_points: list[str] = Field(default_factory=list)   # facts actually present in the source
@@ -73,8 +74,16 @@ class Beat(_Model):
     visual: str = ""               # concrete on-screen idea (not "nice visuals")
     motion: str = ""               # motion/typography treatment, in terms the engine can render
     sentence: int | None = None    # transcript sentence index when the source is a talk
+    title: str = ""
+    narration: str = ""
+    source_asset_index: int | None = Field(default=None, ge=0)
+    visual_type: Literal["concept", "stat", "comparison", "steps", "ui_showcase", "media_collage",
+                         "chat", "map_route", "spec_callout", "kinetic_type", "before_after"] = "concept"
+    items: list[str] = Field(default_factory=list, max_length=4)
+    duration_weight: float = Field(default=1, gt=0, le=10)
+    motion_engine: Literal['default','motion_so'] = 'default'
 
-    @field_validator("role", "intent", "visual", "motion", mode="before")
+    @field_validator("role", "intent", "visual", "motion", "title", "narration", mode="before")
     @classmethod
     def _clean(cls, value):
         return _text(value, 280)
@@ -109,7 +118,7 @@ class Concept(_Model):
     @field_validator("beats", mode="before")
     @classmethod
     def _beats(cls, value):
-        return [v for v in (value or []) if isinstance(v, dict)][:9]
+        return [v.model_dump() if isinstance(v, Beat) else v for v in (value or []) if isinstance(v, (dict,Beat))][:9]
 
     @field_validator("outline", mode="before")
     @classmethod
@@ -163,6 +172,7 @@ class Critique(_Model):
 
 
 class CreativePlan(_Model):
+    schema_version: int = 2
     kind: Kind
     brief: ContentBrief
     concepts: list[Concept]
@@ -177,12 +187,13 @@ class CreativePlan(_Model):
     def public(self) -> dict:
         """What may be stored on a job and shown to the user: the decision and its reasons, not raw prompts."""
         return {
+            "schema_version": self.schema_version,
             "kind": self.kind, "style": self.style, "created_at": self.created_at, "elapsed_s": self.elapsed_s,
-            "brief": {"topic": self.brief.topic, "core_message": self.brief.core_message,
-                      "audience": self.brief.audience, "goal": self.brief.goal, "tone": self.brief.tone},
+            "brief": self.brief.model_dump(),
             "chosen": self.chosen.model_dump(),
             "alternatives": [{"id": c.id, "name": c.name, "angle": c.angle, "hook": c.hook, "style_hint": c.style_hint,
                               "visual_language": c.visual_language, "pacing": c.pacing, "why_it_works": c.why_it_works}
                              for c in self.concepts if c.id != self.chosen.id],
             "verdict": self.critique.verdict, "director_notes": self.director_notes,
+            "critique":self.critique.model_dump(),
         }

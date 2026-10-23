@@ -14,6 +14,7 @@
 
 /* ── Sidebar ─────────────────────────────────────────────── */
 .sidebar {
+  position: relative;
   display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
   background: var(--sidebar); border-inline-end: 1px solid var(--border-subtle);
   padding: var(--space-2); padding-block-start: calc(var(--space-2) + var(--safe-top)); padding-block-end: calc(var(--space-2) + var(--safe-bottom));
@@ -132,3 +133,12 @@
 .page-header p { color: var(--text-2); margin-top: 6px; max-width: 60ch; }
 .page-section { margin-top: var(--space-8); }
 .page-section > h2 { font-size: 13px; font-weight: 500; color: var(--text-3); margin-bottom: var(--space-3); }
+
+/* ── Resizable panels ────────────────────────────────────── */
+.app[data-resizing] { transition: none; user-select: none; cursor: col-resize; }
+.resizer { position: absolute; inset-block: 0; width: 10px; z-index: 20; cursor: col-resize; touch-action: none; display: flex; justify-content: center; }
+.resizer::after { content: ""; width: 2px; height: 100%; background: transparent; border-radius: 2px; transition: background var(--dur-fast); }
+.resizer:hover::after, .resizer[data-active]::after, .resizer:focus-visible::after { background: var(--ink); }
+.resizer:focus-visible { outline: none; }
+.resizer[data-edge="end"] { inset-inline-end: 0; }   /* the sidebar clips overflow, so its handle sits fully inside */
+.resizer[data-edge="start"] { inset-inline-start: -5px; }

@@ -20,7 +20,8 @@ export function ManualQuestion({ question, busy, onAnswer }: { question: ManualQ
       {(summary.storyboard || summary.scenes || summary.lines)?.length ? <details><summary>مشاهدهٔ برنامه و متن</summary><ol>{(summary.storyboard || summary.scenes || summary.lines || []).map((row, i) => <li key={i}>{row.title || row.text || row.fa || row.narration || row.visual || `صحنهٔ ${i + 1}`}</li>)}</ol></details> : null}
       {summary.next ? <p>{summary.next}</p> : null}
     </div> : null}
-    <div className="manual-choices">{question.choices.map(option => <button type="button" key={option.value} disabled={busy} onClick={() => onAnswer(option.value)} className="manual-choice">
+    {question.key === "logo_asset" ? <p role="status">تصویر لوگو را با دکمهٔ + پیوست کنید؛ پس از آپلود، خودکار ثبت می‌شود.</p> : null}
+    <div className="manual-choices">{question.choices.filter(option => question.key !== "logo_asset" || option.value !== "attached").map(option => <button type="button" key={option.value} disabled={busy} onClick={() => onAnswer(option.value)} className="manual-choice">
       {option.layout ? <span className="manual-layout" data-layout={option.layout} aria-hidden="true"><i/><i/></span> : option.swatch ? <i className="manual-swatch" style={{ background: option.swatch }} aria-hidden="true"/> : null}
       <span style={option.font ? { fontFamily: option.font } : undefined}><b>{option.label}</b>{option.description ? <small>{option.description}</small> : null}</span>
     </button>)}</div>

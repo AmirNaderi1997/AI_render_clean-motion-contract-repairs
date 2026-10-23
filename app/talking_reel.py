@@ -39,7 +39,8 @@ DEFAULTS = {
         "dropped_sentences": [], "bottom_shade": 0, "source_cuts": [],
     },
 }
-EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "cta", "style", "captions", "storyboard", "render_settings"}
+EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "music_chosen", "cta", "style", "captions", "storyboard", "render_settings",
+            "timeline_edits", "broll_edits"}
 _lock = threading.Lock()
 _running: set[str] = set()
 _cancel_events: dict[str, threading.Event] = {}
@@ -189,6 +190,13 @@ def _clean_render_settings(value: object) -> dict:
     current["outro_logo"]["enabled"] = bool(outro.get("enabled", True))
     if outro.get("motion") in {"pop", "fade", "slide", "none"}:
         current["outro_logo"]["motion"] = outro["motion"]
+    from engine import music_mix
+    try:
+        mix = music_mix.clean(value.get("music_mix"))
+    except ValueError:
+        mix = {}
+    if mix:
+        current["music_mix"] = mix
     current["disabled_moments"] = [str(v)[:80] for v in (value.get("disabled_moments") or [])][:30]
     drops = value.get('dropped_sentences') or []
     current['dropped_sentences'] = sorted({v for v in drops if type(v) is int and 0 <= v < 10000})[:500] if isinstance(drops, list) else []
@@ -218,6 +226,14 @@ def update(job_dir: Path, changes: dict) -> dict:
             value = changes[key]
             if key == "render_settings":
                 state[key] = _clean_render_settings(value)
+                continue
+            if key == "timeline_edits":
+                from app import timeline_edits
+                state[key] = timeline_edits.clean(value)
+                continue
+            if key == "broll_edits":
+                from app import broll_edits
+                state[key] = broll_edits.clean(value)
                 continue
             if key in {"captions", "storyboard"}:
                 decisions_key = _decisions_key(str(state.get("style") or "talking_1"))
@@ -256,6 +272,8 @@ def update(job_dir: Path, changes: dict) -> dict:
                 from engine.talking_reel import STYLES
                 if value not in STYLES:
                     raise ValueError(f"unknown style {value!r}")
+            elif key == "music_chosen":
+                value = bool(value)
             elif key == "music":
                 value = value or None
                 if value and resolve_music(value) is None:
@@ -264,6 +282,13 @@ def update(job_dir: Path, changes: dict) -> dict:
                 value = str(value or "").strip()
             state[key] = value
         return save(job_dir, state)
+
+
+def music_library() -> list[dict]:
+    """The bundled music beds a project can use: [{"path": "assets/music/x.mp3", "label": "x"}]."""
+    folder = PROJECT_ROOT / "assets" / "music"
+    return [{"path": f"assets/music/{p.name}", "label": p.stem.replace("_", " ")}
+            for p in sorted(folder.glob("*")) if p.suffix.lower() in {".mp3", ".wav", ".m4a"} and p.is_file()]
 
 
 def resolve_music(music: Optional[str]) -> Optional[Path]:
@@ -390,6 +415,10 @@ def _analyze(job_dir: Path, video: Path, *, style: Optional[str], request: str =
         )
         state[decisions_key] = decisions
         state["hook2"] = decisions["hook"]
+        if plan and int(plan.schema_version) >= 2 and selected in {'talking_2','talking_3'}:
+            from creative.production import bind_talking
+            decisions = bind_talking(plan,decisions,transcript['sentences'])
+            state[decisions_key] = decisions
     state["creative_plan"] = picked if picked is not None else (plan.public() if plan else None)
     state["creative_error"] = creative_error
     state.update(
@@ -605,7 +634,6 @@ def _review_creative_output(job_dir: Path, output: Path, moments: list[float] | 
     enforce(report)
 
 
-
 def user_media(job_dir: Path) -> list[Path]:
     folder = job_dir / MEDIA_DIR
     return sorted(p for p in folder.glob("*") if p.suffix.lower() in IMAGE_EXTENSIONS) if folder.is_dir() else []
@@ -650,6 +678,8 @@ def resolve_pictures(job_dir: Path, decisions: dict, style: str, *,
         entry = {"i": slot["i"], "label": slot.get("label") or "", "source": "card", "file": None}
         if slot.get("media") in uploads:
             entry.update(source="upload", file=str(uploads[slot["media"]]))
+        elif slot.get("library") and (PROJECT_ROOT / slot["library"]).is_file():
+            entry.update(source="library", file=str(PROJECT_ROOT / slot["library"]))
         else:
             words = set((slot.get("label") or "").split()) | set(slot.get("visual", "").lower().split())
             match = next((a for a in library if words & {str(t).lower() for t in a.get("tags") or []}), None)
@@ -799,15 +829,22 @@ class PlannedReel:
     hyperframes: bool = False
 
 
-def plan_render(job_dir: Path, video: Path, *, prepare_media: bool = True) -> PlannedReel:
+def plan_render(job_dir: Path, video: Path, *, prepare_media: bool = True, apply_edits: bool = True) -> PlannedReel:
     """The render plan for the job's current decisions.
 
     ``prepare_media`` False is for reading only: no picture is generated, no face tracking runs and no
-    transcription is requested; AI pictures that do not exist yet appear as "ai_planned" slots."""
-    style = str(load(job_dir).get("style") or "talking_1")
-    if style in SPLIT_STYLES:
-        return _plan_split(job_dir, video, style, prepare_media=prepare_media)
-    return _plan_talking_1(job_dir, video, prepare_media=prepare_media)
+    transcription is requested; AI pictures that do not exist yet appear as "ai_planned" slots.
+    ``apply_edits`` False returns the plan as the AI made it, without the user's timeline edits."""
+    state = load(job_dir)
+    style = str(state.get("style") or "talking_1")
+    planned = (_plan_split(job_dir, video, style, prepare_media=prepare_media,
+                           broll_edits=state.get("broll_edits") if apply_edits else None) if style in SPLIT_STYLES
+               else _plan_talking_1(job_dir, video, prepare_media=prepare_media))
+    if apply_edits and state.get("timeline_edits"):
+        from app import timeline_edits
+        for plan in {id(p): p for p in (planned.plan, planned.visual_plan) if p is not None}.values():
+            timeline_edits.apply(plan, planned.transcript["sentences"], state["timeline_edits"])
+    return planned
 
 
 def _planning_transcript(job_dir: Path, video: Path, prepare_media: bool) -> dict:
@@ -844,7 +881,7 @@ def _plan_talking_1(job_dir: Path, video: Path, *, prepare_media: bool) -> Plann
     return PlannedReel("talking_1", media, transcript, decisions, settings, plan)
 
 
-def _plan_split(job_dir: Path, video: Path, style: str, *, prepare_media: bool) -> PlannedReel:
+def _plan_split(job_dir: Path, video: Path, style: str, *, prepare_media: bool, broll_edits: dict | None = None) -> PlannedReel:
     from app.config import settings
     from engine.talking_reel import get_style
     _brain_name, decisions_key, _music = SPLIT_STYLES[style]
@@ -858,6 +895,9 @@ def _plan_split(job_dir: Path, video: Path, style: str, *, prepare_media: bool) 
                  "hook": load(job_dir).get("hook2") or decisions["hook"]}
     render_settings = state.get("render_settings") or DEFAULTS["render_settings"]
     decisions = _apply_timeline_choices(decisions, style, render_settings)
+    if broll_edits:
+        from app import broll_edits as broll_layer
+        decisions = broll_layer.apply(decisions, broll_edits)
     motion_panels={}
     panel_manifest=job_dir/'generated'/'motion_so'/'talking_panels.json'
     if style=='talking_2' and panel_manifest.is_file():
@@ -954,7 +994,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
 
     # The talking_1 default bed does not suit every style; an explicit choice wins.
     music = state.get("music")
-    if music in (None, DEFAULT_MUSIC) and state.get("music") is not None:
+    if music in (None, DEFAULT_MUSIC) and state.get("music") is not None and not state.get("music_chosen"):
         music = default_music
     rough = job_dir / "talking_reel_work" / "hyperframes_base.mp4" if hyperframes else out
     render_options=dict(work_dir=job_dir / "talking_reel_work",music=resolve_music(music),
@@ -984,8 +1024,12 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
                                         cached_only=bool(load(job_dir).get('cached_render_only')))
                 if any(b.layout == 'top_panel' and not b.custom for b in beats):
                     raise RuntimeError('طراحی پنل‌های توضیحی کامل نشده؛ خروجی قالبی جایگزین نشد.')
+                from creative.review import required
+                if required(load(job_dir).get('creative_plan')) and any(not b.custom for b in beats):
+                    raise RuntimeError('طراحی اختصاصی بعضی صحنه‌ها کامل نشده است؛ جایگزینی با قالب نیازمند تأیید شماست.')
             except Exception as exc:
-                if any(b.layout == 'top_panel' for b in beats) or load(job_dir).get('cached_render_only'):
+                from creative.review import required
+                if any(b.layout == 'top_panel' for b in beats) or load(job_dir).get('cached_render_only') or required(load(job_dir).get('creative_plan')):
                     raise
                 log.warning("motion designer failed for %s: %s", job_dir.name, str(exc)[:200])
                 for beat in beats:
@@ -1003,8 +1047,9 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
                 on_progress=lambda pct: _stage(job_dir, "rendering motion graphics", progress=pct),
             )
         except Exception as exc:
-            if any(b.layout == 'top_panel' for b in beats):
-                raise  # Never silently downgrade persistent explanation panels.
+            from creative.review import required
+            if any(b.layout == 'top_panel' for b in beats) or required(load(job_dir).get('creative_plan')):
+                raise  # Do not silently downgrade a creative render to generic cards.
             if not any(beat.custom for beat in beats):
                 raise
             log.warning("authored motion failed to render for %s (%s); using templates", job_dir.name, str(exc)[:200])
@@ -1019,9 +1064,12 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         review = review_render(out, beats, job_dir / "talking_reel_work")
         _stage(job_dir, "reviewing motion graphics", progress=99, visual_qc=review)
         if not review["passed"]:
+            # A hard-coded rotation of templates is not a creative repair.
+            # Keep the candidate and request a targeted, approved correction.
             raise ValueError('بازبینی موشن نیازمند اصلاح است؛ رندر تکراری خودکار انجام نشد: '+
                 '; '.join(review['problems']))
-    _review_creative_output(job_dir,out)
+    _review_creative_output(job_dir,out,
+        [(b.start+b.end)/2 for b in beats] if hyperframes else None)
     state = load(job_dir)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",
                  duration=round(plan.duration, 2), shots=len(plan.shots))

@@ -4,12 +4,34 @@ from __future__ import annotations
 import copy
 import json
 import uuid
+import re
 
 from app.studio_store import repo, run
 
 
 def choice(value, label, description="", **visual):
     return {"value": value, "label": label, "description": description, **visual}
+
+
+def requests_logo_replacement(text):
+    text = text.lower().replace('ي', 'ی').replace('ك', 'ک')
+    return bool(re.search(r'لوگو|\blogo\b', text) and
+                re.search(r'تغییر|عوض|تعویض|جایگزین|جدید|replace|change|new logo', text) and
+                not re.search(r'رنگ|موشن|اندازه|موقعیت|color|motion|size|position', text))
+
+
+def begin_logo_revision(cid, user, project, text):
+    session = {"id": uuid.uuid4().hex, "engine": "talking", "text": text,
+               "project_id": project['id'], "logo_revision": True,
+               "attachment_ids": [], "reference_ids": [], "answers": {}, "index": 0,
+               "question_id": uuid.uuid4().hex,
+               "steps": [{"key": "logo_asset", "title": "لوگوی جدید را پیوست کنید",
+                          "description": "با دکمهٔ + یک تصویر لوگو بفرستید؛ ویدیوی اصلی و لوگوی قبلی تا تأیید نهایی حفظ می‌شوند.",
+                          "input": False, "choices": [choice("attached", "استفاده از لوگوی جدید پیوست‌شده")]}]}
+    run(repo.update_project(project['id'], user, status='awaiting_input',
+                           state={**project['state'], 'manual_checkpoint': None, 'manual_editing': False}))
+    save(cid, user, session)
+    return session
 
 
 def steps(engine):

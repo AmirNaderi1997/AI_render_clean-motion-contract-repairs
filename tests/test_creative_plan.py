@@ -76,6 +76,21 @@ def test_only_the_current_version_can_be_approved_once():
         creative_plan.approve(approved, creative_plan.current(approved)["id"])  # not waiting any more
 
 
+def test_bottom_shade_is_versioned_and_maps_to_native_renderer():
+    before=content()
+    result=creative_plan.talking_edits(before,{'bottom_shade':45},status())
+    assert result['engine']['render_settings']['bottom_shade']==45
+    after_status={**status(),'render_settings':result['engine']['render_settings']}
+    after=creative_plan.build_talking(after_status,sentences=SENTENCES,video_seconds=20,estimate=None,has_logo=False)
+    assert after['look']['bottom_shade']==45
+    state,_=creative_plan.add_version({},before,source='agent')
+    state=creative_plan.approve(state,creative_plan.current(state)['id'])
+    state,changed=creative_plan.add_version(state,after,source='user')
+    assert changed and not creative_plan.is_approved(state)
+    for bad in (-1,61,float('nan')):
+        with pytest.raises(creative_plan.PlanError):creative_plan.talking_edits(before,{'bottom_shade':bad},status())
+
+
 def test_edits_map_only_to_real_engine_fields():
     plan = content()
     result = creative_plan.talking_edits(plan, {"hook": "سه اشتباه بزرگ", "hook_highlight": ["اشتباه", "نیست"],
@@ -287,3 +302,99 @@ def test_talking_1_persian_name_keeps_joined_letters():
         return next(line for line in ass.splitlines() if line.startswith("Dialogue") and ",name," in line)
     assert "\\fsp0" in name_event("رضا رفیعی")       # letter spacing would break Persian joining
     assert "\\fsp0" not in name_event("Reza Rafiei")  # Latin names keep the style's spacing
+
+
+def test_timeline_edit_becomes_a_new_version_awaiting_approval_and_resets_with_reanalysis(studio, monkeypatch):
+    s = studio
+    monkeypatch.setattr(s.o, "_validate_timeline_edits", lambda job, edits: None)
+    run(s.o.sync_conversation(s.c["id"], "u"))
+    v1 = creative_plan.current(project(s)["state"])["id"]
+    run(s.o.edit_timeline(s.p["id"], "u", v1, [{"id": "caption:s0:0", "text": "متن تازه"},
+                                                {"id": "caption:s0:1", "deleted": True}]))
+    p = project(s)
+    v2 = creative_plan.current(p["state"])
+    assert v2["n"] == 2 and not creative_plan.is_approved(p["state"])
+    assert s.engine["timeline_edits"] == {"caption:s0:0": {"text": "متن تازه"}, "caption:s0:1": {"deleted": True}}
+    assert v2["content"]["timeline_edits"] == s.engine["timeline_edits"]
+    # an op replaces that caption's whole edit (so a field set back to the AI's value stops being an edit);
+    # other captions keep theirs, and reset removes one
+    run(s.o.edit_timeline(s.p["id"], "u", v2["id"], [{"id": "caption:s0:0", "start": 1.0}, {"id": "caption:s0:1", "reset": True}]))
+    assert s.engine["timeline_edits"] == {"caption:s0:0": {"start": 1.0}}
+    v3 = creative_plan.current(project(s)["state"])
+    with pytest.raises(creative_plan.PlanError):
+        run(s.o.edit_timeline(s.p["id"], "u", v1, [{"id": "caption:s0:0", "reset": True}]))   # stale version
+    run(s.o.edit_plan(s.p["id"], "u", v3["id"], {"concept_id": "c2"}))
+    assert s.engine["timeline_edits"] == {}   # edits belong to the previous decisions
+    assert s.calls["start"] == 0
+
+
+def test_caption_look_edit_passes_through_the_api_model_and_orchestrator(studio, monkeypatch):
+    from app.routers.studio import TimelineOp
+    s = studio
+    monkeypatch.setattr(s.o, "_validate_timeline_edits", lambda job, edits: None)
+    run(s.o.sync_conversation(s.c["id"], "u"))
+    v1 = creative_plan.current(project(s)["state"])["id"]
+    op = TimelineOp(id="caption:s0:0", x=318.9, y=421.4, scale=1.5, color="#ffcc00").model_dump(exclude_none=True)
+    run(s.o.edit_timeline(s.p["id"], "u", v1, [op]))
+    assert s.engine["timeline_edits"] == {"caption:s0:0": {"x": 318.9, "y": 421.4, "scale": 1.5, "color": "#FFCC00"}}
+
+
+def test_music_and_mix_edits_become_a_new_version_and_validate(studio):
+    s = studio
+    run(s.o.sync_conversation(s.c["id"], "u"))
+    v1 = creative_plan.current(project(s)["state"])["id"]
+    run(s.o.edit_plan(s.p["id"], "u", v1, {"music": "assets/music/cinematic_pulse.mp3",
+                                          "music_mix": {"volume_db": -24, "fade_out": 3, "duck": False}}))
+    v2 = creative_plan.current(project(s)["state"])
+    assert v2["n"] == 2 and not creative_plan.is_approved(project(s)["state"])
+    assert s.engine["music"] == "assets/music/cinematic_pulse.mp3" and s.engine["music_chosen"] is True
+    assert s.engine["render_settings"]["music_mix"] == {"volume_db": -24.0, "fade_out": 3.0, "duck": False}
+    assert v2["content"]["audio"]["mix"]["volume_db"] == -24.0 and v2["content"]["audio"]["mix"]["duck"] is False
+    with pytest.raises(creative_plan.PlanError):
+        run(s.o.edit_plan(s.p["id"], "u", v2["id"], {"music": "assets/music/nope.mp3"}))
+    with pytest.raises(creative_plan.PlanError):
+        run(s.o.edit_plan(s.p["id"], "u", v2["id"], {"music_mix": {"volume_db": 10}}))
+    run(s.o.edit_plan(s.p["id"], "u", v2["id"], {"music": "", "music_mix": {}}))
+    assert s.engine["music"] is None and "music_mix" not in s.engine["render_settings"]
+    assert s.calls["start"] == 0
+
+
+def test_cold_open_key_moment_effect_and_zoom_edits_reach_the_render_settings(studio):
+    s = studio
+    run(s.o.sync_conversation(s.c["id"], "u"))
+    v1 = creative_plan.current(project(s)["state"])
+    look = v1["content"]["look"]
+    assert {"cold_open", "key_moment_effect", "zoom_enabled", "zoom_base", "zoom_close", "moments"} <= set(look)
+    run(s.o.edit_plan(s.p["id"], "u", v1["id"], {"cold_open": False, "key_moment_effect": "title_only", "zoom_enabled": False,
+                                                "zoom_base": 120, "zoom_close": 999, "cold_open_sentence": 3}))
+    got = s.engine["render_settings"]
+    assert got["first_key_moment_enabled"] is False and got["first_key_moment_sentence"] == 3
+    assert got["key_moment_effect"] == "title_only" and got["zoom"]["enabled"] is False
+    assert got["zoom"]["base_scale"] == 120 and got["zoom"]["close_scale"] == 220      # clamped to the supported range
+    v2 = creative_plan.current(project(s)["state"])
+    with pytest.raises(creative_plan.PlanError):
+        run(s.o.edit_plan(s.p["id"], "u", v2["id"], {"key_moment_effect": "sparkles"}))
+
+
+def test_picture_edit_becomes_a_new_version_and_costs_nothing_until_approved(studio, monkeypatch):
+    s = studio
+    monkeypatch.setattr(s.o, "_validate_broll_edits", lambda job, edits: None)
+    s.engine["style"] = "talking_2"
+    run(s.o.sync_conversation(s.c["id"], "u"))
+    v1 = creative_plan.current(project(s)["state"])["id"]
+    run(s.o.edit_pictures(s.p["id"], "u", v1, [{"slot": 2, "source": "ai", "visual": "a brand new idea"},
+                                              {"slot": 5, "source": "hidden"}]))
+    p = project(s)
+    v2 = creative_plan.current(p["state"])
+    assert v2["n"] == 2 and not creative_plan.is_approved(p["state"])
+    assert s.engine["broll_edits"] == {"2": {"source": "ai", "visual": "a brand new idea"}, "5": {"source": "hidden"}}
+    assert v2["content"]["broll_edits"] == s.engine["broll_edits"]
+    # one op is that slot's whole choice; reset restores the AI's
+    run(s.o.edit_pictures(s.p["id"], "u", v2["id"], [{"slot": 5, "reset": True}, {"slot": 2, "source": "hidden"}]))
+    assert s.engine["broll_edits"] == {"2": {"source": "hidden"}}
+    assert s.calls["start"] == 0 and s.calls["analyze"] == []        # nothing rendered, nothing generated
+    with pytest.raises(creative_plan.PlanError):
+        run(s.o.edit_pictures(s.p["id"], "u", v1, [{"slot": 2, "reset": True}]))      # stale version
+    v3 = creative_plan.current(project(s)["state"])["id"]
+    run(s.o.edit_plan(s.p["id"], "u", v3, {"style": "talking_3"}))
+    assert s.engine["broll_edits"] == {}                              # picture choices belong to the previous decisions

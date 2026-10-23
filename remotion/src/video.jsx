@@ -6,7 +6,7 @@ import {
 
 const font = "EditorRay, Tahoma, Arial, sans-serif";
 
-const ProductScene = ({scene, index, count}) => {
+const ProductScene = ({scene, index, count, resolveAsset = staticFile}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const enter = spring({frame, fps, config: {damping: 16, stiffness: 110}});
@@ -20,7 +20,7 @@ const ProductScene = ({scene, index, count}) => {
   const heroNumber = isHero ? scene.title.match(/[۰-۹\d]+/)?.[0] : null;
   return <AbsoluteFill style={{background: "#f4f4f1", overflow: "hidden", fontFamily: font, opacity: leave}}>
     <AbsoluteFill style={{opacity: 0.14, filter: "blur(34px)", transform: `scale(${scale * 1.16})`}}>
-      <Img src={staticFile(scene.asset)} style={{width: "100%", height: "100%", objectFit: "cover"}}/>
+      <Img src={resolveAsset(scene.asset)} style={{width: "100%", height: "100%", objectFit: "cover"}}/>
     </AbsoluteFill>
     <div style={{position: "absolute", inset: 28, borderRadius: 44, background: "rgba(255,255,255,.92)", boxShadow: "0 24px 70px rgba(10,18,32,.12)"}}/>
     {spotlight ? <div style={{position: "absolute", top: 28, left: 28, right: 28, height: 550, borderRadius: "44px 44px 100px 100px", background: accent, transform: `translateY(${(1-enter)*-100}px)`}}/> : null}
@@ -41,24 +41,24 @@ const ProductScene = ({scene, index, count}) => {
   </AbsoluteFill>;
 };
 
-const Reel = ({scenes = [], music, font: fontFile}) => {
+export const Reel = ({scenes = [], music, font: fontFile, resolveAsset = staticFile, AudioComponent = Audio}) => {
   const [fontHandle] = useState(() => delayRender("Loading Ray font"));
   useEffect(() => {
     if (!fontFile) {continueRender(fontHandle); return;}
-    const face = new FontFace("EditorRay", `url(${staticFile(fontFile)})`, {weight: "100 950"});
+    const face = new FontFace("EditorRay", `url(${resolveAsset(fontFile)})`, {weight: "100 950"});
     face.load().then(loaded => {document.fonts.add(loaded); continueRender(fontHandle);}).catch(cancelRender);
-  }, [fontFile, fontHandle]);
+  }, [fontFile, fontHandle, resolveAsset]);
   let cursor = 0;
   return <AbsoluteFill style={{background: "#f4f4f1"}}>
-    {fontFile ? <style>{`@font-face {font-family: EditorRay; src: url('${staticFile(fontFile)}'); font-weight: 100 950;}`}</style> : null}
+    {fontFile ? <style>{`@font-face {font-family: EditorRay; src: url('${resolveAsset(fontFile)}'); font-weight: 100 950;}`}</style> : null}
     {scenes.map((scene, index) => {
       const start = cursor; cursor += scene.frames;
       return <Sequence key={`${index}-${scene.asset}`} from={start} durationInFrames={scene.frames} premountFor={30}>
-        <ProductScene scene={scene} index={index} count={scenes.length}/>
-        {scene.narration ? <Audio src={staticFile(scene.narration)} volume={1}/> : null}
+        <ProductScene scene={scene} index={index} count={scenes.length} resolveAsset={resolveAsset}/>
+        {scene.narration ? <AudioComponent src={resolveAsset(scene.narration)} volume={1}/> : null}
       </Sequence>;
     })}
-    {music ? <Audio src={staticFile(music)} volume={0.08} loop/> : null}
+    {music ? <AudioComponent src={resolveAsset(music)} volume={0.08} loop/> : null}
   </AbsoluteFill>;
 };
 

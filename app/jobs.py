@@ -1251,7 +1251,25 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
             target_lufs=float(render_cfg.get("loudness_lufs", -14)) if loudnorm and not motion_config else None,
         )
 
-        if motion_config:
+        from creative.review import required as creative_review_required, review_export, enforce
+        creative_direction=(data.get('generation_meta') or {}).get('creative_plan')
+        creative_v2=creative_review_required(creative_direction)
+        if creative_v2:
+            job.render.message='reviewing creative output'
+            _write_status(job)
+            board_path=job.dir/'storyboard.json'
+            board=json.loads(board_path.read_text()) if board_path.is_file() else {}
+            cursor=0.; moments=[]
+            for scene in board.get('scenes',[]):
+                length=float(scene['duration_s'])
+                moments.append(cursor+length/2);cursor+=length
+            report=review_export(out_path,{'direction':creative_direction,'storyboard':board},
+                job.dir/'creative_review',duration=plan.output_duration,moments=moments)
+            job.render.technical_qc['creative_review']=report
+            _write_status(job)
+            enforce(report)
+
+        if motion_config and not creative_v2:
             from brain.qc_pipeline import run_qc
             job.render.message = "reviewing motion scenes"
             _write_status(job)

@@ -66,7 +66,7 @@ def test_all_narration_uses_localize_voice(monkeypatch, tmp_path):
 
 def test_saved_media_provider_routes_to_arvan():
     assert media_provider("retired_image").name == "arvan_image"
-    assert {item["name"] for item in list_providers()} == {"arvan_image", "local_fixture"}
+    assert {item["name"] for item in list_providers()} == {"arvan_image", "local_fixture", "lm_gateway"}
 
 
 def test_arvan_image_contract(monkeypatch, tmp_path):
@@ -85,7 +85,8 @@ def test_arvan_image_contract(monkeypatch, tmp_path):
     assert calls[0]["modalities"] == ["image", "text"]
 
 
-def test_no_retired_providers_in_runtime_source():
+def test_provider_labels_do_not_introduce_direct_endpoints_outside_central_adapter():
+    import re
     root = Path(__file__).parents[1]
     retired = ("sar" + "ovi", "jar" + "vis")
     for directory in ("app", "brain", "web/src"):
@@ -100,4 +101,8 @@ def test_no_retired_providers_in_runtime_source():
                     # Gateway identities, never as direct network endpoints.
                     assert "https://" not in path.read_text()
                     continue
-                assert not any(name in path.read_text().lower() for name in retired), path
+                # Provider names and Custom Endpoint group IDs are valid
+                # gateway metadata, not direct connections. Guard literal
+                # network origins instead of banning names in the admin UI.
+                origins=re.findall(r'https?://[^\s\x27\x22<>]+',path.read_text().lower())
+                assert not any(name in url for name in retired for url in origins), path

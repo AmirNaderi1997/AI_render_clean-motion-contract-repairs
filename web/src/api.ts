@@ -184,36 +184,53 @@ export interface PlanContent {
   structure: { role: string; intent: string; visual: string; sentence: number | null; at: string; text: string }[];
   duration_s: number;
   style: { id: string; label: string; summary: string; complexity: string };
-  look: { preset: string; grade: Record<string, number>; accent_color: string; caption_font: string; zoom: number; key_moments: boolean };
-  captions: string; motion: string; broll: string; pictures: { sentence: number; title: string; visual_type: string }[];
+  look: { preset: string; grade: Record<string, number>; accent_color: string; caption_font: string; zoom: number; key_moments: boolean;
+  key_moment_effect: string; cold_open: boolean; cold_open_sentence: number | null; zoom_enabled: boolean; zoom_base: number; zoom_close: number; bottom_shade?: number;
+  moments: { sentence: number; title: string }[] };
+  captions: string; motion: string; broll: string; pictures: { sentence: number; title: string; source: string; new: boolean }[];
   audio: { music: string; voice: string; sfx: string };
   brand: { name: string; tagline: string; cta: string; logo: { enabled: boolean; motion: string; has_logo: boolean } };
   format: { aspect: string; resolution: string; fps: number };
   engines: string[];
-  estimate: { render: { low_s: number; high_s: number; samples: number } | null; paid_media: boolean; note: string };
+  estimate: { render: { low_s: number; high_s: number; samples: number } | null; paid_media: boolean; new_images?: number; note: string };
   concepts: PlanConcept[];
+  timeline_edits: Record<string, { text?: string; start?: number; end?: number; deleted?: boolean; x?: number; y?: number; scale?: number; color?: string }>;
+  broll_edits: Record<string, { source: PictureSource; media?: string; library?: string; visual?: string; label?: string }>;
   style_options: { id: string; label: string; summary: string; complexity: string }[];
   frames?: Record<string, string>;
 }
 export interface PlanVersion { id: string; n: number; source: string; note: string; created_at: number; fingerprint: string; content: PlanContent }
 export interface PlanState { versions: PlanVersion[]; approved_id: string | null }
 export type PlanEdits = Partial<{
-  hook: string; hook_highlight: string[]; look: string; accent_color: string; caption_font: string; zoom: number;
+  hook: string; hook_highlight: string[]; look: string; accent_color: string; caption_font: string; zoom: number; bottom_shade: number;
   key_moments: boolean; logo_enabled: boolean; logo_motion: string; name: string; tagline: string; cta: string;
-  concept_id: string; style: string;
+  concept_id: string; style: string; timeline_edits: PlanContent["timeline_edits"]; broll_edits: PlanContent["broll_edits"];
+  music: string; music_mix: Partial<MusicMix>;
+  cold_open: boolean; cold_open_sentence: number | null; key_moment_effect: string; zoom_enabled: boolean; zoom_base: number; zoom_close: number;
 }>;
+/** The music bed's mix: level under the voice (dB), fades (seconds) and automatic lowering while someone speaks. */
+export interface MusicMix { volume_db: number; fade_in: number; fade_out: number; duck: boolean }
 /** Engine-neutral project timeline (app/project_document.py). Read-only in this phase. */
 export interface DocElement {
   id: string; type: string; start: number; end: number; label: string; text: string;
   source: { kind?: string; label?: string; file?: string | null; in?: number; out?: number };
-  props: Record<string, any>; edit: { via: ("plan" | "chat")[]; note: string };
+  props: Record<string, any>; edit: { via: ("plan" | "chat" | "timeline" | "advanced")[]; note: string };
 }
 export interface DocTrack { id: string; kind: string; label: string; elements: DocElement[] }
+/** The plan rendered without captions: what the timeline edits captions on (see app/clean_base.py). */
+export interface CleanBase { state: "ready" | "building" | "missing" | "failed" | "unsupported"; key?: string; reason?: string }
+
 export interface ProjectDocument {
   schema: number; engine: string; style: string; canvas: { width: number; height: number; fps: number };
   duration: number; content_duration: number; tracks: DocTrack[];
-  basis: { plan_version: number | null; rendered_version: number | null; workflow: string | null };
+  /** synced: true = the video was rendered from exactly this timeline; false = it was not; null = unknown. */
+  basis: { plan_version: number | null; rendered_version: number | null; workflow: string | null; synced: boolean | null };
+  stale_edits: string[]; edit_count: number; notes: string[];
 }
+export type PictureSource = "upload" | "library" | "ai" | "hidden";
+export interface PictureOp { slot: number; source?: PictureSource; media?: string; library?: string; visual?: string; label?: string; reset?: boolean }
+export interface LibraryPicture { path: string; name: string; tags: string[] }
+export interface TimelineOp { id: string; text?: string; start?: number; end?: number; deleted?: boolean; reset?: boolean; x?: number; y?: number; scale?: number; color?: string }
 export interface BrandProfile {
   name: string; tagline: string; cta: string; accent_color: string; caption_font: string; logo_motion: string;
   answered: string[]; has_logo: boolean; updated_at: number | null;
@@ -1097,8 +1114,39 @@ export const api = {
   async editStudioPlan(id: string, versionId: string, edits: PlanEdits): Promise<StudioProject> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/plan`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId, edits }) }));
   },
+  async editStudioPictures(id: string, versionId: string, ops: PictureOp[]): Promise<StudioProject> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/pictures`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId, ops }) }));
+  },
+  async uploadStudioPicture(id: string, file: File): Promise<{ name: string; size: number }> {
+    const form = new FormData(); form.append("file", file);
+    return j(await authFetch(`${BASE}/studio/projects/${id}/media`, { method: "POST", body: form }));
+  },
+  studioMusicUrl(path: string): string { return `${BASE}/studio/music/${encodeURIComponent(path.split("/").pop() || "")}`; },
+  studioPictureUrl(id: string, slot: number): string { return `${BASE}/studio/projects/${id}/pictures/${slot}`; },
+  async libraryPictures(): Promise<LibraryPicture[]> {
+    return j(await authFetch(`${BASE}/studio/library/pictures`));
+  },
+  async editStudioTimeline(id: string, versionId: string, ops: TimelineOp[]): Promise<StudioProject> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/timeline`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ version_id: versionId, ops }) }));
+  },
+  /** Localize: where captions sit on the frame. Saved on the project only; it starts no render and no voice generation. */
+  async editLocalizeCaptions(id: string, ops: TimelineOp[]): Promise<void> {
+    await j(await authFetch(`${BASE}/studio/projects/${id}/localize-captions`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ ops }) }));
+  },
   async studioDocument(id: string): Promise<ProjectDocument> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/document`));
+  },
+  async startStudioCleanBase(id: string): Promise<CleanBase> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/clean-base`, { method: "POST" }));
+  },
+  async studioCleanBase(id: string): Promise<CleanBase> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/clean-base`));
+  },
+  studioCleanBaseUrl(id: string, key: string): string { return `${BASE}/studio/projects/${id}/clean-base?key=${encodeURIComponent(key)}`; },
+  async studioFont(name: string): Promise<ArrayBuffer> {
+    const response = await authFetch(`${BASE}/studio/fonts/${encodeURIComponent(name)}`);
+    if (!response.ok) throw new Error("font");
+    return response.arrayBuffer();
   },
   studioPlanFrameUrl(id: string, frame: string): string { return `${BASE}/studio/projects/${id}/plan/frames/${frame}`; },
   async getBrandProfile(): Promise<BrandProfile> {

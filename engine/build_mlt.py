@@ -279,8 +279,10 @@ def build(
     }
     starts: list[int] = []
     cursor = 0
+    placed = plan.segment_frames()   # the single definition of where each segment sits on the output timeline
     for index, s in enumerate(plan.segments):
         _source_in, _source_out, n = source_range(s)
+        cursor = placed[index][0]
         starts.append(cursor)
         if s.id in effects:
             filter_xml = effect_filter_xml(effects[s.id], n, W, H, punch_frames,

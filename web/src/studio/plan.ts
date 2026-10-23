@@ -48,12 +48,14 @@ export function restoreEdits(current: PlanContent, target: PlanContent): PlanEdi
   if (target.look.accent_color !== current.look.accent_color) edits.accent_color = target.look.accent_color;
   if (target.look.caption_font !== current.look.caption_font) edits.caption_font = target.look.caption_font;
   if (target.look.zoom !== current.look.zoom) edits.zoom = target.look.zoom;
+  if ((target.look.bottom_shade ?? 0) !== (current.look.bottom_shade ?? 0)) edits.bottom_shade = target.look.bottom_shade ?? 0;
   if (target.look.key_moments !== current.look.key_moments) edits.key_moments = target.look.key_moments;
   if (target.brand.logo.enabled !== current.brand.logo.enabled) edits.logo_enabled = target.brand.logo.enabled;
   if (target.brand.logo.enabled && target.brand.logo.motion !== current.brand.logo.motion) edits.logo_motion = target.brand.logo.motion;
   if (target.brand.name !== current.brand.name) edits.name = target.brand.name;
   if (target.brand.tagline !== current.brand.tagline) edits.tagline = target.brand.tagline;
   if (target.brand.cta !== current.brand.cta) edits.cta = target.brand.cta;
+  if (JSON.stringify(target.timeline_edits || {}) !== JSON.stringify(current.timeline_edits || {})) edits.timeline_edits = target.timeline_edits || {};
   return edits;
 }
 
