@@ -167,3 +167,14 @@ def test_rate_limited_vision_waits_out_the_stated_cooldown_once(monkeypatch):
     with pytest.raises(RuntimeError):
         reference._with_cooldown(hopeless)
     assert waits == [90]
+
+
+def test_sheets_the_provider_failed_are_retried_once(clip, tmp_path):
+    calls = {}
+    def flaky(sheet):
+        calls[sheet.name] = calls.get(sheet.name, 0) + 1
+        if calls[sheet.name] == 1:
+            raise RuntimeError("502 upstream")
+        return {"frames": [{"index": i, "on_screen_text": "", "composition": "ok", "change": ""} for i in range(40)]}
+    profile = reference.analyze(clip, tmp_path, describe=lambda s, p: {}, describe_frames=flaky)
+    assert profile.frame_table and all(row["described"] for row in profile.frame_table) and all(n == 2 for n in calls.values())
