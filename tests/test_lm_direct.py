@@ -57,7 +57,7 @@ def test_legacy_env_keys_are_reused_so_nothing_is_entered_twice(monkeypatch):
 
 def test_config_defaults_order_and_validation():
     cfg = direct.config()
-    assert cfg["enabled"] is True and [p["id"] for p in cfg["providers"]] == ["sarovi", "jarvis", "arvan", "openai", "gemini"]
+    assert cfg["enabled"] is True and [p["id"] for p in cfg["providers"]] == ["jarvis", "sarovi", "arvan", "openai", "gemini"]
     saved = direct.save_config(False, [{"id": "gemini", "enabled": True, "base_url": "https://relay.example.vercel.app/v1beta", "model": "gemini-3.5-flash", "format": "gemini"},
                                        {"id": "jarvis", "enabled": False, "base_url": "https://api.jarvis.you/v1", "model": "X"}])
     assert saved["enabled"] is False and [p["id"] for p in saved["providers"]][:2] == ["gemini", "jarvis"]   # order kept, rest appended
@@ -115,16 +115,28 @@ def test_fallback_walks_providers_in_order_and_skips_failures(monkeypatch):
 
     def fake_post(url, headers, body, timeout):
         calls.append(url)
-        if "sarovi" in url:
+        if "jarvis" in url:
             return httpx.Response(503, text="busy")
-        return httpx.Response(200, json=ok("from jarvis"))
+        return httpx.Response(200, json=ok("from sarovi"))
 
     monkeypatch.setattr(direct, "_post", fake_post)
     direct.set_secret("sarovi", "s-key-00000000"); direct.set_secret("jarvis", "j-key-00000000")
     attempts = []
     found = direct.try_fallback([{"role": "user", "content": "x"}], candidates=[], tokens=100, temperature=None, timeout=30, extra=None, attempts=attempts)
-    assert found and found[1] == "jarvis" and len(calls) == 2
-    assert [a["http_status"] for a in attempts] == [503, 200] and attempts[0]["model"].startswith("direct:sarovi")
+    assert found and found[1] == "sarovi" and len(calls) == 2          # Jarvis is asked first, then Sarovi
+    assert [a["http_status"] for a in attempts] == [503, 200] and attempts[0]["model"].startswith("direct:jarvis")
+
+
+def test_gemini_models_ask_google_first(monkeypatch):
+    calls = []
+    monkeypatch.setattr(direct, "_post", lambda url, headers, body, timeout: (calls.append(url), httpx.Response(200, json=ok("g")))[1])
+    for name in ("jarvis", "gemini"):
+        direct.set_secret(name, name + "-key-0000000")
+    found = direct.try_fallback([{"role": "user", "content": "x"}], candidates=["google:gemini-3.5-flash"], tokens=10, temperature=None, timeout=30, extra=None, attempts=[])
+    assert found[1] == "gemini" and "ai-gateway" in calls[0]
+    calls.clear()
+    found = direct.try_fallback([{"role": "user", "content": "x"}], candidates=["custom:CLAUDE_OPUS_5_5#jarvis-all-models"], tokens=10, temperature=None, timeout=30, extra=None, attempts=[])
+    assert found[1] == "jarvis"
 
 
 def test_master_switch_and_missing_keys_disable_fallback(monkeypatch):

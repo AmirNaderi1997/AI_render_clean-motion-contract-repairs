@@ -22,6 +22,7 @@ from . import llm, speech
 from .schemas import (CRITERIA, STRUCTURES, Beat, Concept, ContentBrief, CreativeUnavailable, CriterionScore, ReferenceProfile,
                       ScriptDraft, ScriptReport, ScriptReview)
 
+WRITER_ROUTE, CRITIC_ROUTE = "script_writer", "script_critic"
 log = logging.getLogger(__name__)
 
 DEPTH_REWRITES = {"fast": 1, "premium": 2}
@@ -205,14 +206,14 @@ def _context(brief: ContentBrief, concept: Concept, reference: ReferenceProfile 
 
 def write(brief, concept, reference, source, caps, duration_s, *, outro_s=0.0, used=None) -> ScriptDraft:
     return llm.ask(ScriptDraft, WRITER, _context(brief, concept, reference, source, caps, duration_s, outro_s),
-                   route=llm.DIRECTOR_ROUTE, tokens=5500, attempts=4, used=used)
+                   route=WRITER_ROUTE, tokens=5500, attempts=4, used=used)
 
 
 def critique(draft: ScriptDraft, brief, concept, reference, measured, *, used=None) -> ScriptReview:
     request = llm.dumps({"brief": brief.model_dump(exclude={"key_moments"}), "concept": concept.model_dump(exclude={"beats"}),
                          "script": [line.model_dump() for line in draft.lines], "ending": draft.ending, "structure": draft.structure,
                          "measured": measured, "reference": reference.model_dump(exclude={"shot_lengths_s"}) if reference and reference.usable else None})
-    raw = llm.ask(ScriptReview, CRITIC, request, route=llm.CRITIC_ROUTE, tokens=4500, used=used)
+    raw = llm.ask(ScriptReview, CRITIC, request, route=CRITIC_ROUTE, tokens=4500, used=used)
     return _verify(raw, draft, measured, bool(reference and reference.usable))
 
 
@@ -221,7 +222,7 @@ def rewrite(previous: ScriptDraft, review: ScriptReview, brief, concept, referen
     request = (_context(brief, concept, reference, source, caps, duration_s, outro_s) +
                f"\n\nPrevious script:\n{llm.dumps(previous.model_dump())}\n\nCritic's must_fix:\n{llm.dumps(review.must_fix)}\n"
                f"Structural changes requested: {review.change or ['none']}\nMeasured: {llm.dumps({k: measured[k] for k in ('line_seconds', 'total_speech_s', 'budget_s')})}")
-    return llm.ask(ScriptDraft, WRITER + "\n\n" + REWRITE, request, route=llm.DIRECTOR_ROUTE, tokens=5500, attempts=4, used=used)
+    return llm.ask(ScriptDraft, WRITER + "\n\n" + REWRITE, request, route=WRITER_ROUTE, tokens=5500, attempts=4, used=used)
 
 
 def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, duration_s: float, reference: ReferenceProfile | None = None,

@@ -1,9 +1,10 @@
 import React from "react";
-import { api, StudioConversation, StudioProject } from "../api";
+import { api, StudioConversation, StudioEvent, StudioProject } from "../api";
 import { useAuthenticatedMediaUrl } from "../AuthenticatedMedia";
 import { Icon } from "../components/Icon";
 import { ActivityBlock, ThinkingRow } from "./Activity";
 import { RenderCard } from "./RenderCard";
+import { DiscoveryPanel } from "./Discovery";
 import { RichText } from "./RichText";
 import { TimelineItem } from "./model";
 
@@ -33,10 +34,10 @@ function Attachments({ conversationId, ids, local, autoOpen }: { conversationId?
   return <div className="msg-files">{ids.map((id, index) => <RemoteAttachment key={id} conversationId={conversationId} id={id} index={index} autoOpen={autoOpen}/>)}</div>;
 }
 
-export function Thread({ items, conversation, projects, localFiles, thinking, compactRender, retryHref, onOpenPreview, onEditAgain, onChoice, onRetryMessage, sourceUrl, linkTitles = {} }: {
+export function Thread({ items, conversation, projects, localFiles, thinking, compactRender, retryHref, onOpenPreview, onEditAgain, onChoice, onRetryMessage, sourceUrl, linkTitles = {}, events = [] }: {
   items: TimelineItem[]; conversation: StudioConversation | null; projects: StudioProject[]; localFiles?: LocalFileInfo[];
   thinking?: string; compactRender?: boolean; retryHref?: string; onOpenPreview: (projectId: string) => void; onEditAgain: (projectId: string) => void;
-  onChoice: (choice: string) => void; onRetryMessage: () => void; sourceUrl?: string; linkTitles?: Record<string, string>;
+  onChoice: (choice: string) => void; onRetryMessage: () => void; sourceUrl?: string; linkTitles?: Record<string, string>; events?: StudioEvent[];
 }) {
   return <ol className="thread" aria-label="Conversation">
     {items.map(item => {
@@ -49,6 +50,7 @@ export function Thread({ items, conversation, projects, localFiles, thinking, co
             </div>
           : <div className="assistant"><span className="assistant-mark" aria-hidden="true"><Icon name="spark" size={13}/></span><div className="assistant-body"><RichText text={item.content} linkTitles={linkTitles}/><Attachments conversationId={conversation?.id} ids={item.attachments} autoOpen/></div></div>}
       </li>;
+      if (item.kind === "discovery") return <li key={item.id} className="thread-aux thread-wide"><DiscoveryPanel analysisId={item.analysisId} events={events}/></li>;
       if (item.kind === "activity") return <li key={item.id} className="thread-aux"><ActivityBlock steps={item.steps} live={item.live} retryHref={retryHref}/></li>;
       if (item.kind === "render") {
         const project = projects.find(p => p.id === item.projectId);

@@ -117,6 +117,26 @@ def probe(body: Probe, request: Request):
 def routes(): return list(gateway.defaults().values())
 
 
+@router.post("/routes/prioritize")
+def prioritize_routes():
+    """Apply the operator priority to every chat/vision route: Jarvis, Sarovi, Arvan, then the rest; Gemini/Google models via Google first.
+    Only the order changes: no model is added, removed or enabled, and media routes are left alone. Direct fallbacks follow the same order."""
+    from brain.lm_tasks import prioritize
+    from brain import lm_direct
+    changed = {}
+    for route_id, row in gateway.defaults().items():
+        if row.get("capability") not in {"chat", "vision"}:
+            continue
+        ordered = prioritize(list(row["models"]))
+        if ordered != row["models"]:
+            row["models"] = ordered
+            changed[route_id] = row
+    if changed:
+        store.save("routes", changed)
+    direct = lm_direct.apply_priority()
+    return {"routes_changed": sorted(changed), "direct_order": [p["id"] for p in direct["providers"]]}
+
+
 @router.put("/routes/{route_id}")
 def update_route(route_id: str, body: RouteUpdate):
     row = gateway.defaults().get(route_id)

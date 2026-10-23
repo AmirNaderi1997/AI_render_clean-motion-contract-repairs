@@ -194,7 +194,7 @@ export default function Studio() {
   const messages = conversation?.messages || [];
   const lastUserMessage = [...messages].reverse().find(message => message.role === 'user');
   const processing = isProcessing({ sending, messages, events, project: current, now });
-  const items = React.useMemo(() => buildTimeline({ messages, events, projects, pending, processing }), [messages, events, projects, pending, processing]);
+  const items = React.useMemo(() => buildTimeline({ messages, events, projects, pending, processing, discoveryId: conversation?.state?.discovery?.analysis_id }), [messages, events, projects, pending, processing, conversation?.state?.discovery?.analysis_id]);
   const step = activeStep(items);
   // A live render card is its own progress indicator; otherwise show what the assistant is doing.
   const renderLive = items.some(item => item.kind === "render" && ["queued", "rendering", "finalizing"].includes(renderView(projects.find(p => p.id === item.projectId)).phase));
@@ -344,7 +344,7 @@ export default function Studio() {
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-inner">
           {!conversation && !pending ? <div className="thread-loading" role="status" aria-label="Loading conversation"><span className="skeleton"/><span className="skeleton"/><span className="skeleton"/></div> : null}
-          <Thread items={items} conversation={conversation} projects={projects} localFiles={localFiles} thinking={thinking} sourceUrl={sourceUrl} linkTitles={linkTitles} compactRender={layout === "desktop" && desktopOpen}
+          <Thread items={items} events={events} conversation={conversation} projects={projects} localFiles={localFiles} thinking={thinking} sourceUrl={sourceUrl} linkTitles={linkTitles} compactRender={layout === "desktop" && desktopOpen}
             onOpenPreview={id => openWorkspace("preview", id)} onEditAgain={editAgain}
             retryHref={current?.status === "error" && !qualityBlocked ? advancedEditorUrl(current) || undefined : undefined}
             onChoice={choice => void send(choice)} onRetryMessage={retryMessage}/>

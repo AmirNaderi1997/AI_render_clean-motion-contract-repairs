@@ -295,7 +295,7 @@ def _describe_frames(sheet: Path) -> dict:
     last: Exception | None = None
     for _attempt in range(2):
         try:
-            result, _usage = _with_cooldown(lambda: chat_vision(FRAMES, "Review the frames.", images=[str(sheet)], return_json=True, max_tokens=2600, timeout_seconds=150))
+            result, _usage = _with_cooldown(lambda: chat_vision(FRAMES, "Review the frames.", images=[str(sheet)], return_json=True, max_tokens=2600, timeout_seconds=150, route="reference_frame_review"))
             if isinstance(result, dict):
                 return result
         except Exception as exc:
@@ -397,7 +397,7 @@ def _describe(sheet: Path, profile: ReferenceProfile) -> dict:
     last: Exception | None = None
     for _attempt in range(2):                        # one retry: provider timeouts are common and say nothing about the video
         try:
-            result, _usage = _with_cooldown(lambda: chat_vision(DESCRIBE, measured, images=[str(sheet)], return_json=True, max_tokens=1800, timeout_seconds=120))
+            result, _usage = _with_cooldown(lambda: chat_vision(DESCRIBE, measured, images=[str(sheet)], return_json=True, max_tokens=1800, timeout_seconds=120, route="reference_style_analysis"))
         except Exception as exc:
             last = exc
             continue
