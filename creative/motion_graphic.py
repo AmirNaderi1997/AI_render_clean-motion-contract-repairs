@@ -26,7 +26,7 @@ DESIGNER_ROUTE = "motion_graphic_designer"
 REPAIR_ROUTE = "motion_graphic_repair"
 
 ROOT = Path(__file__).resolve().parents[1]
-KIT = ROOT / "presets" / "motion_kit"
+KIT = Path(__file__).resolve().parent / "motion_kit"       # inside the code layer: /app/presets is a host mount on the server
 FORMATS = {"vertical": (1080, 1920), "horizontal": (1920, 1080), "square": (1080, 1080)}
 MIN_SECONDS, MAX_SECONDS = 4.0, 30.0
 LIMITS = {"scenes_html": 40_000, "css": 24_000, "build_js": 20_000, "update_js": 8_000}
