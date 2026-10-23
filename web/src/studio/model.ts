@@ -28,7 +28,8 @@ export type TimelineItem =
   | { kind: "message"; id: string; role: "user" | "assistant"; content: string; attachments: string[]; createdAt: number; pending?: boolean; failed?: boolean; narration?: boolean }
   | { kind: "activity"; id: string; steps: ActivityStep[]; live: boolean }
   | { kind: "render"; id: string; projectId: string; startedAt: number }
-  | { kind: "question"; id: string; question: string; choices: QuestionChoice[]; seq: number; style: boolean };
+  | { kind: "question"; id: string; question: string; choices: QuestionChoice[]; seq: number; style: boolean }
+  | { kind: "discovery"; id: string; analysisId: string };
 
 export interface QuestionChoice { label: string; /** What to send as the user's answer. */ value: string }
 /** Backend choices are either plain strings or { id, label } objects (talking styles). */
@@ -159,9 +160,11 @@ export interface TimelineInput {
   pending?: PendingMessage | null;
   /** Whether work is in flight right now (see isProcessing). */
   processing: boolean;
+  /** The long-video analysis the conversation already owns (from its saved state), shown even when its events are older than the page. */
+  discoveryId?: string;
 }
 
-export function buildTimeline({ messages, events, projects, pending, processing }: TimelineInput): TimelineItem[] {
+export function buildTimeline({ messages, events, projects, pending, processing, discoveryId }: TimelineInput): TimelineItem[] {
   type Entry = { t: number; order: number; tie: number; message?: StudioMessage; event?: StudioEvent };
   const entries: Entry[] = [
     ...messages.map(message => ({ t: parseTime(message.created_at), order: 0, tie: Number(message.id) || 0, message })),
@@ -198,6 +201,11 @@ export function buildTimeline({ messages, events, projects, pending, processing 
         flush();
         items.push({kind:'message', id, role:'assistant', content, attachments:[], createdAt:entry.t, narration:true});
       }
+      continue;
+    }
+    if (event.type === "discovery.created") {
+      flush();
+      if (!items.some(item => item.kind === "discovery")) items.push({ kind: "discovery", id: `dv-${event.data.analysis_id}`, analysisId: String(event.data.analysis_id) });
       continue;
     }
     const projectId = String(event.data.project_id || "");
@@ -239,6 +247,7 @@ export function buildTimeline({ messages, events, projects, pending, processing 
     if (event.type === "agent.thinking_summary") step.status = "done";
   }
   flush();
+  if (discoveryId && !items.some(item => item.kind === "discovery")) items.push({ kind: "discovery", id: `dv-${discoveryId}`, analysisId: discoveryId });
 
   // A render card for any project that is rendering or finished but whose events were not seen
   // in this session (e.g. a project opened from history).

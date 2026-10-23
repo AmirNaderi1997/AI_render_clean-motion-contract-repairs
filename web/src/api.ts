@@ -175,6 +175,22 @@ export interface StudioConversation {
 }
 export interface StudioEvent { id: number; seq: number; type: string; data: Record<string, any>; created_at: string }
 
+/** Long-video content discovery (app/long_video.py). */
+export type CandidateStatus = "discovered" | "selected" | "editing" | "rendering" | "completed" | "failed";
+export interface DiscoveryCandidate {
+  id: string; title: string; summary: string; hook: string; hook_source: string; category: string; rationale: string; score: number;
+  ranges: [number, number][]; estimated_duration: number; status: CandidateStatus; hidden: boolean;
+  child_conversation_id: string | null; child_project_id: string | null; child_stale?: boolean; revisions: { revision: number }[]; problems?: string[];
+}
+export interface DiscoveryAnalysis {
+  id: string; conversation_id: string; filename: string; duration: number; language: string | null; stage: string; message: string; error: string | null;
+  transcription_status: string; discovery_status: string; transcript_version: string | null; analysis_version: number;
+  progress: { processed_s: number; duration_s: number; percent: number; eta_s: number | null };
+  estimate: { model: string; transcription_s: number; total_s: number } | null; media: { width?: number; height?: number; has_audio: boolean };
+  running: boolean; interrupted: boolean; transcript_tail: { id: string; start: number; end: number; text: string }[]; chunks: number; enhanced_chunks: number;
+  candidates: DiscoveryCandidate[];
+}
+
 /** Plain-language Creative Plan built by the backend from the real analysis (app/creative_plan.py). */
 export interface PlanConcept { id: string; name: string; angle: string; hook: string; style: string; selected: boolean; why: string }
 export interface PlanContent {
@@ -1133,6 +1149,23 @@ export const api = {
   async editLocalizeCaptions(id: string, ops: TimelineOp[]): Promise<void> {
     await j(await authFetch(`${BASE}/studio/projects/${id}/localize-captions`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ ops }) }));
   },
+  async conversationDiscovery(conversationId: string): Promise<{ analysis: DiscoveryAnalysis | null }> {
+    return j(await authFetch(`${BASE}/studio/conversations/${conversationId}/discovery`));
+  },
+  async discoveryView(id: string): Promise<DiscoveryAnalysis> { return j(await authFetch(`${BASE}/studio/discovery/${id}`)); },
+  async discoveryResume(id: string): Promise<void> { await j(await authFetch(`${BASE}/studio/discovery/${id}/resume`, { method: "POST" })); },
+  async discoveryStop(id: string): Promise<void> { await j(await authFetch(`${BASE}/studio/discovery/${id}/stop`, { method: "POST" })); },
+  async discoveryMore(id: string, focus: string): Promise<void> {
+    await j(await authFetch(`${BASE}/studio/discovery/${id}/more`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ focus }) }));
+  },
+  async editCandidate(id: string, candidateId: string, changes: Partial<Pick<DiscoveryCandidate, "title" | "hook" | "summary" | "category" | "hidden">> & { ranges?: [number, number][] }): Promise<DiscoveryCandidate> {
+    return j(await authFetch(`${BASE}/studio/discovery/${id}/candidates/${candidateId}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(changes) }));
+  },
+  async startCandidate(id: string, candidateId: string): Promise<{ conversation_id: string; created: boolean }> {
+    return j(await authFetch(`${BASE}/studio/discovery/${id}/candidates/${candidateId}/start`, { method: "POST" }));
+  },
+  discoveryThumbUrl(id: string, candidateId: string): string { return `${BASE}/studio/discovery/${id}/candidates/${candidateId}/thumb`; },
+  discoveryPreviewUrl(id: string, candidateId: string, version: number): string { return `${BASE}/studio/discovery/${id}/candidates/${candidateId}/preview?v=${version}`; },
   async studioDocument(id: string): Promise<ProjectDocument> {
     return j(await authFetch(`${BASE}/studio/projects/${id}/document`));
   },
