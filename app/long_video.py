@@ -261,15 +261,24 @@ class _Enhancer:
                 raise_stopped()
 
     def assemble(self, raw: dict) -> list[dict]:
+        """All segments in time order, raw text untouched. Segments the model could not correct the first time are tried again once."""
+        from creative import discovery
         merged = []
         chunks = sorted((self.directory / "chunks").glob("*.json"))
         for position, chunk_path in enumerate(chunks):
             enhanced_path = self.directory / "enhanced" / f"{position:04d}.json"
             if enhanced_path.is_file():
-                merged.extend(json.loads(enhanced_path.read_text()))
+                items = json.loads(enhanced_path.read_text())
+                missing = [i for i, s in enumerate(items) if "not_enhanced" in s.get("flags", [])]
+                if missing:                                   # a provider error the first time is not a reason to ship uncorrected text
+                    retried = discovery.enhance_segments([{k: v for k, v in items[i].items() if k not in {"enhanced_text", "flags", "uncertain", "changed"}} for i in missing],
+                                                         items[:1] if not missing[0] else [items[missing[0] - 1]])
+                    for i, fixed in zip(missing, retried):
+                        items[i] = fixed
+                    enhanced_path.write_text(json.dumps(items, ensure_ascii=False))
+                merged.extend(items)
             else:
-                merged.extend({**s, "enhanced_text": s["text"], "flags": ["not_enhanced"], "uncertain": [], "changed": False}
-                              for s in json.loads(chunk_path.read_text())["segments"])
+                merged.extend(discovery.enhance_segments(json.loads(chunk_path.read_text())["segments"]))
         merged.sort(key=lambda s: s["start"])
         return merged
 

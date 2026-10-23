@@ -42,7 +42,7 @@ export function DiscoveryPanel({ analysisId, events }: { analysisId: string; eve
   const categories = categoriesOf(analysis.candidates);
   const startMany = () => run("start editing", async () => { for (const id of selected) await api.startCandidate(analysisId, id); setSelected(new Set()); });
 
-  return <section className="dv" dir="rtl" aria-label="کشف محتوا از ویدیوی بلند">
+  return <section className="dv assistant-body" dir="rtl" aria-label="کشف محتوا از ویدیوی بلند">
     <header className="dv-head">
       <div><h3>کشف محتوا از ویدیوی بلند</h3><p className="bidi" dir="auto">{analysis.filename} · {clock(analysis.duration)}{analysis.language ? ` · زبان: ${analysis.language === "fa" ? "فارسی" : analysis.language === "en" ? "انگلیسی" : analysis.language}` : ""}</p></div>
       <span className="badge" data-tone={failed ? "error" : working ? "working" : analysis.discovery_status === "completed" ? "success" : "warning"}><i/>{failed ? "ناموفق" : STAGE_LABEL[analysis.interrupted ? "interrupted" : analysis.stage] || analysis.stage}</span>

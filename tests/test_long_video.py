@@ -187,3 +187,18 @@ def test_a_correction_that_rewrites_instead_of_fixing_is_rejected():
     assert not discovery.accept_enhancement(raw, "امروز به شما می‌گویم چگونه ثروتمند شوید و فروش را چند برابر کنید")     # a different sentence
     assert not discovery.accept_enhancement(raw, "")
     assert not discovery.accept_enhancement(raw, raw + " " + raw + " " + raw)
+
+
+def test_segments_the_model_failed_to_correct_are_retried_before_discovery(analysis, monkeypatch):
+    monkeypatch.setattr(discovery, "WINDOW_S", 100.0)
+    real = analysis.ai
+    state = {"fail": 2}
+    def flaky(schema, system, user, **kw):
+        if schema is discovery.EnhancedBatch and state["fail"] > 0:
+            state["fail"] -= 1
+            raise RuntimeError("502 upstream")
+        return real(schema, system, user, **kw)
+    monkeypatch.setattr(llm, "ask", flaky)
+    long_video._run(analysis.directory)
+    transcript = json.loads((analysis.directory / "transcript.json").read_text())["segments"]
+    assert all("not_enhanced" not in s["flags"] for s in transcript) and all("کلمه" in s["enhanced_text"] for s in transcript)
