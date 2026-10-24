@@ -45,6 +45,12 @@ Use **throwaway accounts** (never your main ones): the cookies live in Vercel's 
 When it stops working (a session expired, the account was challenged): repeat steps 1-4 with a fresh export. Until then the GetInSaver fallback keeps
 Instagram working; YouTube has no fallback and the editor asks for an upload.
 
+## YouTube needs a JavaScript runtime
+Even with valid cookies, yt-dlp answers `No video formats found!` for YouTube without a JavaScript runtime (it solves YouTube's signature challenge in JS).
+Vercel's Python runtime has none, so `nodejs-wheel-binaries` ships Node and `yt-dlp[default]` ships the solver scripts (`yt-dlp-ejs`). The health page
+shows `"js_runtime": true` when Node was found, and `"cookies": true` when `YTDLP_COOKIES_B64` is set. If the deployment is refused for size, drop
+`imageio-ffmpeg` (the proxy copy) or `nodejs-wheel-binaries` (YouTube) from `requirements.txt`.
+
 ## Adding the GetInSaver key
 ```
 cd deploy/social-relay

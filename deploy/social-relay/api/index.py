@@ -84,6 +84,29 @@ def _shrink(path: Path) -> Path:
     return out if out.is_file() and 0 < out.stat().st_size < path.stat().st_size else path
 
 
+def _node() -> str | None:
+    """A Node.js binary for yt-dlp's YouTube challenge solver (YouTube returns no video formats without a JS runtime). Vercel's Python runtime has
+    none, so one ships in the ``nodejs-wheel-binaries`` package; it is copied to /tmp and made executable when the bundle is read-only."""
+    found = shutil.which("node")
+    if found:
+        return found
+    try:
+        import nodejs_wheel
+        root = Path(nodejs_wheel.__file__).resolve().parent
+        candidate = next((c for c in [root / "bin" / "node", root / "node", *root.rglob("node")] if c.is_file()), None)
+        if candidate is None:
+            return None
+        if os.access(candidate, os.X_OK):
+            return str(candidate)
+        target = Path("/tmp/node-runtime")
+        if not target.is_file():
+            shutil.copy2(candidate, target)
+            target.chmod(0o755)
+        return str(target)
+    except Exception:
+        return None
+
+
 def _ytdlp_download(url: str, work: Path) -> tuple[Path | None, dict, str]:
     """yt-dlp with the cookies from YTDLP_COOKIES_B64 (Instagram and YouTube need a logged-in session from a datacenter IP). (file, info, "") or (None, {}, reason)."""
     import yt_dlp
@@ -92,6 +115,9 @@ def _ytdlp_download(url: str, work: Path) -> tuple[Path | None, dict, str]:
                "match_filter": yt_dlp.utils.match_filter_func(f"duration <=? {MAX_SECONDS}"), "cachedir": False}
     if os.environ.get("YTDLP_PROXY"):
         options["proxy"] = os.environ["YTDLP_PROXY"]
+    node = _node()
+    if node:
+        options["js_runtimes"] = {"node": {"path": node}}
     cookies = os.environ.get("YTDLP_COOKIES_B64", "")
     if cookies:
         try:
@@ -195,7 +221,8 @@ def _api_download(url: str, work: Path) -> tuple[Path | None, str]:
 @app.get("/")
 def health():
     import yt_dlp
-    return {"ok": True, "yt_dlp": yt_dlp.version.__version__, "getinsaver": bool(os.environ.get("GETINSAVER_API_KEY"))}
+    return {"ok": True, "yt_dlp": yt_dlp.version.__version__, "getinsaver": bool(os.environ.get("GETINSAVER_API_KEY")), "js_runtime": bool(_node()),
+            "cookies": bool(os.environ.get("YTDLP_COOKIES_B64"))}
 
 
 @app.post("/api/index")

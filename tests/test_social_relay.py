@@ -124,6 +124,7 @@ class YDL:
 
     def extract_info(self, url, download=True):
         YDL.seen.append((url, self.options.get("cookiefile")))
+        YDL.options = self.options
         if YDL.behaviour == "fail":
             raise RuntimeError("login required")
         (Path(self.options["outtmpl"]).parent / "video.mp4").write_bytes(b"y" * 3000)
@@ -223,3 +224,33 @@ def test_the_original_is_sent_when_shrinking_is_impossible_or_pointless(monkeypa
     assert relay._shrink(tiny) == tiny
     monkeypatch.setattr(relay.subprocess, "run", lambda c, **k: Path(c[-1]).write_bytes(b"y" * 9_000_000) or types.SimpleNamespace())
     assert relay._shrink(video) == video                 # a copy that is not smaller is not used
+
+
+def test_yt_dlp_is_given_a_javascript_runtime_for_youtube(env, monkeypatch, ytdlp):
+    monkeypatch.setattr(relay, "_node", lambda: "/opt/node/bin/node")
+    assert env.post("/api/index", json={"url": "https://www.youtube.com/watch?v=x"}, headers=HEADERS).status_code == 200
+    assert ytdlp.options["js_runtimes"] == {"node": {"path": "/opt/node/bin/node"}}
+
+
+def test_without_a_runtime_yt_dlp_still_runs_and_health_says_so(env, monkeypatch, ytdlp):
+    monkeypatch.setattr(relay, "_node", lambda: None)
+    assert env.post("/api/index", json={"url": "https://www.youtube.com/watch?v=x"}, headers=HEADERS).status_code == 200
+    assert "js_runtimes" not in ytdlp.options
+    health = env.get("/api/index").json()
+    assert health["js_runtime"] is False and health["cookies"] is False
+
+
+def test_the_node_binary_from_the_wheel_is_found_and_made_executable(monkeypatch, tmp_path):
+    monkeypatch.setattr(relay.shutil, "which", lambda name: None)
+    package = tmp_path / "nodejs_wheel"
+    (package / "bin").mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "bin" / "node").write_text("#!/bin/sh\n")
+    (package / "bin" / "node").chmod(0o644)                 # a read-only bundle without the executable bit
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "nodejs_wheel", raising=False)
+    copies = []
+    monkeypatch.setattr(relay.shutil, "copy2", lambda a, b: copies.append((str(a), str(b))))
+    monkeypatch.setattr(relay.Path, "chmod", lambda self, mode: None)
+    monkeypatch.setattr(relay.Path, "is_file", lambda self: self.name == "node" and "nodejs_wheel" in str(self))
+    assert relay._node() == "/tmp/node-runtime" and copies and copies[0][1] == "/tmp/node-runtime"
