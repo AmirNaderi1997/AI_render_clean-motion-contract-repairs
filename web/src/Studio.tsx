@@ -9,6 +9,7 @@ import { displayTitle, parseTime, relativeTime } from "./format";
 import { friendlyError } from "./ui";
 import { Resizer, usePanelWidth } from "./components/Resizer";
 import { useMotionActive } from "./studio/MotionGraphic";
+import { useDiscoveryActive } from "./studio/Discovery";
 import { Composer, PendingFile } from "./studio/Composer";
 import { ManualQuestion } from "./studio/ManualQuestion";
 import { Thread, LocalFileInfo } from "./studio/Thread";
@@ -195,7 +196,9 @@ export default function Studio() {
   const messages = conversation?.messages || [];
   const lastUserMessage = [...messages].reverse().find(message => message.role === 'user');
   const motionActive = useMotionActive(conversation?.state?.motion?.motion_id, events);
-  const processing = isProcessing({ sending, messages, events, project: current, now }) || motionActive;
+  const discoveryActive = useDiscoveryActive(conversation?.state?.discovery?.analysis_id, events);
+  const projectRunning = projects.some(project => project.status === "running");
+  const processing = isProcessing({ sending, messages, events, project: current, now }) || motionActive || discoveryActive || projectRunning;
   const items = React.useMemo(() => buildTimeline({ messages, events, projects, pending, processing, discoveryId: conversation?.state?.discovery?.analysis_id, motionId: conversation?.state?.motion?.motion_id }), [messages, events, projects, pending, processing, conversation?.state?.discovery?.analysis_id, conversation?.state?.motion?.motion_id]);
   const step = activeStep(items);
   // A live render card is its own progress indicator; otherwise show what the assistant is doing.

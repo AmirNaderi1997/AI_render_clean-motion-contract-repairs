@@ -6,6 +6,20 @@ import { Icon } from "../components/Icon";
 import { friendlyError } from "../ui";
 import { STAGE_LABEL, STATUS_LABEL, STATUS_TONE, SortKey, categoriesOf, clock, etaText, isActive, liveLines, parseRange, rangeText, visibleCandidates } from "./discoveryModel";
 
+/** Whether this chat's long-video analysis is running right now (drives the composer's Stop button). */
+export function useDiscoveryActive(analysisId: string | undefined, events: StudioEvent[]): boolean {
+  const [active, setActive] = React.useState(false);
+  const last = React.useMemo(() => { const mine = events.filter(e => analysisId && e.data?.analysis_id === analysisId); return mine.length ? mine[mine.length - 1].seq : 0; }, [events, analysisId]);
+  const refresh = React.useCallback(() => { if (analysisId) api.discoveryView(analysisId).then(a => setActive(Boolean(a.running) && !a.interrupted)).catch(() => setActive(false)); else setActive(false); }, [analysisId]);
+  React.useEffect(() => { refresh(); }, [refresh, last]);
+  React.useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(refresh, 4000);
+    return () => window.clearInterval(timer);
+  }, [active, refresh]);
+  return active;
+}
+
 /** The parent chat's workspace: live transcription, progress, and one card per independent piece of content found in the long video. */
 export function DiscoveryPanel({ analysisId, events }: { analysisId: string; events: StudioEvent[] }) {
   const [analysis, setAnalysis] = React.useState<DiscoveryAnalysis | null>(null);

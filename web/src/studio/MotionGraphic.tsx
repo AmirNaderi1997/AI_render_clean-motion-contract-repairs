@@ -58,12 +58,12 @@ export function MotionGraphicCard({ motionId, events }: { motionId: string; even
   return <section className="mg assistant-body" dir="rtl" aria-label="موشن‌گرافیک">
     {motion.active || motion.status === "failed" || motion.status === "needs_input" ? <div className="mg-progress">
       <ol className="mg-steps" aria-label="مراحل ساخت">
-        {STEPS.map((step, index) => <li key={step.key} data-state={motion.status === "failed" ? "idle" : index < stepIndex ? "done" : index === stepIndex ? "active" : "idle"}><i/>{step.label}</li>)}
+        {STEPS.map((step, index) => <li key={step.key} data-state={motion.status === "failed" ? "idle" : index < stepIndex ? "done" : index === stepIndex ? "active" : "idle"}><i/><span className={index === stepIndex && motion.status !== "failed" ? "act-shimmer" : undefined}>{step.label}</span></li>)}
       </ol>
       {motion.active && motion.eta_s !== null && motion.eta_at !== null ? <p className="mg-eta" aria-live="off">{etaText(motion.eta_at + motion.eta_s, now)}</p> : null}
       {motion.active ? <div className="meter" role="progressbar" aria-valuenow={motion.progress} aria-valuemin={0} aria-valuemax={100} style={{ ["--value" as string]: `${motion.progress}%` }}><i/></div> : null}
       {motion.log?.length ? <ul className="mg-log" aria-live="polite" aria-label="آنچه همین الان انجام می‌شود">
-        {motion.log.map(line => <li key={line.key} data-state={line.state}><i aria-hidden/><span className="bidi" dir="auto">{line.text}</span></li>)}
+        {motion.log.map(line => <li key={line.key} data-state={line.state}><i aria-hidden/><span className={line.state === "active" ? "bidi act-shimmer" : "bidi"} dir="auto">{line.text}</span></li>)}
       </ul> : motion.message ? <p className="mg-message" aria-live="polite">{motion.message}</p> : null}
       {motion.status === "needs_input" ? <div className="notice" data-tone="info">منتظر پاسخ شما هستم؛ جواب را همین‌جا در چت بنویسید.</div> : null}
       {motion.status === "failed" ? <div className="notice" data-tone="error" role="alert">{motion.error === "stopped" ? "ساخت متوقف شد." : motion.error || "ساخت کامل نشد."}</div> : null}

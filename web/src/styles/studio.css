@@ -496,3 +496,18 @@ button.act-row:hover { color: var(--text-2); }
 .mg-log li[data-state="active"] i { background: var(--ink); animation: mg-pulse 1.1s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .mg-log li[data-state="active"] i { animation: none; } }
 .mg-eta { margin: 0; font-size: 13px; font-weight: 600; color: var(--text-2); font-variant-numeric: tabular-nums; }
+
+/* ── "Working" feel for the live step: the title carries a travelling highlight, and its elapsed time counts up ───────────── */
+.act-shimmer {
+  background: linear-gradient(100deg, var(--text-3) 0%, var(--text-3) 38%, var(--text) 50%, var(--text-3) 62%, var(--text-3) 100%);
+  background-size: 260% 100%; background-position: 130% 0;
+  -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent;
+  animation: act-shimmer 2.2s linear infinite;
+}
+:dir(rtl) > .act-shimmer, .act-shimmer:dir(rtl) { animation-direction: reverse; }
+@keyframes act-shimmer { from { background-position: 130% 0; } to { background-position: -130% 0; } }
+.act-elapsed { margin-inline-start: auto; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; flex: none; }
+.act-row .act-elapsed + .act-chevron { margin-inline-start: 6px; }
+@media (prefers-reduced-motion: reduce) {
+  .act-shimmer { animation: none; background: none; -webkit-text-fill-color: currentColor; color: var(--text-2); }
+}

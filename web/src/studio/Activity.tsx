@@ -20,6 +20,14 @@ function toolIcon(step: ActivityStep): IconName {
   return "thinking";
 }
 
+/** How long this step has been running, counted live (like a coding agent's status line). */
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
+  const ms = Math.max(0, now - since);
+  return ms >= 1000 ? <span className="act-elapsed" aria-hidden="true">{formatDuration(ms)}</span> : null;
+}
+
 function StepRow({ step, retryHref }: { step: ActivityStep; retryHref?: string }) {
   const details = stepDetails(step);
   const [open, setOpen] = React.useState(false);
@@ -29,8 +37,8 @@ function StepRow({ step, retryHref }: { step: ActivityStep; retryHref?: string }
   const thinking = active && step.events[step.events.length - 1]?.data.thinking === true;
   const label = <>
     <span className="act-icon" data-status={step.status}>{icon}</span>
-    <span className={`act-label${active ? " is-active" : ""}`}>{step.label}{active ? <span className="ellipsis" aria-hidden="true"/> : null}</span>
-    {thinking ? <small className="act-pct">Thinking…</small> : null}
+    <span className={`act-label${active ? " is-active" : ""}`}><span className={active ? "act-shimmer" : undefined}>{step.label}</span></span>
+    {active ? <Elapsed since={step.startedAt}/> : null}
     {typeof step.progress === "number" && active ? <span className="act-pct">{step.progress}%</span> : null}
     {details ? <Icon name="chevronDown" size={14} className={`act-chevron${open ? " is-open" : ""}`}/> : null}
   </>;
@@ -79,6 +87,6 @@ export function ActivityBlock({ steps, live, retryHref }: { steps: ActivityStep[
 export function ThinkingRow({ label }: { label: string }) {
   return <div className="act"><ul className="act-list"><li className="act-step" data-status="active"><div className="act-row">
     <span className="act-icon" data-status="active"><span className="act-dot" aria-hidden="true"/></span>
-    <span className="act-label is-active">{label}<span className="ellipsis" aria-hidden="true"/></span>
+    <span className="act-label is-active"><span className="act-shimmer">{label}</span></span>
   </div></li></ul></div>;
 }
