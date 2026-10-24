@@ -575,12 +575,12 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
             _start_discovery(conversation_id, user_key, conversation, attachments, text)
             return
         if intent == "motion_graphic":
-            _start_motion_graphic(conversation_id, user_key, conversation, text)
+            _start_motion_graphic(conversation_id, user_key, conversation, text, attachments)
             return
         if intent in {"motion_graphic_revision", "motion_graphic_answer"}:
             if _continue_motion_graphic(conversation_id, user_key, conversation, text, answering=intent == "motion_graphic_answer"):
                 return
-            _start_motion_graphic(conversation_id, user_key, conversation, text)
+            _start_motion_graphic(conversation_id, user_key, conversation, text, attachments)
             return
         if intent == "question_video":
             run(repo.set_conversation(conversation_id,user_key,state={**conversation.get('state',{}),
@@ -738,7 +738,7 @@ def _reference_style(profile) -> str:
     return "\n".join(parts)
 
 
-def _start_motion_graphic(conversation_id: str, user_key: str, conversation: dict, text: str) -> None:
+def _start_motion_graphic(conversation_id: str, user_key: str, conversation: dict, text: str, attachments: list[dict] | None = None) -> None:
     """A reference video link (Instagram, YouTube, TikTok) is analysed as STYLE; every other link is read as CONTENT (text, and screenshots when the text is thin)."""
     from urllib.parse import urlsplit
     from app import motion_graphic
@@ -746,8 +746,10 @@ def _start_motion_graphic(conversation_id: str, user_key: str, conversation: dic
     references = [link for link in links if (urlsplit(link).hostname or "").lower().removeprefix("www.").removeprefix("m.") in _REFERENCE_HOSTS]
     pages = [link for link in dict.fromkeys(links) if link not in references]
     style = ""
-    if references:
-        profile = _analyze_reference(conversation_id, user_key, references[0])
+    uploaded = next((item for item in (attachments or []) if item.get("kind") == "video"), None)
+    if uploaded or references:
+        # An uploaded video is the most reliable reference (no network, no login wall); a link is the fallback.
+        profile = _analyze_reference(conversation_id, user_key, uploaded["path"] if uploaded else references[0])
         _checkpoint(conversation_id)
         if profile.usable:
             style = _reference_style(profile)
