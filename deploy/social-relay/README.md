@@ -12,6 +12,23 @@ Deployed as the Vercel project `editorgpt-social-relay` -> `https://editorgpt-so
 
 Editor environment: `SOCIAL_RELAY_URL`, `SOCIAL_RELAY_SECRET` (same value as `RELAY_SECRET` on Vercel).
 
+## Instagram through GetInSaver (no cookies)
+Instagram asks datacenter IPs to log in, so yt-dlp alone needs cookies that expire. When `GETINSAVER_API_KEY` is set on Vercel, Instagram links
+(posts, reels, stories, highlights) are resolved through the GetInSaver API (`POST https://developers.getinsaver.com/v1/resolve`, Bearer key,
+`items[].url`), the file is downloaded from Vercel (the Iran server cannot reach Instagram's CDN), and yt-dlp is only the fallback. The key lives in
+Vercel's encrypted environment and never reaches the editor. One credit per post/reel, two per story/highlight; failed requests are refunded.
+
+```
+cd deploy/social-relay
+npx vercel env add GETINSAVER_API_KEY production        # paste the key (gis_live_...) when asked
+npx vercel deploy --prod
+curl https://editorgpt-social-relay.vercel.app/api/index  # {"ok": true, ..., "getinsaver": true}
+```
+
+## Size of what is sent
+The editor's server pulls the file from Vercel at roughly 20 KB/s, so the relay sends a small proxy copy (ffmpeg from `imageio-ffmpeg`: at most 45 s, 480p, a few MB;
+the original size is in `x-source-original-bytes`). If ffmpeg is unavailable the original goes through, as before.
+
 ## What works from Vercel's network (tested 2026-10-23)
 - TikTok: works without login.
 - YouTube / Vimeo / Instagram: the sites ask datacenter IPs to sign in. Give the relay a logged-in session:

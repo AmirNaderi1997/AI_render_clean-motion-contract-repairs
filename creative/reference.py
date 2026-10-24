@@ -121,6 +121,10 @@ def download_failure_reason(message: str) -> str:
                                      "connection reset", "network is", "transporterror")):
         return ("سرور از اینجا به این شبکه دسترسی ندارد (اتصال برقرار نشد). تا وقتی دسترسی یا پروکسی برای سرور تنظیم نشده، "
                 "فایل ویدیوی رفرنس را آپلود کنید.")
+    if "credits exhausted" in text or "key invalid" in text:
+        return "اعتبار یا کلید سرویس دریافت اینستاگرام مشکل دارد (به مدیر اطلاع بدهید). فعلاً فایل ویدیوی رفرنس را آپلود کنید."
+    if "private, deleted or login-only" in text:
+        return "این پست خصوصی، حذف‌شده یا فقط برای کاربران واردشده است و قابل دریافت نیست. فایل ویدیوی رفرنس را آپلود کنید."
     if any(word in text for word in ("login", "log in", "logged-in", "sign in", "not a bot", "cookies", "private", "rate-limit", "rate limit",
                                      "not available", "empty media")):
         return "این شبکه بدون ورود به حساب اجازهٔ دریافت ویدیو را نداد (یا ویدیو خصوصی است). فایل ویدیوی رفرنس را آپلود کنید."
