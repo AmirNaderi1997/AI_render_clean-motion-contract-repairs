@@ -276,8 +276,10 @@ def _run(directory: Path, change: str) -> None:
         record.update(current=number, status="completed", stage="completed", progress=100, message="", error=None, questions=[], pending_change=None, eta_s=None, eta_at=None)
         save(directory, record)
     _emit(cid, "motion.completed", motion_id=key, version=number, duration=page.duration, format=page.format)
-    _assistant(cid, user, (page.summary or f"موشن‌گرافیک {page.duration:g} ثانیه‌ای آماده شد.")
-               + " اگر چیزی را می‌خواهید عوض کنم (متن، رنگ، زمان‌بندی، اندازه)، همین‌جا بنویسید.")
+    from app import studio_narrator
+    studio_narrator.narrate(cid, user, "motion_ready", {"title": page.title, "duration_seconds": page.duration, "format": page.format, "what_it_shows": page.summary,
+                            "changes_applied": change or None, "notes_from_the_automatic_check": notes[:3], "person_can_now": "ask for changes to text, colour, timing or size"},
+                            fallback=(page.summary or f"موشن‌گرافیک {page.duration:g} ثانیه‌ای آماده شد.") + " اگر چیزی را می‌خواهید عوض کنم (متن، رنگ، زمان‌بندی، اندازه)، همین‌جا بنویسید.")
 
 
 def _ask(directory: Path, record: dict, questions: list[str], change: str = "") -> None:
@@ -331,7 +333,10 @@ def _plan_and_build(directory: Path, record: dict, brief: str, used: list[str], 
         count = len(plan.scenes)
         _note(directory, "plan", f"طرح آماده شد: {count} صحنه، {plan.duration:g} ثانیه", "done")
         outline = "\n".join(f"{i}) {sc.headline} — {sc.idea}" for i, sc in enumerate(plan.scenes, 1))
-        _assistant(cid, user, f"طرح «{plan.title}» آماده شد ({plan.duration:g} ثانیه، {count} صحنه):\n{outline}\nالان هر صحنه را جداگانه طراحی می‌کنم.")
+        from app import studio_narrator
+        studio_narrator.narrate(cid, user, "motion_plan", {"title": plan.title, "duration_seconds": plan.duration, "format": plan.format, "signature_idea": plan.signature,
+                                "scenes": [{"headline": sc.headline, "what_happens": sc.idea} for sc in plan.scenes]},
+                                fallback=f"طرح «{plan.title}» آماده شد ({plan.duration:g} ثانیه، {count} صحنه):\n{outline}\nالان هر صحنه را جداگانه طراحی می‌کنم.")
     else:
         count = len(plan.scenes)
         _note(directory, "plan", f"از طرح قبلی ادامه می‌دهم: {count} صحنه، {plan.duration:g} ثانیه", "done")

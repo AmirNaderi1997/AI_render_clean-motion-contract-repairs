@@ -199,8 +199,10 @@ export function buildTimeline({ messages, events, projects, pending, processing,
       const id = `response:${event.data.response_id}`;
       const content = String(event.data.text || '');
       const previous = items.find(item => item.kind === 'message' && item.id === id);
-      if (previous?.kind === 'message') previous.content = content;
-      else if (content) { flush(); items.push({kind:'message',id,role:'assistant',content,attachments:[],createdAt:entry.t}); }
+      // A streamed message keeps its pictures (the page's images, the reference frame review): the completed event names them.
+      const attached = Array.isArray(event.data.attachments) ? event.data.attachments.map(String) : [];
+      if (previous?.kind === 'message') { previous.content = content; if (attached.length) previous.attachments = attached; }
+      else if (content) { flush(); items.push({kind:'message',id,role:'assistant',content,attachments:attached,createdAt:entry.t}); }
       continue;
     }
     if (event.type === 'agent.narration') {

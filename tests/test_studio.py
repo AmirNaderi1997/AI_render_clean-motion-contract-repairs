@@ -101,7 +101,9 @@ def test_social_reference_does_not_enter_product_scraper(tmp_path, monkeypatch):
     calls = []
     said = []
     monkeypatch.setattr(o, '_emit', lambda *a, **kw: None)
-    monkeypatch.setattr(o, '_assistant', lambda cid, user, text: said.append(text))
+    monkeypatch.setattr(o, '_assistant', lambda cid, user, text, *a: said.append(text))
+    from app import studio_narrator
+    monkeypatch.setattr(studio_narrator, 'narrate', lambda cid, user, kind, facts, **kw: said.append(kw.get('fallback') or kind))
     monkeypatch.setattr(o, '_creative_direction', lambda *a: None)
     monkeypatch.setattr(o, '_provider', lambda: 'gateway')
     def execute(name, payload):

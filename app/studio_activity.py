@@ -7,6 +7,8 @@ import uuid
 from contextlib import contextmanager
 
 description = contextvars.ContextVar('studio_activity_description', default=None)
+# What this work is about (the title of the page being read, the topic of the request): step labels say it instead of a generic "this part of the edit".
+subject = contextvars.ContextVar('studio_activity_subject', default='')
 LABELS = {
     'audio_generation': ('narration', 'در حال ساخت صدای گویندگی از متن تأییدشده هستم.'),
     'transcription': ('transcription', 'در حال دریافت متن گفتار و زمان‌بندی کلمه‌ها هستم.'),
@@ -67,6 +69,9 @@ def observe_request(function):
         if not cid or kwargs.get('probe'):
             return function(route, *args, **kwargs)
         stage, message = description.get() or LABELS.get(route, (route, 'در حال پردازش این بخش از تدوین هستم.'))
+        topic = subject.get()
+        if topic:
+            message = f'{message} (موضوع: «{topic}»)'
         stopped = threading.Event()
         started = time.monotonic()
         activity_id = uuid.uuid4().hex

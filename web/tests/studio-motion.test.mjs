@@ -41,3 +41,14 @@ test("remaining time reads naturally and counts down to the deadline", () => {
   assert.equal(etaText(100 + 130, 100), "حدود ۲ دقیقه مانده");
   assert.equal(etaText(90, 100), "چند ثانیهٔ دیگر");
 });
+
+test("a streamed narration keeps the pictures it talks about", () => {
+  const items = buildTimeline({ ...base, events: [
+    event("assistant.response.started", { response_id: "narration:a" }, 1),
+    event("assistant.response.delta", { response_id: "narration:a", text: "صفحه را خواندم" }, 2),
+    event("assistant.response.completed", { response_id: "narration:a", text: "صفحه را خواندم؛ این تصاویرش است", message_id: 7, attachments: ["img1", "img2"] }, 3),
+  ] });
+  const message = items.find(i => i.kind === "message");
+  assert.equal(message.content, "صفحه را خواندم؛ این تصاویرش است");
+  assert.deepEqual(message.attachments, ["img1", "img2"]);
+});
