@@ -324,8 +324,10 @@ EXAMPLE = {
 }
 
 
-def build_request(brief: str, *, context: str = "", previous: MotionPage | None = None, change: str = "", brand: str = "") -> str:
+def build_request(brief: str, *, context: str = "", previous: MotionPage | None = None, change: str = "", brand: str = "", style: str = "") -> str:
     parts = [f"REQUEST:\n{brief.strip()}"]
+    if style:
+        parts.append(f"REFERENCE STYLE (keep following it):\n{style.strip()[:1800]}")
     if brand:
         parts.append(f"BRAND (use only when the request is about this brand):\n{brand.strip()}")
     if context:
@@ -338,10 +340,10 @@ def build_request(brief: str, *, context: str = "", previous: MotionPage | None 
     return "\n\n".join(parts)
 
 
-def author(brief: str, *, context: str = "", previous: MotionPage | None = None, change: str = "", brand: str = "",
+def author(brief: str, *, context: str = "", previous: MotionPage | None = None, change: str = "", brand: str = "", style: str = "",
            used: list[str] | None = None, repairs: int = 2) -> MotionPage:
     """One validated page (or the questions to ask first). Rejections are fed back to the model."""
-    request = build_request(brief, context=context, previous=previous, change=change, brand=brand)
+    request = build_request(brief, context=context, previous=previous, change=change, brand=brand, style=style)
     problems: list[str] = []
     for attempt in range(repairs + 1):
         user = request if not problems else request + "\n\nYour previous answer was rejected. Fix EVERY point and return the complete JSON object again:\n- " + "\n- ".join(problems[:10])
@@ -496,8 +498,10 @@ def validate_plan(plan: MotionPlan) -> list[str]:
     return problems
 
 
-def plan_request(brief: str, *, context: str = "", brand: str = "") -> str:
+def plan_request(brief: str, *, context: str = "", brand: str = "", style: str = "") -> str:
     parts = [f"REQUEST:\n{brief.strip()}"]
+    if style:
+        parts.append(f"REFERENCE STYLE (observed in the reference video the person gave: follow its rhythm, type treatment, colour feel, transitions and density; never copy its words):\n{style.strip()[:1800]}")
     if brand:
         parts.append(f"BRAND (use only when the request is about this brand):\n{brand.strip()}")
     if context:
@@ -508,9 +512,9 @@ def plan_request(brief: str, *, context: str = "", brand: str = "") -> str:
 PLAN_ROUTE = "motion_graphic_planner"
 
 
-def plan(brief: str, *, context: str = "", brand: str = "", used: list[str] | None = None, repairs: int = 2) -> MotionPlan:
+def plan(brief: str, *, context: str = "", brand: str = "", style: str = "", used: list[str] | None = None, repairs: int = 2) -> MotionPlan:
     """The plan (or the questions to ask first). A plan that does not tile the duration is sent back with the reasons."""
-    request = plan_request(brief, context=context, brand=brand)
+    request = plan_request(brief, context=context, brand=brand, style=style)
     problems: list[str] = []
     for attempt in range(repairs + 1):
         user = request if not problems else request + "\n\nYour previous plan was rejected. Fix EVERY point and return the complete JSON again:\n- " + "\n- ".join(problems)
@@ -546,7 +550,7 @@ def _scene_page(n: int, draft: SceneDraft, plan: MotionPlan) -> MotionPage:
                       build_js=draft.build_js, update_js=draft.update_js)
 
 
-def scene_request(plan: MotionPlan, n: int, brief: str, context: str = "") -> str:
+def scene_request(plan: MotionPlan, n: int, brief: str, context: str = "", style: str = "") -> str:
     scene = plan.scenes[n - 1]
     outline = [{"scene": i, "headline": sc.headline, "idea": sc.idea, "from": sc.start, "to": sc.end} for i, sc in enumerate(plan.scenes, 1)]
     parts = [f"YOU BUILD SCENE s{n} (N = {n}). T = {scene.start:g}, D = {round(scene.end - scene.start, 2):g} (it is on screen from {scene.start:g} s to {scene.end:g} s).",
@@ -556,6 +560,8 @@ def scene_request(plan: MotionPlan, n: int, brief: str, context: str = "") -> st
              f"ORIGINAL REQUEST:\n{brief.strip()[:1500]}"]
     if context:
         parts.append("FACTS you may use (the only ones besides the request):\n" + context.strip()[:5000])
+    if style:
+        parts.append("REFERENCE STYLE to echo (rhythm, type treatment, transitions, density):\n" + style.strip()[:900])
     parts.append("Palette background and ink are already applied to #s%d; use accent colours for emphasis." % n)
     return "\n\n".join(parts)
 
@@ -585,10 +591,10 @@ def explain_problem(text: str) -> str:
 
 
 def author_scene(plan: MotionPlan, n: int, brief: str, *, context: str = "", used: list[str] | None = None, repairs: int = SCENE_ATTEMPTS - 1,
-                 feedback: list[str] | None = None, on_retry=None) -> SceneDraft:
+                 feedback: list[str] | None = None, on_retry=None, style: str = "") -> SceneDraft:
     """One validated scene. Rejections are fed back to the model (``on_retry(next_attempt, problems)`` tells the caller); ``feedback`` starts the
     conversation with problems an earlier check found in this scene. The caller falls back to a plain scene when this raises."""
-    request = scene_request(plan, n, brief, context)
+    request = scene_request(plan, n, brief, context, style)
     guide = SCENE_GUIDE.replace("sN", f"s{n}")
     problems: list[str] = list(feedback or [])
     for attempt in range(repairs + 1):

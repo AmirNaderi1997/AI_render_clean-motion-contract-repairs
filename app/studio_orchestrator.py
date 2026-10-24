@@ -575,12 +575,12 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
             _start_discovery(conversation_id, user_key, conversation, attachments, text)
             return
         if intent == "motion_graphic":
-            _start_motion_graphic(conversation_id, user_key, conversation, text)
+            _start_motion_graphic(conversation_id, user_key, conversation, text, attachments)
             return
         if intent in {"motion_graphic_revision", "motion_graphic_answer"}:
             if _continue_motion_graphic(conversation_id, user_key, conversation, text, answering=intent == "motion_graphic_answer"):
                 return
-            _start_motion_graphic(conversation_id, user_key, conversation, text)
+            _start_motion_graphic(conversation_id, user_key, conversation, text, attachments)
             return
         if intent == "question_video":
             run(repo.set_conversation(conversation_id,user_key,state={**conversation.get('state',{}),
@@ -722,17 +722,50 @@ def _read_source_page(conversation_id: str, user_key: str, url: str) -> str | No
     return (f"{title}\n{text}").strip()
 
 
-def _start_motion_graphic(conversation_id: str, user_key: str, conversation: dict, text: str) -> None:
+_REFERENCE_HOSTS = {"instagram.com", "youtu.be", "youtube.com", "tiktok.com"}
+
+
+def _reference_style(profile) -> str:
+    """What was observed in the reference video, as direction for the planner and the scene designers."""
+    parts = [f"{profile.shot_count} shots in {profile.duration_s:g}s, about {profile.avg_shot_s:g}s per shot, {profile.cuts_per_second:g} cuts/second"]
+    for label, value in (("typography", profile.typography), ("composition", profile.composition), ("motion language", profile.motion_language),
+                         ("transitions", profile.transitions), ("visual density", profile.visual_density), ("hook", profile.hook_structure),
+                         ("overall feel", profile.overall_feel)):
+        if value:
+            parts.append(f"{label}: {value}")
+    if profile.palette:
+        parts.append("measured palette: " + ", ".join(profile.palette[:6]))
+    return "\n".join(parts)
+
+
+def _start_motion_graphic(conversation_id: str, user_key: str, conversation: dict, text: str, attachments: list[dict] | None = None) -> None:
+    """A reference video link (Instagram, YouTube, TikTok) is analysed as STYLE; every other link is read as CONTENT (text, and screenshots when the text is thin)."""
+    from urllib.parse import urlsplit
     from app import motion_graphic
-    context = ""
-    urls = _urls(text)
-    if urls:
-        context = _read_source_page(conversation_id, user_key, urls[0])
-        if context is None:
-            return
-    record = motion_graphic.create(conversation_id, user_key, text, context)
+    links = _urls(text)
+    references = [link for link in links if (urlsplit(link).hostname or "").lower().removeprefix("www.").removeprefix("m.") in _REFERENCE_HOSTS]
+    pages = [link for link in dict.fromkeys(links) if link not in references]
+    style = ""
+    uploaded = next((item for item in (attachments or []) if item.get("kind") == "video"), None)
+    if uploaded or references:
+        # An uploaded video is the most reliable reference (no network, no login wall); a link is the fallback.
+        profile = _analyze_reference(conversation_id, user_key, uploaded["path"] if uploaded else references[0])
+        _checkpoint(conversation_id)
+        if profile.usable:
+            style = _reference_style(profile)
+    sources: list[str] = []
+    for url in pages[:2]:
+        content = _read_source_page(conversation_id, user_key, url)
+        _checkpoint(conversation_id)
+        if content:
+            sources.append(f"SOURCE {url}\n{content}")
+    if pages and not sources:
+        return                                           # the person has been told why nothing could be read, and what to send instead
+    context = "\n\n".join(sources)
+    record = motion_graphic.create(conversation_id, user_key, text, context, style)
     run(repo.set_conversation(conversation_id, user_key, state={**conversation.get("state", {}), "motion": {"motion_id": record["id"]}}))
-    _assistant(conversation_id, user_key, "شروع کردم: اول طرح و صحنه‌ها را از روی درخواست" + (" و محتوای صفحه" if context else "")
+    basis = " و ".join(part for part in ("سبک رفرنس" if style else "", "محتوای صفحه" if context else "") if part)
+    _assistant(conversation_id, user_key, "شروع کردم: اول طرح و صحنه‌ها را از روی درخواست" + (f" و {basis}" if basis else "")
                + " می‌نویسم، بعد هر صحنه را طراحی، بررسی و رندر می‌کنم. پیشرفت را در آخرین پیام می‌بینید.")
     _emit(conversation_id, "motion.created", motion_id=record["id"])
     motion_graphic.start(motion_graphic.folder(user_key, conversation_id, record["id"]))
