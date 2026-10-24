@@ -16,6 +16,7 @@ import base64
 import hmac
 import os
 import shutil
+import subprocess
 import json
 import tempfile
 import urllib.error
@@ -29,6 +30,9 @@ from pydantic import BaseModel
 
 HOSTS = {"instagram.com", "youtube.com", "youtu.be", "tiktok.com", "vimeo.com", "x.com", "twitter.com", "facebook.com", "fb.watch"}
 MAX_BYTES = 80 * 1024 * 1024
+# The editor's server downloads from here at roughly 20 KB/s (Iran), so a reference is sent as a small proxy copy: at most 45 s, 480p, a few MB.
+SHRINK_SECONDS = 45
+SHRINK_MIN_BYTES = 1_500_000
 MAX_SECONDS = 180
 CHUNK = 1024 * 1024
 
@@ -55,6 +59,29 @@ def _allowed(url: str) -> bool:
 def _authorized(supplied: str | None) -> bool:
     expected = os.environ.get("RELAY_SECRET", "")
     return len(expected) >= 32 and isinstance(supplied, str) and hmac.compare_digest(supplied.encode(), expected.encode())
+
+
+def _ffmpeg() -> str | None:
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return shutil.which("ffmpeg")
+
+
+def _shrink(path: Path) -> Path:
+    """A small copy for the trip to the editor (the original when ffmpeg is missing, the file is already small, or the copy would not be smaller)."""
+    exe = _ffmpeg()
+    if not exe or path.stat().st_size < SHRINK_MIN_BYTES:
+        return path
+    out = path.with_name("small.mp4")
+    command = [exe, "-y", "-v", "error", "-i", str(path), "-t", str(SHRINK_SECONDS), "-vf", "scale=-2:'min(480,ih)',fps=24", "-c:v", "libx264",
+               "-preset", "veryfast", "-crf", "32", "-c:a", "aac", "-b:a", "32k", "-ac", "1", "-movflags", "+faststart", str(out)]
+    try:
+        subprocess.run(command, capture_output=True, timeout=120, check=True)
+    except (subprocess.SubprocessError, OSError):
+        return path
+    return out if out.is_file() and 0 < out.stat().st_size < path.stat().st_size else path
 
 
 def _instagram(url: str) -> bool:
@@ -181,6 +208,8 @@ def fetch(body: Fetch, x_relay_secret: str | None = Header(default=None)):
             shutil.rmtree(work, ignore_errors=True)
             return JSONResponse({"error": "no_file", "message": "nothing was downloaded (too long, too large, or not a video)"}, status_code=502)
         path = files[0]
+    original = path.stat().st_size
+    path = _shrink(path)
     size = path.stat().st_size
 
     def stream():
@@ -194,5 +223,5 @@ def fetch(body: Fetch, x_relay_secret: str | None = Header(default=None)):
     media = {"mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime", "mkv": "video/x-matroska", "m4v": "video/mp4"}
     headers = {"content-length": str(size), "x-source-title": urllib.parse.quote(str(info.get("title") or "")[:200]),
                "x-source-duration": str(info.get("duration") or ""), "x-source-extractor": str(info.get("extractor_key") or ""),
-               "x-source-ext": path.suffix.lstrip(".")}
+               "x-source-ext": path.suffix.lstrip("."), "x-source-original-bytes": str(original)}
     return StreamingResponse(stream(), media_type=media.get(path.suffix.lstrip(".").lower(), "application/octet-stream"), headers=headers)

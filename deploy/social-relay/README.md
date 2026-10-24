@@ -25,6 +25,10 @@ npx vercel deploy --prod
 curl https://editorgpt-social-relay.vercel.app/api/index  # {"ok": true, ..., "getinsaver": true}
 ```
 
+## Size of what is sent
+The editor's server pulls the file from Vercel at roughly 20 KB/s, so the relay sends a small proxy copy (ffmpeg from `imageio-ffmpeg`: at most 45 s, 480p, a few MB;
+the original size is in `x-source-original-bytes`). If ffmpeg is unavailable the original goes through, as before.
+
 ## What works from Vercel's network (tested 2026-10-23)
 - TikTok: works without login.
 - YouTube / Vimeo / Instagram: the sites ask datacenter IPs to sign in. Give the relay a logged-in session:

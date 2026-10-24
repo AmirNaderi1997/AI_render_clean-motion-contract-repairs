@@ -174,3 +174,35 @@ def test_the_editor_explains_the_api_failure_reasons():
     from creative import reference
     assert "اعتبار" in reference.download_failure_reason("[downloader api] getinsaver credits exhausted; ERROR: x")
     assert "خصوصی" in reference.download_failure_reason("[downloader api] private, deleted or login-only content; ERROR: x")
+
+
+def test_a_large_reference_is_shrunk_before_the_slow_trip_to_the_editor(monkeypatch, tmp_path):
+    big = tmp_path / "video.mp4"
+    big.write_bytes(b"x" * 3_000_000)
+    seen = {}
+
+    def run(command, **kw):
+        seen["command"] = command
+        Path(command[-1]).write_bytes(b"s" * 400_000)
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(relay, "_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(relay.subprocess, "run", run)
+    small = relay._shrink(big)
+    assert small.name == "small.mp4" and small.stat().st_size == 400_000
+    assert "-t" in seen["command"] and str(relay.SHRINK_SECONDS) in seen["command"] and "min(480,ih)" in " ".join(seen["command"])
+
+
+def test_the_original_is_sent_when_shrinking_is_impossible_or_pointless(monkeypatch, tmp_path):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"x" * 3_000_000)
+    monkeypatch.setattr(relay, "_ffmpeg", lambda: None)
+    assert relay._shrink(video) == video
+    monkeypatch.setattr(relay, "_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(relay.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(relay.subprocess.SubprocessError("boom")))
+    assert relay._shrink(video) == video
+    tiny = tmp_path / "t.mp4"
+    tiny.write_bytes(b"x" * 1000)
+    assert relay._shrink(tiny) == tiny
+    monkeypatch.setattr(relay.subprocess, "run", lambda c, **k: Path(c[-1]).write_bytes(b"y" * 9_000_000) or types.SimpleNamespace())
+    assert relay._shrink(video) == video                 # a copy that is not smaller is not used
