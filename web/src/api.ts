@@ -172,6 +172,8 @@ export interface StudioAction { id: string; project_id?: string; kind: string; s
 export interface StudioConversation {
   id: string; title: string; language: string; status_voice_enabled: boolean; state: Record<string, any>;
   created_at: string; updated_at: string; messages?: StudioMessage[]; projects?: StudioProject[]; actions?: StudioAction[];
+  /** The server's own answer to "is anything working for this chat" (any process: the API, the worker, a narration, a motion graphic). */
+  busy?: boolean;
 }
 export interface StudioEvent { id: number; seq: number; type: string; data: Record<string, any>; created_at: string }
 

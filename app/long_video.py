@@ -122,6 +122,15 @@ def create(conversation_id: str, user_key: str, attachment: dict, request: str =
 
 # ── the worker ──────────────────────────────────────────────────────────────────────────────────────
 
+def _flag(directory: Path) -> Path:
+    return directory / "stop.flag"
+
+
+def _stopped(key: str, directory: Path) -> bool:
+    """Stop was pressed: in this process (the set) or in another one (a file next to the analysis: the API process and the worker are different processes)."""
+    return key in _STOP or _flag(directory).exists()
+
+
 def start(directory: Path) -> None:
     analysis = load(directory)
     key = analysis["id"]
@@ -129,6 +138,7 @@ def start(directory: Path) -> None:
         if key in _RUNNING and _RUNNING[key].is_alive():
             return
         _STOP.discard(key)
+        _flag(directory).unlink(missing_ok=True)
         thread = threading.Thread(target=_guard, args=(directory,), daemon=True, name=f"discovery-{key}")
         _RUNNING[key] = thread
         thread.start()
@@ -136,10 +146,22 @@ def start(directory: Path) -> None:
 
 def stop(analysis_id: str) -> None:
     _STOP.add(analysis_id)
+    for directory in ROOT.glob(f"*/*/discovery/{analysis_id}"):
+        try:
+            _flag(directory).write_text(str(time.time()))
+        except OSError:
+            pass
 
 
 def is_running(analysis_id: str) -> bool:
     return analysis_id in _RUNNING and _RUNNING[analysis_id].is_alive()
+
+
+def is_alive(analysis: dict) -> bool:
+    """Working now, in this process or another: the worker runs in the Celery process on the server, whose threads this process cannot see, but whose
+    progress it saves into the analysis file every few seconds."""
+    busy = analysis.get("transcription_status") in {"running", "queued"} or analysis.get("discovery_status") in {"running", "queued"}
+    return is_running(analysis["id"]) or (busy and time.time() - analysis.get("updated_at", 0) <= 45)
 
 
 def _guard(directory: Path) -> None:
@@ -176,7 +198,7 @@ def _run(directory: Path) -> None:
         raise RuntimeError("فایل ویدیوی اصلی پیدا نشد")
     if not analysis["media"]["has_audio"]:
         raise RuntimeError("این ویدیو صدا ندارد؛ بدون گفتار نمی‌توان محتوا را پیدا کرد.")
-    stopper = lambda: key in _STOP
+    stopper = lambda: _stopped(key, directory)
 
     # 1. live transcription; finished chunks are corrected by the model while the next one is still being heard
     enhancer = _Enhancer(directory)
@@ -658,14 +680,14 @@ def view(directory: Path, tail: int = 12) -> dict:
         except (OSError, ValueError):
             pass
     out = {k: v for k, v in analysis.items() if k not in {"candidates", "source_path", "user_key"}}
-    out.update(running=is_running(analysis["id"]), interrupted=is_stale(analysis), transcript_tail=segments, enhanced_chunks=len(enhanced), chunks=len(chunks),
+    out.update(running=is_alive(analysis), interrupted=is_stale(analysis), transcript_tail=segments, enhanced_chunks=len(enhanced), chunks=len(chunks),
                candidates=[public_candidate(c) for c in analysis["candidates"]])
     return out
 
 
 def is_stale(analysis: dict) -> bool:
     busy = analysis["transcription_status"] in {"running", "queued"} or analysis["discovery_status"] in {"running", "queued"}
-    return busy and not is_running(analysis["id"]) and analysis.get("stage") not in {"queued"} and time.time() - analysis.get("updated_at", 0) > 20
+    return busy and not is_alive(analysis) and analysis.get("stage") not in {"queued"} and time.time() - analysis.get("updated_at", 0) > 20
 
 
 def request_more(directory: Path, focus: str) -> None:
@@ -676,9 +698,10 @@ def request_more(directory: Path, focus: str) -> None:
     segments = json.loads((directory / "transcript.json").read_text())["segments"]
     key = analysis["id"]
     _STOP.discard(key)
+    _flag(directory).unlink(missing_ok=True)
     def work():
         try:
-            _discover(directory, segments, lambda: key in _STOP, focus=focus[:300])
+            _discover(directory, segments, lambda: _stopped(key, directory), focus=focus[:300])
         except Exception as exc:
             log.exception("additional discovery failed")
             _emit(analysis["conversation_id"], "job.failed", analysis_id=key, message=str(exc)[:300], resumable=True)
@@ -696,7 +719,7 @@ def recover_interrupted() -> int:
         except (OSError, ValueError):
             continue
         busy = analysis["transcription_status"] == "running" or analysis["discovery_status"] == "running"
-        if busy and not is_running(analysis["id"]):
+        if busy and not is_alive(analysis):                       # a worker in another process that saved progress a moment ago is not "interrupted"
             start(path.parent)
             count += 1
     return count

@@ -152,7 +152,11 @@ async def open_legacy_project(request: Request, body: LegacyProjectOpen):
 async def get_conversation(request: Request, conversation_id: str):
     try:
         await sync_conversation(conversation_id, _user(request))
-        return _public_conversation(await repo.get_conversation(conversation_id, _user(request)))
+        conversation = await repo.get_conversation(conversation_id, _user(request))
+        from app.studio_orchestrator import conversation_busy
+        payload = _public_conversation(conversation)
+        payload["busy"] = await asyncio.to_thread(conversation_busy, conversation, _user(request))      # the server's own word, whichever process is working
+        return payload
     except KeyError:
         raise HTTPException(404, "conversation not found")
 

@@ -15,3 +15,11 @@ Every message goes through the same stages; only the tools of the last stage dif
    colours, the idea chosen...), with the real pictures attached. If the model is unavailable the plain factual fallback is posted.
 6. **Progress and control**: step labels name the real subject (`studio_activity.subject`); long jobs show their live log, the ETA and sit at the end of the chat;
    the composer's button is Stop while work runs and Send as soon as something is typed (`request_stop` cancels the message, a project, a motion graphic or a discovery).
+
+## Stop and "working" across processes
+On the server the API process (it receives the Stop click) and the Celery worker (it runs the work) are different processes that share one data volume, so
+nothing the Stop button or the working indicator depend on may live in memory. `app/studio_flags.py` keeps it in files next to the conversation:
+`.stop` (the stop generation: a message started under an older number stops at its next checkpoint) and `.busy/<id>` (one heartbeat file per running unit of work).
+A motion graphic keeps a run token in its record (Stop changes it; a worker whose token is no longer current unwinds, even one that is still inside a model
+call), and discovery uses a `stop.flag` file. `GET /conversations/<id>` returns `busy` and workers emit `work.state` events, so the composer shows Stop for the
+whole time anything is working: understanding the request, reading sources, writing the plan, designing scenes, rendering.

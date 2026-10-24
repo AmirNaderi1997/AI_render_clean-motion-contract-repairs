@@ -51,8 +51,11 @@ def _post(conversation_id: str, user_key: str, text: str, attachments: list[str]
     _assistant(conversation_id, user_key, text, attachments or None)
 
 
-def _stream(conversation_id: str, user_key: str, kind: str, facts: dict, attachments: list[str] | None, fallback: str) -> None:
+def _stream(conversation_id: str, user_key: str, kind: str, facts: dict, attachments: list[str] | None, fallback: str, generation: int = 0) -> None:
+    from app import studio_flags
     from app.studio_orchestrator import _emit, repo, run
+    if studio_flags.generation(user_key, conversation_id) != generation:
+        return                                           # the person pressed Stop after this was queued: it is no longer news
     from brain.lm_gateway import configured, stream_chat
     text = ""
     if configured():
@@ -71,6 +74,9 @@ def _stream(conversation_id: str, user_key: str, kind: str, facts: dict, attachm
             text = _trim(text)
             if not text:
                 raise ValueError("empty narration")
+            if studio_flags.generation(user_key, conversation_id) != generation:
+                _emit(conversation_id, "assistant.response.failed", response_id=response_id, text="", message_id=None, error="")
+                return
             saved = run(repo.add_message(conversation_id, user_key, "assistant", text, attachments or None))
             _emit(conversation_id, "assistant.response.completed", response_id=response_id, text=text, message_id=saved["id"], attachments=list(attachments or []))
             return
@@ -84,7 +90,13 @@ def _stream(conversation_id: str, user_key: str, kind: str, facts: dict, attachm
 def narrate(conversation_id: str, user_key: str, kind: str, facts: dict[str, Any], *, attachments: list[str] | None = None,
             fallback: str = "", background: bool = True):
     """Say what ``kind`` of step just happened, from ``facts``. Returns the future (``.result()`` to wait for the message to be posted)."""
-    job = _executor(conversation_id).submit(_stream, conversation_id, user_key, kind, facts, attachments, fallback)
+    from app import studio_flags
+
+    def run_narration(generation: int) -> None:
+        with studio_flags.working(user_key, conversation_id):
+            _stream(conversation_id, user_key, kind, facts, attachments, fallback, generation)
+
+    job = _executor(conversation_id).submit(run_narration, studio_flags.generation(user_key, conversation_id))
     if not background:
         job.result()
     return job

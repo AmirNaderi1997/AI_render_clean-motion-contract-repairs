@@ -313,6 +313,15 @@ export function buildTimeline({ messages, events, projects, pending, processing,
 }
 
 /** True while the assistant is working on the latest user turn or a project is running. */
+/** The server's own answer to "is anything working for this chat?", from the latest `work.state` event (any process emits it) or, before one arrives, the conversation. */
+export function serverBusy(events: StudioEvent[], fallback?: boolean): boolean | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === "work.state") return Boolean(events[i].data.busy);
+    if (events[i].type === "message.stopped") return false;
+  }
+  return fallback;
+}
+
 export function isProcessing(args: { sending: boolean; messages: StudioMessage[]; events: StudioEvent[]; project?: StudioProject; now?: number }): boolean {
   const { sending, messages, events, project } = args;
   const now = args.now ?? Date.now();

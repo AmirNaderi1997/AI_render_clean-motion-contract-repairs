@@ -25,7 +25,9 @@ from app.studio_store import ROOT
 log = logging.getLogger(__name__)
 _LOCKS: dict[str, threading.RLock] = {}
 _RUNNING: dict[str, threading.Thread] = {}
-_STOP: set[str] = set()
+_DIRS: dict[str, Path] = {}                  # motion id -> its folder (so a worker can re-read its own record)
+_local = threading.local()                   # the run token of the worker thread (and of the threads it starts)
+_depth = threading.local()
 _BROWSER = threading.Semaphore(1)
 ACTIVE = ("queued", "writing", "checking", "rendering")
 _SCENE_WORKERS = 3
@@ -44,15 +46,55 @@ def folder(user_key: str, conversation_id: str, motion_id: str) -> Path:
     return ROOT / _safe(user_key) / conversation_id / "motion" / motion_id
 
 
-def _lock(motion_id: str) -> threading.RLock:
-    return _LOCKS.setdefault(motion_id, threading.RLock())
+class _Guard:
+    """Re-entrant lock for one job: a thread lock plus an flock on the job's folder, so the API process (Stop, retry) and the worker never interleave
+    a read-modify-write of the record."""
+
+    def __init__(self, motion_id: str):
+        self.key = motion_id
+        self.rlock = _LOCKS.setdefault(motion_id, threading.RLock())
+
+    def __enter__(self):
+        self.rlock.acquire()
+        depths = getattr(_depth, "d", None)
+        if depths is None:
+            depths = _depth.d = {}
+        depths[self.key] = depths.get(self.key, 0) + 1
+        self.fd = None
+        directory = _DIRS.get(self.key)
+        if depths[self.key] == 1 and directory is not None:
+            try:
+                import fcntl
+                self.fd = open(directory / ".lock", "a")
+                fcntl.flock(self.fd, fcntl.LOCK_EX)
+            except (OSError, ImportError):
+                self.fd = None
+        return self
+
+    def __exit__(self, *exc):
+        depths = _depth.d
+        depths[self.key] -= 1
+        try:
+            if self.fd is not None and depths[self.key] == 0:
+                import fcntl
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+                self.fd.close()
+        finally:
+            self.rlock.release()
+        return False
+
+
+def _lock(motion_id: str) -> _Guard:
+    return _Guard(motion_id)
 
 
 def load(directory: Path) -> dict:
+    _DIRS[directory.name] = directory
     return json.loads((directory / "motion.json").read_text())
 
 
 def save(directory: Path, record: dict) -> dict:
+    _DIRS[directory.name] = directory
     with _lock(record["id"]):
         record["updated_at"] = time.time()
         temporary = directory / f"motion.{threading.get_ident()}.part"
@@ -113,6 +155,8 @@ def view(directory: Path) -> dict:
 
 
 def _progress(directory: Path, status: str, progress: int, message: str, *, stage: str | None = None, eta: float | None = None) -> dict:
+    if _cancelled(directory.name):
+        raise _Cancelled()
     with _lock(directory.name):
         record = load(directory)
         record.update(status=status, stage=stage or status, progress=progress, message=message)
@@ -127,6 +171,8 @@ def _progress(directory: Path, status: str, progress: int, message: str, *, stag
 
 def _note(directory: Path, key: str, text: str, state: str = "active") -> None:
     """One line of what is really happening (about this clip's own content). A line with the same key is updated, not repeated."""
+    if _cancelled(directory.name):
+        raise _Cancelled()
     with _lock(directory.name):
         record = load(directory)
         lines = record.setdefault("log", [])
@@ -168,7 +214,15 @@ def _remaining(pending_scenes: int, duration: float, *, extra: float = 0.0) -> f
 
 
 def _cancelled(motion_id: str) -> bool:
-    return motion_id in _STOP
+    """True when this worker's run was superseded: Stop was pressed (in any process) or a newer start replaced it."""
+    mine = getattr(_local, "run", None)
+    directory = _DIRS.get(motion_id)
+    if mine is None or directory is None:
+        return False
+    try:
+        return int(json.loads((directory / "motion.json").read_text()).get("run") or 0) != mine
+    except (OSError, ValueError):
+        return False
 
 
 # ── pipeline ─────────────────────────────────────────────────────────────────
@@ -176,36 +230,69 @@ def _cancelled(motion_id: str) -> bool:
 def start(directory: Path, *, change: str = "") -> None:
     """(Re)start the pipeline in the background: a new clip from ``request`` or, with ``change``, a new version of the current one."""
     key = directory.name
-    if key in _RUNNING and _RUNNING[key].is_alive():
-        return
-    _STOP.discard(key)
-    thread = threading.Thread(target=_guard, args=(directory, change), daemon=True, name=f"motion-{key}")
+    # Every start is a new run, and the run token lives in the record (a file): a worker of an older run, in this process or another, finds out at its next
+    # update that it is no longer the current run and unwinds. It never writes into the new run, and the new run never waits for it.
+    with _lock(key):
+        record = load(directory)
+        run_id = int(record.get("run") or 0) + 1
+        record["run"] = run_id
+        record["error"] = None
+        save(directory, record)
+    thread = threading.Thread(target=_guard, args=(directory, change, run_id), daemon=True, name=f"motion-{key}")
     _RUNNING[key] = thread
     thread.start()
 
 
 def stop(directory: Path) -> None:
-    _STOP.add(directory.name)
-
-
-def _guard(directory: Path, change: str) -> None:
+    """Stop NOW as far as the person can see: the record turns "stopped" immediately (the card and the composer's button update at once) and its run token
+    changes, so the worker, wherever it runs, notices at its very next update and unwinds, discarding whatever an in-flight model call returns."""
     key = directory.name
+    with _lock(key):
+        record = load(directory)
+        record["run"] = int(record.get("run") or 0) + 1
+        if record["status"] in ACTIVE:
+            record.update(status="failed", stage="failed", progress=0, message="ساخت متوقف شد.", error="stopped", eta_s=None, eta_at=None)
+        save(directory, record)
+    if record["status"] == "failed" and record["error"] == "stopped":
+        _emit(record["conversation_id"], "motion.progress", motion_id=record["id"], status="failed", stage="failed", progress=0, message="ساخت متوقف شد.")
+        _emit(record["conversation_id"], "job.failed", motion_id=record["id"], message="ساخت متوقف شد.", stopped=True, resumable=True)
+
+
+def _guard(directory: Path, change: str, run_id: int | None = None) -> None:
+    key = directory.name
+    _DIRS[key] = directory
+    _local.run = run_id if run_id is not None else int(load(directory).get("run") or 0)
     try:
         _run(directory, change)
     except _Cancelled:
-        record = _progress(directory, "failed", 0, "ساخت متوقف شد.")
-        _set_error(directory, "stopped")
-        _emit(record["conversation_id"], "job.failed", motion_id=key, message="ساخت متوقف شد.", stopped=True, resumable=True)
+        # stop() already showed it. Only the CURRENT run may write: a superseded worker unwinding late must not mark the new run as stopped.
+        if _is_current(key):
+            with _lock(key):
+                record = load(directory)
+                if record["status"] in ACTIVE:
+                    record.update(status="failed", stage="failed", progress=0, message="ساخت متوقف شد.", error="stopped", eta_s=None, eta_at=None)
+                    save(directory, record)
     except Exception as exc:
+        if not _is_current(key):
+            log.info("a superseded motion graphic worker %s ended with %s", key, type(exc).__name__)
+            return
         log.exception("motion graphic %s failed", key)
         message = _public_error(exc)
-        record = _progress(directory, "failed", 0, message)
+        try:
+            record = _progress(directory, "failed", 0, message)
+        except _Cancelled:
+            return
         _set_error(directory, message)
         _emit(record["conversation_id"], "job.failed", motion_id=key, message=message, resumable=True)
         _assistant(record["conversation_id"], record["user_key"], f"ساخت موشن‌گرافیک کامل نشد: {message} می‌توانید دوباره امتحان کنید یا درخواست را ساده‌تر بنویسید.")
     finally:
-        _STOP.discard(key)
-        _RUNNING.pop(key, None)
+        if _RUNNING.get(key) is threading.current_thread():
+            _RUNNING.pop(key, None)
+
+
+def _is_current(key: str) -> bool:
+    """This worker belongs to the latest run of the job."""
+    return not _cancelled(key)
 
 
 class _Cancelled(RuntimeError):
@@ -265,6 +352,8 @@ def _run(directory: Path, change: str) -> None:
         page, notes = _prepare_and_render(directory, page, brief, change, used, build)
     notes = scene_notes + notes
     with _lock(key):
+        if _cancelled(key):
+            raise _Cancelled()                                   # Stop (or a newer start) arrived during the render: nothing of this run is kept
         record = load(directory)
         number = (record["versions"][-1]["n"] if record["versions"] else 0) + 1
         target = directory / f"v{number}"
@@ -357,7 +446,10 @@ def _plan_and_build(directory: Path, record: dict, brief: str, used: list[str], 
     if pending:
         _progress(directory, "writing", 8 + int(24 * done / count), f"دارم {len(pending)} صحنه را طراحی می‌کنم.", stage="writing", eta=_remaining(len(pending), plan.duration))
 
+    run_id = getattr(_local, "run", None)
+
     def author(n: int):
+        _local.run = run_id
         scene = plan.scenes[n - 1]
         _note(directory, f"scene{n}", f"دارم صحنهٔ {n} را طراحی می‌کنم: «{scene.headline}»")
         started = time.monotonic()
@@ -380,22 +472,28 @@ def _plan_and_build(directory: Path, record: dict, brief: str, used: list[str], 
             return n, mg.fallback_scene(plan, n), True
 
     if pending:
-        with ThreadPoolExecutor(max_workers=_SCENE_WORKERS) as pool:
-            futures = [pool.submit(author, n) for n in pending]
-            for future in as_completed(futures):
-                n, draft, plain = future.result()
-                drafts[n] = draft
-                finished += 1
-                scene = plan.scenes[n - 1]
-                if plain:
-                    scene_notes.append(f"صحنهٔ {n} («{scene.headline}») با طرح ساده جایگزین شد چون طراحی کامل از بررسی رد شد")
-                else:
-                    (scenes_dir / f"s{n}.json").write_text(json.dumps({"fp": fingerprint, "draft": draft.model_dump()}, ensure_ascii=False))
-                _note(directory, f"scene{n}", f"صحنهٔ {n} آماده شد: «{scene.headline}»" + (" (طرح ساده)" if plain else ""), "done")
-                _progress(directory, "writing", 8 + int(24 * (done + finished) / count), f"صحنهٔ {n} از {count} آماده شد.", stage="writing",
-                          eta=_remaining(len(pending) - finished, plan.duration))
+        from concurrent.futures import FIRST_COMPLETED, wait
+        pool = ThreadPoolExecutor(max_workers=_SCENE_WORKERS)
+        try:
+            waiting = {pool.submit(author, n) for n in pending}
+            while waiting:
+                done_now, waiting = wait(waiting, timeout=1.0, return_when=FIRST_COMPLETED)
                 if _cancelled(key):
-                    raise _Cancelled()
+                    raise _Cancelled()                   # a model call in flight cannot be interrupted, but the worker no longer waits for it
+                for future in done_now:
+                    n, draft, plain = future.result()
+                    drafts[n] = draft
+                    finished += 1
+                    scene = plan.scenes[n - 1]
+                    if plain:
+                        scene_notes.append(f"صحنهٔ {n} («{scene.headline}») با طرح ساده جایگزین شد چون طراحی کامل از بررسی رد شد")
+                    else:
+                        (scenes_dir / f"s{n}.json").write_text(json.dumps({"fp": fingerprint, "draft": draft.model_dump()}, ensure_ascii=False))
+                    _note(directory, f"scene{n}", f"صحنهٔ {n} آماده شد: «{scene.headline}»" + (" (طرح ساده)" if plain else ""), "done")
+                    _progress(directory, "writing", 8 + int(24 * (done + finished) / count), f"صحنهٔ {n} از {count} آماده شد.", stage="writing",
+                              eta=_remaining(len(pending) - finished, plan.duration))
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
     build = SimpleNamespace(plan=plan, drafts=drafts, context=context, style=style, fingerprint=fingerprint, scenes_dir=scenes_dir)
     return mg.assemble_scenes(plan, [drafts[n] for n in range(1, count + 1)]), build
 
@@ -570,7 +668,7 @@ def recover_interrupted() -> int:
             record = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
-        if record.get("status") in ACTIVE:
+        if record.get("status") in ACTIVE and time.time() - float(record.get("updated_at") or 0) > 45:       # a worker in another process saves progress every few seconds
             record.update(status="failed", stage="failed", message="ساخت با راه‌اندازی دوبارهٔ سرور قطع شد.", error="interrupted")
             path.write_text(json.dumps(record, ensure_ascii=False))
             count += 1

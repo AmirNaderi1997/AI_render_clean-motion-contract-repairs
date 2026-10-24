@@ -22,3 +22,14 @@ def isolated_chat_store(monkeypatch, tmp_path):
             monkeypatch.setattr(module, "ROOT", tmp_path / "studio")
         except ImportError:
             pass
+
+
+@pytest.fixture(autouse=True)
+def forget_the_message_being_processed():
+    """The orchestrator remembers, per thread, which message it is processing (for Stop); a test must not leak that to the next one."""
+    yield
+    try:
+        from app import studio_orchestrator
+        studio_orchestrator._generation.set(None)
+    except ImportError:
+        pass

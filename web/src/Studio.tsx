@@ -15,7 +15,7 @@ import { ManualQuestion } from "./studio/ManualQuestion";
 import { Thread, LocalFileInfo } from "./studio/Thread";
 import { Workspace, WorkspaceTab, advancedEditorUrl } from "./studio/Workspace";
 import { currentVersion, planPhase } from "./studio/plan";
-import { PendingMessage, activeStep, buildTimeline, isProcessing, renderView, thinkingLabel } from "./studio/model";
+import { PendingMessage, activeStep, buildTimeline, isProcessing, renderView, serverBusy, thinkingLabel } from "./studio/model";
 import { suggestions, templatePrompts } from "./templateData";
 
 type MobileView = "chat" | WorkspaceTab;
@@ -198,7 +198,8 @@ export default function Studio() {
   const motionActive = useMotionActive(conversation?.state?.motion?.motion_id, events);
   const discoveryActive = useDiscoveryActive(conversation?.state?.discovery?.analysis_id, events);
   const projectRunning = projects.some(project => project.status === "running");
-  const processing = isProcessing({ sending, messages, events, project: current, now }) || motionActive || discoveryActive || projectRunning;
+  const busyOnServer = serverBusy(events, conversation?.busy);
+  const processing = isProcessing({ sending, messages, events, project: current, now }) || motionActive || discoveryActive || projectRunning || busyOnServer === true;
   const items = React.useMemo(() => buildTimeline({ messages, events, projects, pending, processing, discoveryId: conversation?.state?.discovery?.analysis_id, motionId: conversation?.state?.motion?.motion_id }), [messages, events, projects, pending, processing, conversation?.state?.discovery?.analysis_id, conversation?.state?.motion?.motion_id]);
   const step = activeStep(items);
   // A live render card is its own progress indicator; otherwise show what the assistant is doing.

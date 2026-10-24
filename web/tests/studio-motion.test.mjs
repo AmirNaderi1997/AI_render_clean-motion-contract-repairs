@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildTimeline } from "../src/studio/model.ts";
+import { buildTimeline, serverBusy } from "../src/studio/model.ts";
 
 const base = { messages: [], events: [], projects: [], pending: null, processing: false };
 const event = (type, data, seq = 1) => ({ seq, type, data, created_at: "2026-10-24T10:00:00Z" });
@@ -51,4 +51,12 @@ test("a streamed narration keeps the pictures it talks about", () => {
   const message = items.find(i => i.kind === "message");
   assert.equal(message.content, "صفحه را خواندم؛ این تصاویرش است");
   assert.deepEqual(message.attachments, ["img1", "img2"]);
+});
+
+test("the server's own word about working wins over guessing from events, and Stop settles it", () => {
+  assert.equal(serverBusy([], undefined), undefined);
+  assert.equal(serverBusy([], true), true);                                     // the conversation payload says it is working
+  assert.equal(serverBusy([event("work.state", { busy: true }, 1)], false), true);
+  assert.equal(serverBusy([event("work.state", { busy: true }, 1), event("work.state", { busy: false }, 2)], true), false);
+  assert.equal(serverBusy([event("work.state", { busy: true }, 1), event("message.stopped", {}, 2)], true), false);
 });

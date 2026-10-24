@@ -14,6 +14,7 @@ from typing import Any
 from app import brand_profile, creative_plan
 from app import jobs as jobstore
 from app.studio_store import repo, run
+from app import studio_flags
 from app.studio_tools import execute, idempotency_key
 from brain.lm_gateway import conversation_scope
 
@@ -130,7 +131,6 @@ def _provider() -> str:
     return "arvan_image"
 
 
-_GENERATION: dict[str, int] = {}
 _generation = __import__("contextvars").ContextVar("studio_generation", default=None)
 
 
@@ -139,16 +139,33 @@ class _Stopped(Exception):
 
 
 def _checkpoint(conversation_id: str) -> None:
-    mine = _generation.get()          # (conversation, generation) of the message being processed in this thread
-    if mine and mine[0] == conversation_id and _GENERATION.get(conversation_id, 0) != mine[1]:
+    """Raise when Stop was pressed (in ANY process: the number lives in a file next to the conversation) after this message started."""
+    mine = _generation.get()          # (conversation, user, generation) of the message being processed in this thread
+    if mine and mine[0] == conversation_id and studio_flags.generation(mine[1], conversation_id) != mine[2]:
         raise _Stopped()
+
+
+def conversation_busy(conversation: dict, user_key: str) -> bool:
+    """Is anything working for this conversation right now, in any process: a message being processed, a narration, a motion graphic?"""
+    cid = conversation["id"]
+    if studio_flags.busy(user_key, cid):
+        return True
+    pointer = (conversation.get("state") or {}).get("motion")
+    if pointer:
+        from app import motion_graphic
+        try:
+            return motion_graphic.load(motion_graphic.locate(pointer["motion_id"], user_key))["status"] in motion_graphic.ACTIVE
+        except (KeyError, OSError, ValueError):
+            return False
+    return False
 
 
 def request_stop(conversation_id: str, user_key: str) -> dict:
     """Stop everything in flight for this chat: the message being understood, a running project, a motion graphic, a discovery run."""
-    _GENERATION[conversation_id] = _GENERATION.get(conversation_id, 0) + 1
+    studio_flags.bump_generation(user_key, conversation_id)
     state = (run(repo.get_conversation(conversation_id, user_key)).get("state") or {})
     stopped: list[str] = ["message"]
+    stopped_ids: dict = {}
     pointer = state.get("motion")
     if pointer:
         from app import motion_graphic
@@ -157,16 +174,19 @@ def request_stop(conversation_id: str, user_key: str) -> dict:
             if motion_graphic.load(directory)["status"] in motion_graphic.ACTIVE:
                 motion_graphic.stop(directory)
                 stopped.append("motion")
+                stopped_ids["motion_id"] = pointer["motion_id"]
         except (KeyError, OSError, ValueError):
             pass
     pointer = state.get("discovery")
     if pointer:
         from app import long_video
         try:
-            long_video.locate(pointer["analysis_id"], user_key)
-            if long_video.is_running(pointer["analysis_id"]):
-                long_video.stop(pointer["analysis_id"])
+            directory = long_video.locate(pointer["analysis_id"], user_key)
+            analysis = long_video.load(directory)
+            if long_video.is_alive(analysis):
+                long_video.stop(pointer["analysis_id"])               # a flag file: the worker may be another process
                 stopped.append("discovery")
+                stopped_ids["analysis_id"] = pointer["analysis_id"]
         except (KeyError, OSError, ValueError):
             pass
     project_id = state.get("current_project_id")
@@ -177,7 +197,7 @@ def request_stop(conversation_id: str, user_key: str) -> dict:
                 stopped.append("project")
         except Exception:
             log.warning("stop: the running project could not be canceled", exc_info=True)
-    _emit(conversation_id, "message.stopped", stopped=stopped)
+    _emit(conversation_id, "message.stopped", stopped=stopped, **stopped_ids)       # the ids make the cards and the composer re-read their state now
     return {"stopped": stopped}
 
 
@@ -479,7 +499,18 @@ def _answer_manual_checkpoint(cid, user, project, text, question_id):
 @conversation_scope
 def process_message(conversation_id: str, user_key: str, message_id: int | str,
                     text: str, attachment_ids: list[str], manual_question_id: str | None = None) -> None:
-    _generation.set((conversation_id, _GENERATION.get(conversation_id, 0)))
+    """Every message runs under a "working" mark visible to every process, and stops at its next checkpoint when Stop was pressed."""
+    _generation.set((conversation_id, user_key, studio_flags.generation(user_key, conversation_id)))
+    _emit(conversation_id, "work.state", busy=True)
+    try:
+        with studio_flags.working(user_key, conversation_id):
+            _process_message(conversation_id, user_key, message_id, text, attachment_ids, manual_question_id)
+    finally:
+        _emit(conversation_id, "work.state", busy=conversation_busy(run(repo.get_conversation(conversation_id, user_key)), user_key))
+
+
+def _process_message(conversation_id: str, user_key: str, message_id: int | str,
+                     text: str, attachment_ids: list[str], manual_question_id: str | None = None) -> None:
     try:
         _emit(conversation_id, "message.started", message_id=message_id)
         conversation = run(repo.get_conversation(conversation_id, user_key))
