@@ -36,6 +36,15 @@ def test_the_video_item_is_picked_and_pictures_audio_and_errors_are_not():
     assert relay._pick_video({"error": True, "code": "UPSTREAM_REJECTED", "message": "private"}) is None
     assert relay._pick_video({"ok": True, "items": [{"type": "video", "url": "http://insecure.example/v.mp4"}]}) is None
     assert relay._pick_video({"ok": True, "items": []}) is None and relay._pick_video("nonsense") is None
+    # answers that do not label the item exactly "video" are still understood when the link is clearly a video
+    assert relay._pick_video({"items": [{"type": "reel", "url": "https://cdn.example/r"}]}) == "https://cdn.example/r"
+    assert relay._pick_video({"items": [{"url": "https://cdn.example/clip.mp4?sig=1"}]}) == "https://cdn.example/clip.mp4?sig=1"
+    assert relay._pick_video({"items": [{"url": "https://cdn.example/clip"}]}) is None             # no type and no video extension: not guessed
+
+
+def test_the_answer_shape_is_reported_without_any_link():
+    shape = relay._shape({"ok": True, "items": [{"type": "image", "url": "https://secret.example/x?token=abc"}], "message": "m"})
+    assert "image" in shape and "secret.example" not in shape and "token" not in shape
 
 
 def test_the_service_id_follows_the_kind_of_link():

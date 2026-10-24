@@ -67,14 +67,30 @@ def _service(url: str) -> str:
 
 
 def _pick_video(payload: dict) -> str | None:
-    """The first video link in a GetInSaver answer (``items[].url`` with ``type`` video); a picture or audio item is never taken for it."""
-    if not isinstance(payload, dict) or payload.get("ok") is not True:
+    """The first video link in a GetInSaver answer (``items[].url``). A picture or audio item is never taken for the video; an item without a
+    clear type counts only when its link looks like a video file."""
+    if not isinstance(payload, dict) or payload.get("error") is True:
         return None
     for item in payload.get("items") or []:
         link = item.get("url") if isinstance(item, dict) else None
-        if isinstance(link, str) and link.startswith("https://") and str(item.get("type") or "").lower() == "video":
+        if not (isinstance(link, str) and link.startswith("https://")):
+            continue
+        kind = str(item.get("type") or "").lower()
+        path = link.lower().split("?")[0]
+        if kind in {"image", "photo", "audio", "music"} or path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".mp3", ".m4a")):
+            continue
+        if "video" in kind or kind in {"reel", "mp4", "clip"} or path.endswith((".mp4", ".mov", ".m4v", ".webm")):
             return link
     return None
+
+
+def _shape(payload) -> str:
+    """What the API answered, without any link or token: enough to see why no video was found."""
+    if not isinstance(payload, dict):
+        return type(payload).__name__
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    kinds = [str((i or {}).get("type") if isinstance(i, dict) else type(i).__name__) for i in items][:5]
+    return f"ok={payload.get('ok')} code={payload.get('code')} items={kinds} message={str(payload.get('message') or '')[:80]}"
 
 
 def _getinsaver(url: str) -> dict:
@@ -100,7 +116,7 @@ def _api_download(url: str, work: Path) -> tuple[Path | None, str]:
         media = _pick_video(payload)
         if not media:
             code = str(payload.get("code") or "")
-            return None, GETINSAVER_REASONS.get(code, code or "no video in the answer")
+            return None, GETINSAVER_REASONS.get(code) or (f"{code}: {_shape(payload)}" if code else f"no video in the answer ({_shape(payload)})")
         target = work / "video.mp4"
         size = 0
         with urllib.request.urlopen(urllib.request.Request(media, headers={"user-agent": "Mozilla/5.0"}), timeout=60) as response, open(target, "wb") as out:
