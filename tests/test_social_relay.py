@@ -113,53 +113,70 @@ def _answer_and_file(monkeypatch, payload=ANSWER, body=b"x" * 5000):
     monkeypatch.setattr(relay.urllib.request, "urlopen", lambda request, timeout=0: Response())
 
 
-def test_an_instagram_reel_is_downloaded_through_the_api_and_streamed(env, monkeypatch):
+class YDL:
+    """A fake yt-dlp whose behaviour each test chooses."""
+    behaviour = "ok"
+    seen: list = []
+
+    def __init__(self, options): self.options = options
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+    def extract_info(self, url, download=True):
+        YDL.seen.append((url, self.options.get("cookiefile")))
+        if YDL.behaviour == "fail":
+            raise RuntimeError("login required")
+        (Path(self.options["outtmpl"]).parent / "video.mp4").write_bytes(b"y" * 3000)
+        return {"title": "t", "duration": 9, "extractor_key": "Instagram"}
+
+
+@pytest.fixture
+def ytdlp(monkeypatch):
+    YDL.behaviour, YDL.seen = "ok", []
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=YDL, utils=types.SimpleNamespace(match_filter_func=lambda s: None),
+                                                                 version=types.SimpleNamespace(__version__="9")))
+    return YDL
+
+
+def test_yt_dlp_goes_first_with_the_cookies_and_the_api_is_not_even_called(env, monkeypatch, ytdlp):
+    import base64
+    monkeypatch.setenv("YTDLP_COOKIES_B64", base64.b64encode(b"# Netscape HTTP Cookie File\n").decode())
+    monkeypatch.setenv("GETINSAVER_API_KEY", KEY)
+    monkeypatch.setattr(relay, "_getinsaver", lambda url: pytest.fail("the API is only the fallback"))
+    response = env.post("/api/index", json={"url": REEL}, headers=HEADERS)
+    assert response.status_code == 200 and response.headers["x-source-extractor"] == "Instagram" and len(response.content) == 3000
+    assert ytdlp.seen and ytdlp.seen[0][1] is not None                       # the cookie file was handed to yt-dlp
+
+
+def test_when_yt_dlp_fails_an_instagram_link_falls_back_to_getinsaver(env, monkeypatch, ytdlp):
+    ytdlp.behaviour = "fail"
     _answer_and_file(monkeypatch)
-    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=lambda o: pytest.fail("yt-dlp must not run when the API worked"), utils=None))
     response = env.post("/api/index", json={"url": REEL}, headers=HEADERS)
     assert response.status_code == 200 and response.headers["x-source-extractor"] == "getinsaver" and len(response.content) == 5000
 
 
-def test_api_failures_fall_back_to_yt_dlp_and_the_reason_is_reported(env, monkeypatch):
+def test_other_sites_never_use_the_api_and_the_error_names_both_attempts_for_instagram(env, monkeypatch, ytdlp):
+    ytdlp.behaviour = "fail"
     monkeypatch.setenv("GETINSAVER_API_KEY", KEY)
-    monkeypatch.setattr(relay, "_getinsaver", lambda url: {"error": True, "code": "UPSTREAM_REJECTED", "message": "login only"})
-
-    class YDL:
-        def __init__(self, options): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def extract_info(self, url, download=True): raise RuntimeError("login required")
-
-    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=YDL, utils=types.SimpleNamespace(match_filter_func=lambda s: None)))
-    response = env.post("/api/index", json={"url": REEL}, headers=HEADERS)
-    assert response.status_code == 502 and "private, deleted or login-only content" in response.json()["message"]
+    calls = []
+    monkeypatch.setattr(relay, "_getinsaver", lambda url: calls.append(url) or {"error": True, "code": "UPSTREAM_REJECTED"})
+    tiktok = env.post("/api/index", json={"url": "https://www.tiktok.com/@a/video/1"}, headers=HEADERS)
+    assert tiktok.status_code == 502 and calls == [] and "[yt-dlp] login required" in tiktok.json()["message"]
+    reel = env.post("/api/index", json={"url": REEL}, headers=HEADERS)
+    message = reel.json()["message"]
+    assert reel.status_code == 502 and "[yt-dlp] login required" in message and "[downloader api] private, deleted or login-only content" in message
 
 
-def test_when_the_api_has_nothing_yt_dlp_can_still_deliver(env, monkeypatch):
-    monkeypatch.setenv("GETINSAVER_API_KEY", KEY)
-    monkeypatch.setattr(relay, "_getinsaver", lambda url: {"error": True, "code": "INSUFFICIENT_CREDITS"})
-
-    class YDL:
-        def __init__(self, options): self.options = options
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def extract_info(self, url, download=True):
-            (Path(self.options["outtmpl"]).parent / "video.mp4").write_bytes(b"y" * 3000)
-            return {"title": "t", "duration": 9, "extractor_key": "Instagram"}
-
-    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=YDL, utils=types.SimpleNamespace(match_filter_func=lambda s: None)))
-    response = env.post("/api/index", json={"url": REEL}, headers=HEADERS)
-    assert response.status_code == 200 and response.headers["x-source-extractor"] == "Instagram" and len(response.content) == 3000
+def test_a_broken_cookie_variable_is_reported_not_crashed_on(env, monkeypatch, ytdlp):
+    monkeypatch.setenv("YTDLP_COOKIES_B64", "***not base64***")
+    response = env.post("/api/index", json={"url": "https://www.youtube.com/watch?v=x"}, headers=HEADERS)
+    assert response.status_code == 502 and "YTDLP_COOKIES_B64" in response.json()["message"]
 
 
-def test_oversized_files_are_refused_and_other_sites_never_touch_the_api(env, monkeypatch, tmp_path):
+def test_oversized_api_files_are_refused(monkeypatch, tmp_path):
     _answer_and_file(monkeypatch)
     monkeypatch.setattr(relay, "MAX_BYTES", 1000)
     assert relay._api_download(REEL, tmp_path) == (None, "file larger than max-filesize")
-    calls = []
-    monkeypatch.setattr(relay, "_getinsaver", lambda url: calls.append(url) or {})
-    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=lambda o: (_ for _ in ()).throw(RuntimeError("no")), utils=types.SimpleNamespace(match_filter_func=lambda s: None)))
-    assert env.post("/api/index", json={"url": "https://www.tiktok.com/@a/video/1"}, headers=HEADERS).status_code == 502 and calls == []
 
 
 def test_the_secret_is_still_required_and_the_health_page_never_shows_the_key(env, monkeypatch):
