@@ -1,13 +1,13 @@
 """Social-media reference fetcher for the editor (runs on Vercel, outside the network that blocks these sites).
 
 POST /api/index  {"url": "https://www.instagram.com/reel/..."}   header x-relay-secret: <RELAY_SECRET>
-  Instagram links (posts, reels, stories, highlights) go through the GetInSaver API when GETINSAVER_API_KEY is set: Instagram asks datacenter
-  IPs to log in, so yt-dlp alone needs cookies that expire. yt-dlp stays as the fallback and handles every other site.
+  yt-dlp always goes first, with the logged-in cookies from YTDLP_COOKIES_B64 (Instagram and YouTube refuse datacenter IPs without a login).
+  For Instagram links (posts, reels, stories, highlights) the GetInSaver API is the fallback when GETINSAVER_API_KEY is set.
   -> the video file itself (progressive mp4, <= 80 MB, <= 180 s), streamed; metadata in x-* response headers.
 GET  /api/index -> {"ok": true, "yt_dlp": "<version>"}
 
 The secret is required, only a fixed list of hosts is allowed, and nothing is stored: the file lives in /tmp for the length of
-one request. Optional environment: YTDLP_COOKIES_B64 (base64 Netscape cookies for networks that need a login), YTDLP_PROXY and, for Instagram,
+one request. Optional environment: YTDLP_COOKIES_B64 (base64 Netscape cookies for Instagram/YouTube), YTDLP_PROXY and, for the Instagram fallback,
 GETINSAVER_API_KEY (the key stays on Vercel and never reaches the editor).
 """
 from __future__ import annotations
@@ -82,6 +82,58 @@ def _shrink(path: Path) -> Path:
     except (subprocess.SubprocessError, OSError):
         return path
     return out if out.is_file() and 0 < out.stat().st_size < path.stat().st_size else path
+
+
+def _node() -> str | None:
+    """A Node.js binary for yt-dlp's YouTube challenge solver (YouTube returns no video formats without a JS runtime). Vercel's Python runtime has
+    none, so one ships in the ``nodejs-wheel-binaries`` package; it is copied to /tmp and made executable when the bundle is read-only."""
+    found = shutil.which("node")
+    if found:
+        return found
+    try:
+        import nodejs_wheel
+        root = Path(nodejs_wheel.__file__).resolve().parent
+        candidate = next((c for c in [root / "bin" / "node", root / "node", *root.rglob("node")] if c.is_file()), None)
+        if candidate is None:
+            return None
+        if os.access(candidate, os.X_OK):
+            return str(candidate)
+        target = Path("/tmp/node-runtime")
+        if not target.is_file():
+            shutil.copy2(candidate, target)
+            target.chmod(0o755)
+        return str(target)
+    except Exception:
+        return None
+
+
+def _ytdlp_download(url: str, work: Path) -> tuple[Path | None, dict, str]:
+    """yt-dlp with the cookies from YTDLP_COOKIES_B64 (Instagram and YouTube need a logged-in session from a datacenter IP). (file, info, "") or (None, {}, reason)."""
+    import yt_dlp
+    options = {"outtmpl": str(work / "video.%(ext)s"), "quiet": True, "no_warnings": True, "noplaylist": True, "max_filesize": MAX_BYTES,
+               "format": "best[ext=mp4][height<=720]/best[height<=720]/best", "socket_timeout": 25, "retries": 2,
+               "match_filter": yt_dlp.utils.match_filter_func(f"duration <=? {MAX_SECONDS}"), "cachedir": False}
+    if os.environ.get("YTDLP_PROXY"):
+        options["proxy"] = os.environ["YTDLP_PROXY"]
+    node = _node()
+    if node:
+        options["js_runtimes"] = {"node": {"path": node}}
+    cookies = os.environ.get("YTDLP_COOKIES_B64", "")
+    if cookies:
+        try:
+            (work / "cookies.txt").write_bytes(base64.b64decode(cookies))
+            options["cookiefile"] = str(work / "cookies.txt")
+        except ValueError:
+            return None, {}, "YTDLP_COOKIES_B64 is not valid base64"
+    try:
+        with yt_dlp.YoutubeDL(options) as client:
+            info = client.extract_info(url, download=True) or {}
+    except Exception as exc:
+        return None, {}, str(exc)[:400]
+    files = sorted(p for p in work.glob("video.*") if p.suffix.lower() in {".mp4", ".webm", ".mov", ".mkv", ".m4v"})
+    if not files:
+        return None, {}, "nothing was downloaded (too long, too large, or not a video)"
+    return files[0], info, ""
 
 
 def _instagram(url: str) -> bool:
@@ -169,7 +221,8 @@ def _api_download(url: str, work: Path) -> tuple[Path | None, str]:
 @app.get("/")
 def health():
     import yt_dlp
-    return {"ok": True, "yt_dlp": yt_dlp.version.__version__, "getinsaver": bool(os.environ.get("GETINSAVER_API_KEY"))}
+    return {"ok": True, "yt_dlp": yt_dlp.version.__version__, "getinsaver": bool(os.environ.get("GETINSAVER_API_KEY")), "js_runtime": bool(_node()),
+            "cookies": bool(os.environ.get("YTDLP_COOKIES_B64"))}
 
 
 @app.post("/api/index")
@@ -181,33 +234,18 @@ def fetch(body: Fetch, x_relay_secret: str | None = Header(default=None)):
     if not _allowed(body.url):
         raise HTTPException(403, "host_not_allowed")
     work = Path(tempfile.mkdtemp(prefix="relay-", dir="/tmp"))
-    info: dict = {}
-    path, api_reason = _api_download(body.url, work) if _instagram(body.url) else (None, "")
-    if path is not None:
-        info = {"extractor_key": "getinsaver"}
-    else:
-        import yt_dlp
-        options = {"outtmpl": str(work / "video.%(ext)s"), "quiet": True, "no_warnings": True, "noplaylist": True, "max_filesize": MAX_BYTES,
-                   "format": "best[ext=mp4][height<=720]/best[height<=720]/best", "socket_timeout": 25, "retries": 2,
-                   "match_filter": yt_dlp.utils.match_filter_func(f"duration <=? {MAX_SECONDS}"), "cachedir": False}
-        if os.environ.get("YTDLP_PROXY"):
-            options["proxy"] = os.environ["YTDLP_PROXY"]
-        cookies = os.environ.get("YTDLP_COOKIES_B64", "")
-        if cookies:
-            (work / "cookies.txt").write_bytes(base64.b64decode(cookies))
-            options["cookiefile"] = str(work / "cookies.txt")
-        try:
-            with yt_dlp.YoutubeDL(options) as client:
-                info = client.extract_info(body.url, download=True) or {}
-        except Exception as exc:
-            shutil.rmtree(work, ignore_errors=True)
-            message = (f"[downloader api] {api_reason}; " if api_reason else "") + str(exc)
-            return JSONResponse({"error": "download_failed", "message": message[:500]}, status_code=502)
-        files = sorted(p for p in work.glob("video.*") if p.suffix.lower() in {".mp4", ".webm", ".mov", ".mkv", ".m4v"})
-        if not files:
-            shutil.rmtree(work, ignore_errors=True)
-            return JSONResponse({"error": "no_file", "message": "nothing was downloaded (too long, too large, or not a video)"}, status_code=502)
-        path = files[0]
+    # yt-dlp (with the logged-in cookies on Vercel) is always tried first; for Instagram the GetInSaver API is the fallback.
+    path, info, ytdlp_error = _ytdlp_download(body.url, work)
+    api_reason = ""
+    if path is None and _instagram(body.url):
+        path, api_reason = _api_download(body.url, work)
+        if path is not None:
+            info = {"extractor_key": "getinsaver"}
+    if path is None:
+        shutil.rmtree(work, ignore_errors=True)
+        message = f"[yt-dlp] {ytdlp_error}" + (f"; [downloader api] {api_reason}" if api_reason else "")
+        code = "no_file" if ytdlp_error.startswith("nothing was downloaded") else "download_failed"
+        return JSONResponse({"error": code, "message": message[:600]}, status_code=502)
     original = path.stat().st_size
     path = _shrink(path)
     size = path.stat().st_size
