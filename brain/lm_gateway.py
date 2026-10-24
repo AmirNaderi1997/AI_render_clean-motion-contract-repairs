@@ -323,6 +323,11 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
             return direct
         if error and str(error) == 'Model returned invalid structured output':
             error.retryable = False
+        failed_direct = [a for a in attempts if str(a.get("model", "")).startswith("direct:") and a.get("http_status") != 200]
+        if error and failed_direct:
+            # Say what the direct fallback answered too: "LM API rate limited" alone hides that the backup key had no credit.
+            last = failed_direct[-1]
+            error = GatewayError(f"{error} | direct fallback {last['model']} also failed: {str(last.get('error', ''))[:160]}", error.status, error.retryable)
         raise error or GatewayError("No enabled, capability-verified model for this route; configure AI Models & Logs", 422)
     except Exception as exc:
         _audit(_record(route, endpoint, candidates[0] if candidates else "", started, attempts,

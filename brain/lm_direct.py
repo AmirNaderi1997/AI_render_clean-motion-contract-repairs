@@ -340,8 +340,11 @@ REJECTED_COOLDOWN_S = 600
 
 def _note_failure(provider: dict, exc: "DirectError") -> None:
     """A key the provider rejected (401/403) will not start working by itself: do not spend a round trip on it for a while."""
-    if getattr(exc, "status", None) in (401, 403):
+    status = getattr(exc, "status", None)
+    if status in (401, 403):
         _REJECTED[provider["id"]] = time.monotonic() + REJECTED_COOLDOWN_S
+    elif status == 402:
+        _REJECTED[provider["id"]] = time.monotonic() + 120          # no credit left on this key: do not retry it on every call
 
 
 def usable(providers: list[dict] | None = None, *, google_first: bool = False) -> list[dict]:
