@@ -2,13 +2,9 @@ import React from "react";
 import { api, MotionGraphic, StudioEvent } from "../api";
 import { AuthenticatedMedia } from "../AuthenticatedMedia";
 import { friendlyError } from "../ui";
-import { etaText } from "./motionModel";
+import { etaText, motionSteps } from "./motionModel";
+import { ActivityBlock } from "./Activity";
 
-const STEPS: { key: string; label: string }[] = [
-  { key: "writing", label: "طراحی صحنه‌ها و متن" },
-  { key: "checking", label: "بررسی در مرورگر" },
-  { key: "rendering", label: "رندر ویدیو" },
-];
 const FORMAT_LABEL = { vertical: "عمودی ۹:۱۶", horizontal: "افقی ۱۶:۹", square: "مربعی ۱:۱" } as const;
 const secondsText = (n: number) => `${new Intl.NumberFormat("fa-IR").format(Math.round(n * 10) / 10)} ثانیه`;
 
@@ -52,25 +48,15 @@ export function MotionGraphicCard({ motionId, events }: { motionId: string; even
 
   const shown = motion.versions.find(v => v.n === (version ?? motion.current)) ?? motion.versions[motion.versions.length - 1];
   const act = async (task: () => Promise<unknown>) => { setBusy(true); try { await task(); await refresh(); } catch (e) { setError(friendlyError(e, "update the motion graphic")); } finally { setBusy(false); } };
-  const stepIndex = STEPS.findIndex(step => step.key === motion.status);
   const ratio = shown ? `${shown.width} / ${shown.height}` : "9 / 16";
 
   return <section className="mg assistant-body" dir="rtl" aria-label="موشن‌گرافیک">
-    {motion.active || motion.status === "failed" || motion.status === "needs_input" ? <div className="mg-progress">
-      <ol className="mg-steps" aria-label="مراحل ساخت">
-        {STEPS.map((step, index) => <li key={step.key} data-state={motion.status === "failed" ? "idle" : index < stepIndex ? "done" : index === stepIndex ? "active" : "idle"}><i/><span className={index === stepIndex && motion.status !== "failed" ? "act-shimmer" : undefined}>{step.label}</span></li>)}
-      </ol>
+    {motion.active || motion.status === "failed" || motion.status === "needs_input" || (!shown && motion.log?.length) ? <div className="mg-progress">
+      <ActivityBlock steps={motionSteps(motion, now * 1000)} live={motion.active}/>
       {motion.active && motion.eta_s !== null && motion.eta_at !== null ? <p className="mg-eta" aria-live="off">{etaText(motion.eta_at + motion.eta_s, now)}</p> : null}
-      {motion.active ? <div className="meter" role="progressbar" aria-valuenow={motion.progress} aria-valuemin={0} aria-valuemax={100} style={{ ["--value" as string]: `${motion.progress}%` }}><i/></div> : null}
-      {motion.log?.length ? <ul className="mg-log" aria-live="polite" aria-label="آنچه همین الان انجام می‌شود">
-        {motion.log.map(line => <li key={line.key} data-state={line.state}><i aria-hidden/><span className={line.state === "active" ? "bidi act-shimmer" : "bidi"} dir="auto">{line.text}</span></li>)}
-      </ul> : motion.message ? <p className="mg-message" aria-live="polite">{motion.message}</p> : null}
       {motion.status === "needs_input" ? <div className="notice" data-tone="info">منتظر پاسخ شما هستم؛ جواب را همین‌جا در چت بنویسید.</div> : null}
       {motion.status === "failed" ? <div className="notice" data-tone="error" role="alert">{motion.error === "stopped" ? "ساخت متوقف شد." : motion.error || "ساخت کامل نشد."}</div> : null}
-      <div className="mg-actions">
-        {motion.active ? <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => void act(() => api.motionStop(motionId))}>توقف</button> : null}
-        {motion.status === "failed" ? <button className="btn btn-sm" disabled={busy} onClick={() => void act(() => api.motionRetry(motionId))}>تلاش دوباره</button> : null}
-      </div>
+      {motion.status === "failed" ? <div className="mg-actions"><button className="btn btn-sm" disabled={busy} onClick={() => void act(() => api.motionRetry(motionId))}>تلاش دوباره</button></div> : null}
     </div> : null}
 
     {shown ? <div className="mg-result">

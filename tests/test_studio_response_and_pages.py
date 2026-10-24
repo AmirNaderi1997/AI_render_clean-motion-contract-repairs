@@ -13,7 +13,7 @@ def test_model_response_streams_before_persistence_and_uses_context(monkeypatch)
     def stream(route,messages,**kwargs):
         assert route=='conversation_response'
         assert messages[-2]['content']=='موشن بساز'
-        assert messages[-1]['content']=='https://example.com/course'
+        assert messages[-1]['content'].startswith('https://example.com/course')
         assert kwargs['tokens']==450
         yield 'لینک '
         assert events[-1][0]=='assistant.response.delta' and not saved

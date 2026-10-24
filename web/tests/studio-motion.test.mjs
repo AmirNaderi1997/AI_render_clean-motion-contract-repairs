@@ -32,7 +32,7 @@ test("the motion graphic stays at the end of the conversation however many messa
   assert.deepEqual(items.filter(i => i.kind === "message").map(i => i.content), ["بساز", "طرح", "رنگ را عوض کن", "اعمال می‌کنم"]);
 });
 
-import { etaText } from "../src/studio/motionModel.ts";
+import { etaText, motionSteps } from "../src/studio/motionModel.ts";
 
 test("remaining time reads naturally and counts down to the deadline", () => {
   assert.equal(etaText(null, 100), "");
@@ -59,4 +59,17 @@ test("the server's own word about working wins over guessing from events, and St
   assert.equal(serverBusy([event("work.state", { busy: true }, 1)], false), true);
   assert.equal(serverBusy([event("work.state", { busy: true }, 1), event("work.state", { busy: false }, 2)], true), false);
   assert.equal(serverBusy([event("work.state", { busy: true }, 1), event("message.stopped", {}, 2)], true), false);
+});
+
+test("the motion graphic's log becomes the same activity steps every other chat shows", () => {
+  const log = [{ key: "plan", text: "طرح آماده شد: 4 صحنه", state: "done", at: 100 }, { key: "scene1", text: "دارم صحنهٔ ۱ را طراحی می‌کنم", state: "active", at: 110 }];
+  const steps = motionSteps({ log, active: true, status: "writing", progress: 20, message: "" }, 130_000);
+  assert.deepEqual(steps.map(s => [s.key, s.status]), [["plan", "done"], ["scene1", "active"]]);
+  assert.equal(steps[1].progress, 20);
+  assert.equal(steps[0].endedAt, 110_000);                               // a finished step ends where the next began
+  assert.equal(steps[1].endedAt, 130_000);                               // the live one is still running
+  assert.equal(steps.every(s => s.events.length === 0 && s.notes.length === 0 && !s.tool), true);     // no fake details chevrons
+  const failed = motionSteps({ log, active: false, status: "failed", progress: 0, message: "" }, 130_000);
+  assert.equal(failed[1].status, "failed");                              // what was running when it stopped is shown as stopped, not as working
+  assert.deepEqual(motionSteps({ log: [], active: true, status: "queued", progress: 0, message: "صف" }, 5).map(s => [s.label, s.status]), [["صف", "active"]]);
 });

@@ -205,9 +205,18 @@ def _assistant(conversation_id: str, user_key: str, content: str, attachments: l
     run(repo.add_message(conversation_id, user_key, "assistant", content, attachments or None))
 
 
+def _is_deliverable(text: str) -> bool:
+    """Has the opening reply turned into the work itself (a heading, a code fence, a JSON object, a list) rather than a sentence?"""
+    head = text.lstrip()
+    return bool(re.match(r"(#{1,6}\s|```|[{\[]|[-•*]\s|\d+[.)]\s|---)", head)) or bool(re.search(r"\n\s*(#{1,6}\s|```|[-•]\s)", text))
+
+
 def _opening_cut(text: str, limit: int = 420) -> str:
-    """The opening reply ends at a sentence boundary within ``limit`` characters."""
-    text = text.strip()
+    """The opening reply is two plain sentences: markup the model added (headings, lists, bold, emoji) is stripped, and it ends at a sentence boundary
+    within ``limit`` characters. A reply that was only markup (a deliverable the model started writing) becomes empty, and is not posted."""
+    lines = [re.sub(r"[*_`]+", "", line).strip() for line in text.splitlines()]
+    kept = [line for line in lines if line and not re.match(r"^(#{1,6}\s|[-•*]\s|\d+[.)]\s|---+$|>)", line)]
+    text = re.sub(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F]", "", " ".join(kept)).strip()
     if len(text) <= limit:
         return text
     cut = text[:limit]
@@ -220,6 +229,9 @@ def _stream_response(cid: str, user: str, message_id, conversation: dict, attach
     from brain.lm_gateway import configured, stream_chat
     if not configured(): return False
     history = [{"role": m['role'], "content": m['content'][:3000]} for m in conversation.get('messages', [])[-8:]]
+    if history and history[-1]["role"] == "user":
+        # The last instruction is the one models obey: the opening is plain sentences, never the work itself.
+        history[-1] = {**history[-1], "content": history[-1]["content"] + "\n\n(Reply in at most two plain sentences: no headings, lists, bold text or emoji, and do not write the requested content itself.)"}
     messages = [{"role":"system","content":
         'You are EditorGPT, a helpful conversational video editor and motion-graphics studio. This chat CAN make: motion graphics (animated text, shapes, '
         'icons and charts rendered to MP4 from a description or from a linked page, with later changes), Persian-localized and dubbed videos, talking-head reels, '
@@ -234,12 +246,15 @@ def _stream_response(cid: str, user: str, message_id, conversation: dict, attach
         'No guarantees of success, no technical settings questions. Attachments currently supplied: '+
         json.dumps([{"kind":a['kind'],"filename":a.get('filename','')} for a in attachments],ensure_ascii=False)}]+history
     response_id=f'response:{message_id}'
-    text=''; flushed='';tick=0
+    text=''; flushed='';tick=0; discarded=False
     _emit(cid,'assistant.response.started',response_id=response_id,request_message_id=message_id)
     try:
         for chunk in stream_chat('conversation_response',messages,tokens=450,timeout_seconds=20):
             _checkpoint(cid)
             text+=chunk
+            if _is_deliverable(text):
+                text = ''; discarded = True
+                break                                  # the model started writing the post/plan/JSON itself: discard it, the studio produces it in the next steps
             if len(text) > 420:
                 break                                  # an opening reply is two short sentences: never let it become the deliverable
             if not flushed or time.monotonic()-tick>.12:
@@ -255,7 +270,7 @@ def _stream_response(cid: str, user: str, message_id, conversation: dict, attach
         # operation may continue independently when conversational streaming fails.
         saved=run(repo.add_message(cid,user,'assistant',text)) if text.strip() else None
         _emit(cid,'assistant.response.failed',response_id=response_id,text=text,
-              message_id=saved['id'] if saved else None,error='پاسخ اولیهٔ مدل کامل نشد؛ وضعیت واقعی پردازش را در مراحل ببینید.')
+              message_id=saved['id'] if saved else None,error='' if discarded else 'پاسخ اولیهٔ مدل کامل نشد؛ وضعیت واقعی پردازش را در مراحل ببینید.')
         log.warning('Initial assistant stream failed: %s',type(exc).__name__)
         return bool(text.strip())
 
