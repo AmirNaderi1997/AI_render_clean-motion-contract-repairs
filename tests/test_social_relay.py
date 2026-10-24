@@ -73,6 +73,28 @@ def test_the_request_follows_the_documented_contract(monkeypatch):
     assert seen["body"] == {"service": "instagram", "url": REEL, "max_results": 1} and seen["auth"] == "Bearer " + KEY and seen["timeout"] >= 130
 
 
+def test_the_provider_is_called_with_a_browser_signature_not_pythons_default(monkeypatch):
+    """Regression: Cloudflare answered Python-urllib with 'Error 1010: browser_signature_banned' and the relay saw an answer without any items."""
+    monkeypatch.setenv("GETINSAVER_API_KEY", KEY)
+    seen = {}
+
+    class Response:
+        def read(self, n): return json.dumps(ANSWER).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(relay.urllib.request, "urlopen", lambda request, timeout=0: (seen.update(ua=request.get_header("User-agent")), Response())[1])
+    relay._getinsaver(REEL)
+    assert seen["ua"].startswith("Mozilla/5.0") and "urllib" not in seen["ua"].lower()
+
+
+def test_a_cloudflare_refusal_is_reported_as_such(monkeypatch, tmp_path):
+    monkeypatch.setenv("GETINSAVER_API_KEY", KEY)
+    monkeypatch.setattr(relay, "_getinsaver", lambda url: {"title": "Error 1010: Access denied", "status": 403, "error_code": 1010, "error_name": "browser_signature_banned"})
+    media, reason = relay._api_download(REEL, tmp_path)
+    assert media is None and "browser_signature_banned" in reason
+
+
 def test_nothing_is_called_without_a_key(monkeypatch, tmp_path):
     monkeypatch.setattr(relay, "_getinsaver", lambda url: pytest.fail("no key, no call"))
     assert relay._api_download(REEL, tmp_path) == (None, "")

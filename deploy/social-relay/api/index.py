@@ -33,6 +33,7 @@ MAX_SECONDS = 180
 CHUNK = 1024 * 1024
 
 GETINSAVER_URL = "https://developers.getinsaver.com/v1/resolve"
+BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 # Failure codes of the API, as the editor should report them (the editor maps these words to a plain explanation).
 GETINSAVER_REASONS = {"INSUFFICIENT_CREDITS": "getinsaver credits exhausted", "UPSTREAM_REJECTED": "private, deleted or login-only content",
                       "MEDIA_NOT_FOUND": "no downloadable media found", "RATE_LIMITED": "getinsaver rate limited", "API_KEY_INVALID": "getinsaver key invalid",
@@ -90,13 +91,16 @@ def _shape(payload) -> str:
         return type(payload).__name__
     items = payload.get("items") if isinstance(payload.get("items"), list) else []
     kinds = [str((i or {}).get("type") if isinstance(i, dict) else type(i).__name__) for i in items][:5]
-    return f"ok={payload.get('ok')} code={payload.get('code')} items={kinds} message={str(payload.get('message') or '')[:80]}"
+    edge = f" edge={payload.get('error_name') or payload.get('error_code')}" if payload.get("error_code") or payload.get("error_name") else ""
+    return f"ok={payload.get('ok')} code={payload.get('code')} items={kinds} message={str(payload.get('message') or payload.get('detail') or '')[:80]}{edge}"
 
 
 def _getinsaver(url: str) -> dict:
     request = urllib.request.Request(
         GETINSAVER_URL, method="POST", data=json.dumps({"service": _service(url), "url": url, "max_results": 1}).encode(),
-        headers={"authorization": "Bearer " + os.environ["GETINSAVER_API_KEY"], "content-type": "application/json", "accept": "application/json"})
+        headers={"authorization": "Bearer " + os.environ["GETINSAVER_API_KEY"], "content-type": "application/json", "accept": "application/json",
+                 # The provider sits behind Cloudflare, which refuses Python's default signature ("Error 1010: browser_signature_banned").
+                 "user-agent": BROWSER_UA})
     try:
         with urllib.request.urlopen(request, timeout=130) as response:        # the provider asks for client timeouts of 130 s or more
             return json.loads(response.read(2_000_000).decode("utf-8", "replace"))
@@ -116,10 +120,13 @@ def _api_download(url: str, work: Path) -> tuple[Path | None, str]:
         media = _pick_video(payload)
         if not media:
             code = str(payload.get("code") or "")
+            edge = payload.get("error_name") or payload.get("error_code")
+            if not code and edge:
+                code = f"EDGE_{edge}"                     # the provider's Cloudflare refused the request before the API saw it
             return None, GETINSAVER_REASONS.get(code) or (f"{code}: {_shape(payload)}" if code else f"no video in the answer ({_shape(payload)})")
         target = work / "video.mp4"
         size = 0
-        with urllib.request.urlopen(urllib.request.Request(media, headers={"user-agent": "Mozilla/5.0"}), timeout=60) as response, open(target, "wb") as out:
+        with urllib.request.urlopen(urllib.request.Request(media, headers={"user-agent": BROWSER_UA}), timeout=60) as response, open(target, "wb") as out:
             while chunk := response.read(CHUNK):
                 size += len(chunk)
                 if size > MAX_BYTES:
