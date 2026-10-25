@@ -63,7 +63,7 @@ export function friendlyError(error: unknown, action = "complete this action"): 
   if (/403|forbidden/i.test(message)) return "You do not have access to this item. Check your account and try again.";
   if (/413|too large|file size/i.test(message)) return "This file is too large. Choose a smaller file and try again.";
   if (/network|failed to fetch|timeout|timed out|502|503|504/i.test(message)) return "We could not reach the server. Check your connection and try again.";
-  if (/invalid credentials|incorrect password/i.test(message)) return "The email or password is incorrect. Check both and try again.";
+  if (/invalid credentials|invalid email or password|incorrect password/i.test(message)) return "The email or password is incorrect. Check both and try again. Accounts on a local installation may differ from the online service.";
   if (/already exists|already registered/i.test(message)) return "This account already exists. Sign in or use another email.";
   if (/^invalid json$/i.test(message)) return "The edit plan is not valid JSON. Check its formatting and try again.";
   if (/upload was cancelled|upload was canceled/i.test(message)) return "Upload cancelled. Your video is still selected; select Retry upload when you're ready.";

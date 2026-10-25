@@ -1,4 +1,6 @@
 import React from "react";
+import { initializeTheme } from "./theme";
+import { AppFeatures } from "./local/AppFeatures";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { isAuthenticated, restoreSession } from "./auth";
@@ -75,7 +77,7 @@ function LegacyJobRedirect() {
 }
 
 function App() {
-  return <BrowserRouter><AppErrorBoundary><SessionBootstrap><AuthProvider><JobCacheProvider><React.Suspense fallback={<LoadingSpinner/>}><Routes>
+  return <BrowserRouter><AppFeatures/><AppErrorBoundary><SessionBootstrap><AuthProvider><JobCacheProvider><React.Suspense fallback={<LoadingSpinner/>}><Routes>
     <Route path="/login" element={<GuestRoute><Login/></GuestRoute>}/>
     <Route path="/signup" element={<GuestRoute><Signup/></GuestRoute>}/>
     <Route path="/forgot-password" element={<ForgotPassword/>}/><Route path="/reset-password" element={<ResetPassword/>}/>
@@ -93,4 +95,5 @@ function App() {
   </Routes></React.Suspense><ToastHost/></JobCacheProvider></AuthProvider></SessionBootstrap></AppErrorBoundary></BrowserRouter>;
 }
 
+initializeTheme();
 createRoot(document.getElementById("root")!).render(<App/>);

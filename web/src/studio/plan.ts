@@ -19,7 +19,7 @@ export function planPhase(project?: StudioProject): PlanPhase {
     case "quality_evaluation": case "user_review": return "review";
     case "completed": return "done";
     case "failed": return "failed";
-    default: return plan.approved_id ? "approved" : "none";
+    default: return project?.status === "awaiting_confirmation" && plan.approved_id !== plan.versions[plan.versions.length - 1].id ? "awaiting" : plan.approved_id ? "approved" : "none";
   }
 }
 
@@ -84,7 +84,7 @@ const ROLE_LABEL: Record<string, string> = {
   problem: "مسئله", solution: "راه‌حل", context: "زمینه", example: "مثال", conclusion: "جمع‌بندی", reveal: "افشا",
 };
 export function roleLabel(role: string, index: number): string {
-  return ROLE_LABEL[role.trim().toLowerCase()] || role || `بخش ${index + 1}`;
+  return ROLE_LABEL[role.trim().toLowerCase()] || (/[\u0600-\u06ff]/.test(role) ? role : `بخش ${index + 1}`);
 }
 
 export const SOURCE_LABEL: Record<string, string> = { agent: "پیشنهاد AI", user: "ویرایش شما", chat: "درخواست در چت" };

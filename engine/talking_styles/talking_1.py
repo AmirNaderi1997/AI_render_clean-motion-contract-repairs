@@ -602,13 +602,13 @@ def ffmpeg_error(stderr: str, limit: int = 1200) -> str:
     return "\n".join(chosen)[-limit:]
 
 
-def prepare_render_source(video: Path, work_dir: Path) -> Path:
+def prepare_render_source(video: Path, work_dir: Path, on_progress=None) -> Path:
     """Cache one SDR delivery-resolution decode before opening per-shot inputs.
 
     High resolution HDR decoded once per shot exhausts container memory and
     repeats floating point tone mapping. Normalized face coordinates remain valid.
     """
-    sw, sh, _ = probe_video(video)
+    sw, sh, duration = probe_video(video)
     colour = source_colour_filter(video)
     if max(sw, sh) <= 1920 and colour == "null":
         return video
@@ -621,14 +621,24 @@ def prepare_render_source(video: Path, work_dir: Path) -> Path:
     temporary = target.with_suffix('.partial.mp4')
     ratio = min(1.0, 1920 / max(sw, sh))
     width, height = max(2, int(sw * ratio) // 2 * 2), max(2, int(sh * ratio) // 2 * 2)
-    subprocess.run([ass_burner_ffmpeg(), '-hide_banner', '-v', 'error', '-y',
+    from engine.source_progress import convert
+    command = [ass_burner_ffmpeg(), '-hide_banner', '-v', 'error', '-y',
         '-threads', '1', '-i', str(video), '-filter_threads', '1',
-        '-vf', f'{colour},scale={width}:{height}:flags=lanczos,fps={RENDER_FPS},format=yuv420p10le',
+        '-vf', f'fps={RENDER_FPS},{colour},scale={width}:{height}:flags=lanczos,format=yuv420p10le',
         '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-threads', '2',
         '-preset', 'veryfast', '-crf', '16', '-c:a', 'copy',
         '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
-        str(temporary)], check=True, capture_output=True)
-    temporary.replace(target)
+        '-progress', 'pipe:1', '-nostats', str(temporary)]
+    import fcntl
+    with target.with_suffix('.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if target.is_file(): return target
+        try:
+            convert(command, duration, on_progress)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+        temporary.replace(target)
     return target
 
 
@@ -882,18 +892,21 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
            work_dir: Path, music: Optional[Path] = None, cta: str = "",
            render_settings: Optional[dict] = None,
            logo_path: Optional[Path] = None, overlay: Optional[Path] = None,
-           on_progress: Optional[Callable[[int], None]] = None) -> Path:
+           on_progress: Optional[Callable[[int], None]] = None, on_stage=None) -> Path:
     """`overlay`: optional transparent WebM (engine/tscaps_overlay.py) that draws the key moments above the ASS layer."""
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
-    video = prepare_render_source(video, work_dir)
+    if on_stage: on_stage('rendering source preparation', 'در حال بررسی و تبدیل فرمت فایل ورودی به نسخهٔ مناسب تدوین')
+    video = prepare_render_source(video, work_dir, (lambda pct: on_progress(round(pct * .1))) if on_progress else None)
+    if on_progress: on_progress(10)
     sw, sh, _ = probe_video(video)
     # Always render social delivery at a fixed 30fps.  In particular, feeding
     # a 60fps phone source straight into zoompan(d=1,fps=30) changes the video
     # clock relative to its audio and produces the visible lag/judder.
     fps = RENDER_FPS
     work_dir.mkdir(parents=True, exist_ok=True)
+    if on_stage: on_stage('rendering captions', 'در حال آماده‌سازی فونت، زیرنویس و تیترهای ویدیو')
     fonts = fonts_bundle(work_dir)
     ass = work_dir / "reel.ass"
     settings = render_settings or {}
@@ -911,6 +924,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     vignette = vignette_png(work_dir / "vignette.png", float(settings.get('bottom_shade', 0)) / 100,
                             float((settings.get('grade') or {}).get('vignette', 50)) / 100)
     logo = settings.get("outro_logo") or {}
+    if on_stage: on_stage('rendering outro', 'در حال آماده‌سازی صفحهٔ پایانی و لوگو')
     outro, outro_seconds = render_outro(work_dir, cta.strip(), fps, fonts,
                                         logo_enabled=logo.get("enabled", True),
                                         logo_motion=logo.get("motion", "pop"), logo_path=logo_path)
@@ -970,8 +984,10 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         vf.append(f"[0:a]asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
         length = max(1, round((elapsed+shot.length)*fps_value)-round(elapsed*fps_value))/fps_value
+        if on_stage: on_stage('rendering shot', f'در حال رندر بخش {k + 1} از {len(plan.shots)}؛ کادر، رنگ و حرکت گوینده')
         clips.append((cached_shot(inputs,vf,k,length,work_dir),length)); elapsed += shot.length
-        if on_progress: on_progress(min(60,round(elapsed/max(plan.duration,.001)*60)))
+        if on_progress: on_progress(min(60,10+round(elapsed/max(plan.duration,.001)*50)))
+    if on_stage: on_stage('rendering composition', 'در حال ترکیب بخش‌های تدوین، زیرنویس و صدا و رمزگذاری خروجی')
     inputs = shot_concat(clips,work_dir)
     vf = ['[0:v]setpts=PTS-STARTPTS[cv]','[0:a]asetpts=PTS-STARTPTS[ca]']
     n = 1
@@ -1034,6 +1050,7 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
     if proc.wait() != 0:
         detail = 'process killed (SIGKILL); check container memory/OOM limits' if proc.returncode == -9 else ffmpeg_error(''.join(log_tail))
         raise RuntimeError(f"ffmpeg failed (exit {proc.returncode}): {detail}")
+    if on_stage: on_stage('rendering finalizing', 'فایل رندر نوشته شد؛ در حال تحویل خروجی برای بررسی کیفیت')
     return out
 
 

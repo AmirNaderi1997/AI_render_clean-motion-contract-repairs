@@ -10,7 +10,7 @@ from typing import Literal, Optional
 from pathlib import Path
 
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -21,6 +21,18 @@ from app.studio_tools import list_tools
 from app.job_access import get_job_for_request, is_local_auth_bypass
 
 router = APIRouter(prefix="/studio", tags=["studio"])
+
+
+@router.post('/media-session')
+async def media_session(request: Request):
+    from app.media_session import COOKIE
+    from app.auth_routes import _cookie_secure
+    response = JSONResponse({'ok': True}, headers={'Cache-Control': 'no-store'})
+    bearer = request.headers.get('authorization', '')
+    if bearer.startswith('Bearer '):
+        response.set_cookie(COOKIE, bearer[7:], max_age=900, httponly=True,
+                            secure=_cookie_secure(request), samesite='lax', path='/')
+    return response
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -95,6 +107,7 @@ class MessageCreate(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=20)
     execution_mode: Literal["auto", "manual"] | None = None
     manual_question_id: str | None = Field(default=None, max_length=64)
+    render_target: Literal["server", "browser"] | None = None
 
 
 class StoryboardUpdate(BaseModel):
@@ -146,6 +159,15 @@ async def open_legacy_project(request: Request, body: LegacyProjectOpen):
         "این پروژه به Studio اضافه شد. می‌توانید ادامهٔ تدوین و تغییرات بعدی را همین‌جا درخواست کنید.")
     await sync_conversation(conversation["id"], user_key)
     return _public_conversation(await repo.get_conversation(conversation["id"], user_key))
+
+
+@router.get('/conversations/{conversation_id}/event-history')
+async def event_history(request: Request, conversation_id: str, after: int = Query(0, ge=0)):
+    try:
+        events = await repo.events(conversation_id, _user(request), after, limit=500)
+        return [_public_event(event) for event in events]
+    except KeyError:
+        raise HTTPException(404, 'conversation not found')
 
 
 @router.get("/conversations/{conversation_id}")
@@ -248,8 +270,19 @@ async def send_message(request: Request, conversation_id: str, body: MessageCrea
     user_key = _user(request)
     try:
         conversation = await repo.get_conversation(conversation_id, user_key)
-        if body.execution_mode:
-            await repo.set_conversation(conversation_id, user_key, state={**conversation.get("state", {}), "execution_mode": body.execution_mode})
+        if body.render_target == "browser":
+            current_id = conversation.get("state", {}).get("current_project_id")
+            if current_id and not any(p.get("id") == current_id and p.get("state", {}).get("render_target_override") for p in conversation.get("projects", [])):
+                current = await repo.get_project(current_id, user_key)
+                active_job = jobstore.get(current.get("external_ref")) if current["engine"] != "localize" else None
+                if (current["state"].get("render_started") and current["status"] == "running") or (active_job and active_job.render.status in {"queued", "running"}):
+                    raise HTTPException(409, "A backend render is active. Stop it explicitly before switching to this device.")
+                await repo.update_project(current_id, user_key, state={**current["state"], "render_target": "browser"})
+        preferences = {}
+        if body.execution_mode: preferences["execution_mode"] = body.execution_mode
+        if body.render_target: preferences["render_target"] = body.render_target
+        if preferences:
+            await repo.set_conversation(conversation_id, user_key, state={**conversation.get("state", {}), **preferences})
         await repo.get_attachments(body.attachment_ids, conversation_id, user_key)
         display = body.content.strip()
         session = conversation.get('state', {}).get('manual_session')
@@ -368,6 +401,13 @@ class RenderTargetRequest(BaseModel):
     target: str = Field(pattern="^(server|browser)$")
 
 
+@router.get('/render-capabilities')
+async def render_capabilities(request: Request):
+    _user(request)
+    return {"device_render_hold": True, "device_compositions": ["remotion-product-v1"],
+            "native_engines": ["talking", "localize", "motion"], "companion_required_for_ai": False}
+
+
 async def _browser_job(request: Request, project_id: str):
     try:
         project = await repo.get_project(project_id, _user(request))
@@ -381,10 +421,12 @@ async def _browser_job(request: Request, project_id: str):
 
 @router.patch('/projects/{project_id}/render-target')
 async def set_render_target(request: Request, project_id: str, body: RenderTargetRequest):
-    project, job = await _browser_job(request, project_id)
-    if job.render.status in {"queued", "running"}:
+    try: project = await repo.get_project(project_id, _user(request))
+    except KeyError: raise HTTPException(404, "project not found")
+    job = jobstore.get(project.get("external_ref")) if project["engine"] != "localize" else None
+    if (project["state"].get("render_started") and project["status"] == "running") or (job and job.render.status in {"queued", "running"}):
         raise HTTPException(409, "A server render is already active; it has not been interrupted")
-    state = {**project["state"], "render_target": body.target}
+    state = {**project["state"], "render_target": body.target, "render_target_override": True}
     return _public_project(await repo.update_project(project_id, _user(request), state=state))
 
 
@@ -495,7 +537,7 @@ async def accept_output(request: Request, project_id: str, body: AcceptOutputReq
     job = jobstore.get(project.get('external_ref'))
     state = talking_reel.load(job.dir) if job else {}
     candidate = state.get('candidate_output')
-    if not candidate or candidate != body.candidate or state.get('status') not in {'error', 'done'}:
+    if not candidate or candidate != body.candidate or state.get('status') not in {'error', 'done', 'awaiting_confirmation'}:
         raise HTTPException(409, 'Output changed or rendering is still active')
     path = (job.dir / candidate).resolve()
     if not path.is_relative_to((job.dir / 'exports').resolve()) or not path.is_file():

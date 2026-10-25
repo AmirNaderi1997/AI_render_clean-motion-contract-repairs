@@ -52,10 +52,9 @@ function StepRow({ step, retryHref }: { step: ActivityStep; retryHref?: string }
     {details && open ? <div className="act-details">
       {details.notes.map((note, index) => <p key={index} dir="auto" className="bidi wrap-safe">{note}</p>)}
       <dl>
-        <div><dt>Started</dt><dd>{clock(step.startedAt)}</dd></div>
-        {details.durationMs >= 1000 ? <div><dt>Took</dt><dd>{formatDuration(details.durationMs)}</dd></div> : null}
-        {details.updates > 1 ? <div><dt>Updates</dt><dd>{details.updates}</dd></div> : null}
-        {details.tool ? <div><dt>Tool</dt><dd className="ident">{details.tool}</dd></div> : null}
+        <div><dt>شروع</dt><dd>{clock(step.startedAt)}</dd></div>
+        {details.durationMs >= 1000 ? <div><dt>مدت</dt><dd>{formatDuration(details.durationMs)}</dd></div> : null}
+        {details.updates > 1 ? <div><dt>گزارش‌ها</dt><dd>{details.updates}</dd></div> : null}
       </dl>
     </div> : null}
   </li>;
@@ -71,8 +70,8 @@ export function ActivityBlock({ steps, live, retryHref }: { steps: ActivityStep[
   const current = steps.filter(step => step.status === "active" || step.status === "failed");
   const history = steps.filter(step => step.status === "done");
   const total = steps[steps.length - 1].endedAt - steps[0].startedAt;
-  const count = `${history.length} step${history.length === 1 ? "" : "s"}`;
-  const summary = live ? `${count} done` : `${count} completed${total >= 1000 ? ` · ${formatDuration(total)}` : ""}`;
+  const count = `${history.length} مرحله`;
+  const summary = `${count} انجام شد${!live && total >= 1000 ? ` · ${formatDuration(total)}` : ""}`;
   // Finished with a single step: just show it. Otherwise show the current step(s) and collapse history.
   const visible = expanded || (!live && !failed && history.length === steps.length && steps.length === 1) ? steps : current.length ? current : history.slice(-1);
   const canCollapse = steps.length > 1 && (expanded || visible.length < steps.length || history.length > 1);

@@ -233,6 +233,10 @@ async def auth_middleware(request: Request, call_next):
     } or re.fullmatch(r"/jobs/[0-9a-f]{12}/premiere/bridge/receipt", path):
         return await call_next(request)
     header = request.headers.get("Authorization", "")
+    from app.media_session import COOKIE, allowed as media_cookie_allowed
+    if not header and media_cookie_allowed(request.method, path):
+        media_token = request.cookies.get(COOKIE)
+        if media_token: header = "Bearer " + media_token
     if not header.startswith("Bearer "):
         return unauthorized()
     try:
@@ -292,4 +296,4 @@ def health():
 
 @app.get("/health")
 def health_check():
-    return {"ok": True}
+    return {"ok": True, "local_installation": os.environ.get("EDITOR_LOCAL_INSTALLATION", "") == "1"}

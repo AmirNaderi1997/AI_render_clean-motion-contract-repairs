@@ -231,8 +231,9 @@ def build_ass(plan: ReelPlan, fonts_dir: Optional[Path]) -> str:
 def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Optional[Path] = None,
            cta: str = "", render_settings: Optional[dict] = None,
            logo_path: Optional[Path] = None, overlay: Optional[Path] = None,
-           on_progress: Optional[Callable[[int], None]] = None, **_ignored) -> Path:
+           on_progress: Optional[Callable[[int], None]] = None, on_stage=None, **_ignored) -> Path:
     """`overlay`: optional transparent WebM from engine/tscaps_overlay.py, composited above the ASS layer."""
+    if on_stage: on_stage('rendering composition', 'در حال ترکیب قاب سینمایی، گوینده، زیرنویس و صدا')
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")

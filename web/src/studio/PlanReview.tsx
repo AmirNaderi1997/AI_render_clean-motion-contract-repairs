@@ -1,4 +1,5 @@
 import React from "react";
+import { flushSync } from "react-dom";
 import { EditCard, EditSwitch } from "./EditCard";
 import { api, PlanContent, PlanEdits, PlanVersion, StudioProject } from "../api";
 import { AuthenticatedMedia } from "../AuthenticatedMedia";
@@ -25,13 +26,14 @@ function Section({ title, children, hint, summary, open }: { title: string; chil
   return <EditCard title={title} hint={hint} summary={summary} open={open}>{children}</EditCard>;
 }
 
-export function PlanReview({ project, onChanged }: { project: StudioProject; onChanged: () => void }) {
+export function PlanReview({ project, onChanged }: { project: StudioProject; onChanged: () => void | Promise<unknown> }) {
   const versions: PlanVersion[] = project.state?.plan?.versions || [];
   const latest = versions[versions.length - 1];
   const phase = planPhase(project);
   const [viewing, setViewing] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState<PlanEdits>({});
   const [busy, setBusy] = React.useState("");
+  const actionInFlight = React.useRef(false);
   const [error, setError] = React.useState("");
   React.useEffect(() => { setDraft({}); setViewing(null); setError(""); }, [latest?.id]);
   if (!latest) return <div className="plan" dir="rtl"><div className="notice" role="status">برنامهٔ تدوین در حال ساخته‌شدن است؛ ویدیو تحلیل می‌شود و چند ایده سنجیده می‌شود. وقتی آماده شد همین‌جا نمایش داده می‌شود.</div></div>;
@@ -48,10 +50,12 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
   const highlight = value("hook_highlight", plan.hook.highlight);
 
   async function act(label: string, task: () => Promise<unknown>) {
-    setBusy(label); setError("");
-    try { await task(); setDraft({}); onChanged(); }
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    flushSync(() => { setBusy(label); setError(""); });
+    try { await task(); await onChanged(); setDraft({}); }
     catch (e) { setError(friendlyError(e, label)); }
-    finally { setBusy(""); }
+    finally { actionInFlight.current = false; setBusy(""); }
   }
   const save = () => act("save the plan", () => api.editStudioPlan(project.id, latest.id, draft));
   const approve = () => act("approve the plan", () => api.approveStudioPlan(project.id, latest.id));
@@ -67,7 +71,8 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
   };
   const words = hook.split(/\s+/).filter(Boolean);
 
-  return <div className="plan" dir="rtl">
+  return <div className="plan" dir="rtl" aria-busy={Boolean(busy)}>
+    {busy ? <div className="notice" role="status" aria-live="polite"><span className="act-dot" aria-hidden="true"/> {busy === "approve the plan" ? "در حال ارسال تأیید و شروع رندر…" : "در حال ذخیره و به‌روزرسانی برنامه…"}</div> : null}
     <header className="plan-head">
       <div>
         <h2>برنامهٔ تدوین</h2>

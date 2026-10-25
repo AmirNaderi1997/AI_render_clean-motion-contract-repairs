@@ -1,4 +1,6 @@
 import React from "react";
+import { useTheme, setTheme } from "./theme";
+import { DeviceSettings, InstallationSettings } from "./local/AppFeatures";
 import { NavLink } from "react-router-dom";
 import { Icon, IconName } from "./components/Icon";
 import { aiAdminRequest } from "./api";
@@ -27,16 +29,16 @@ const groups: { title: string; hint: string; tools: Tool[] }[] = [
 export default function Settings() {
   const { user, authenticated, logout } = useAuth();
   const [admin, setAdmin] = React.useState(false);
-  const [theme, setTheme] = React.useState(() => { try { return localStorage.getItem("editorgpt.theme") || "dark"; } catch { return "dark"; } });
+  const theme = useTheme();
   React.useEffect(() => { aiAdminRequest<{ allowed: boolean }>("/access").then(r => setAdmin(r.allowed)).catch(() => setAdmin(false)); }, []);
-  React.useEffect(() => { document.documentElement.dataset.theme = theme; try { localStorage.setItem("editorgpt.theme", theme); } catch { /* storage unavailable */ } }, [theme]);
   return <div className="page page-narrow">
     <header className="page-header"><div><h1>Settings</h1><p>Appearance, account and specialist tools.</p></div></header>
 
     <section className="set-section" aria-labelledby="set-appearance">
       <h2 id="set-appearance">Appearance</h2>
-      <div className="set-row"><span><b>Theme</b><small>EditorGPT is dark by default.</small></span>
+      <div className="set-row"><span><b>Theme</b><small>System follows your device automatically.</small></span>
         <div className="segmented" role="group" aria-label="Theme">
+          <button aria-pressed={theme === "system"} onClick={() => setTheme("system")}>System</button>
           <button aria-pressed={theme === "dark"} onClick={() => setTheme("dark")}><Icon name="moon" size={14}/> Dark</button>
           <button aria-pressed={theme === "light"} onClick={() => setTheme("light")}><Icon name="sun" size={14}/> Light</button>
         </div></div>
@@ -48,6 +50,8 @@ export default function Settings() {
         {!isLocalDevelopment ? <button className="btn btn-sm btn-secondary" onClick={() => void logout()}><Icon name="logout" size={15}/>Log out</button> : null}</div>
     </section> : null}
 
+    <InstallationSettings/>
+    <DeviceSettings/>
     {admin ? <section className="set-section" aria-labelledby="set-admin"><h2 id="set-admin">Administration</h2>
       <NavLink className="set-link" to="/settings/ai"><Icon name="settings" size={20}/><span><b>AI models &amp; logs</b><small>Routing, priorities and request history.</small></span><Icon name="chevron" size={16}/></NavLink></section> : null}
 

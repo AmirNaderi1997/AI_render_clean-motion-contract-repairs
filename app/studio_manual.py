@@ -9,6 +9,10 @@ import re
 from app.studio_store import repo, run
 
 
+class SelectionRequired(ValueError):
+    """A normal input gate, not a failed job."""
+
+
 def choice(value, label, description="", **visual):
     return {"value": value, "label": label, "description": description, **visual}
 
@@ -122,17 +126,17 @@ def answer(cid, user, session, response, text, attachment_ids):
         value = 'attached'
     values = {c["value"] for c in spec["choices"]}
     if value not in values and not spec.get("input"):
-        raise ValueError("یکی از گزینه‌های همین مرحله را انتخاب کنید.")
+        raise SelectionRequired("یکی از گزینه‌های همین مرحله را انتخاب کنید.")
     result = copy.deepcopy(session)
     if spec["key"] == "reference" and value != "skip":
         owned = run(repo.get_attachments(attachment_ids, cid, user))
         if not owned or any(a["kind"] not in {"image", "video"} for a in owned):
-            raise ValueError("برای رفرنس یک عکس یا ویدیو پیوست کنید؛ فایل اصلی پروژه حفظ شده است.")
+            raise SelectionRequired("برای رفرنس یک عکس یا ویدیو پیوست کنید؛ فایل اصلی پروژه حفظ شده است.")
         result["reference_ids"] = attachment_ids
     if spec['key'] == 'logo_asset' and value == 'attached':
         owned = run(repo.get_attachments(attachment_ids, cid, user))
         if len(owned) != 1 or owned[0]['kind'] != 'image':
-            raise ValueError('یک تصویر لوگو پیوست کنید.')
+            raise SelectionRequired('یک تصویر لوگو پیوست کنید.')
         result['logo_attachment_id'] = owned[0]['id']
     if not run(repo.claim_manual_question(cid, user, response)):
         raise ValueError('این پاسخ قبلاً ثبت شده است؛ درخواست تکراری اجرا نشد.')

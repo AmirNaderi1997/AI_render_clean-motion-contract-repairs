@@ -16,6 +16,29 @@ export function Sheet({ open, onClose, label, children }: { open: boolean; onClo
   }, [onClose]);
   useFocusTrap(open, ref);
   React.useEffect(() => {
+    if (!open || !window.visualViewport) return;
+    const viewport = window.visualViewport;
+    let frame = 0;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const sheet = ref.current;
+        if (!sheet) return;
+        sheet.style.setProperty("--sheet-visible-height", `${viewport.height}px`);
+        sheet.style.setProperty("--sheet-visible-center", `${viewport.offsetTop + viewport.height / 2}px`);
+        sheet.style.setProperty("--sheet-keyboard-inset", `${Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)}px`);
+        const active = document.activeElement;
+        if (active instanceof HTMLInputElement && sheet.contains(active)) {
+          active.scrollIntoView({ block: "nearest", behavior: "instant" });
+        }
+      });
+    };
+    update();
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
+    return () => { cancelAnimationFrame(frame); viewport.removeEventListener("resize", update); viewport.removeEventListener("scroll", update); };
+  }, [open]);
+  React.useEffect(() => {
     if (!open) return;
     const key = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
     document.addEventListener("keydown", key);

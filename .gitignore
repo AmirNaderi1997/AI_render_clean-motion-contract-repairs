@@ -64,3 +64,4 @@ assets/sfx/YTDown.com_YouTube_Parham-Potki-x-MMV-x-PanizPRZ-Jan-Fadaye_Media_9Xi
 # local model/cache files (never commit)
 /cache/
 deploy/**/.vercel/
+/.local-lan/

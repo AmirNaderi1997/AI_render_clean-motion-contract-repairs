@@ -13,6 +13,7 @@ import { PlanReview } from "./PlanReview";
 import { currentVersion, planPhase } from "./plan";
 import { TimelineView } from "./TimelineView";
 import { ProgressNotice, useProgressAge } from './ProgressNotice';
+import { useTopbarAction } from '../components/ShellContext';
 
 export type WorkspaceTab = "preview" | "edit";
 
@@ -43,7 +44,7 @@ function Empty({ icon, title, text }: { icon: "spark" | "advanced"; title: strin
 function PreviewPane({ project, conversation, sourceAttachment, onCancel }: { project?: StudioProject; conversation: StudioConversation | null; sourceAttachment?: string; onCancel: () => void }) {
   const phase = renderView(project);
   const rendering = ['queued','rendering','finalizing'].includes(phase.phase);
-  const progressAge = useProgressAge(rendering, phase.progress, phase.stageLabel);
+  const progressAge = useProgressAge(rendering, phase.progress, phase.stageLabel, project?.state?.last_observed_at || project?.updated_at);
   const [versions, setVersions] = React.useState<{file: string; version: number}[]>([]);
   const [selected, setSelected] = React.useState<string | null>(null);
   const playerRef = React.useRef<HTMLDivElement>(null);
@@ -75,7 +76,7 @@ function PreviewPane({ project, conversation, sourceAttachment, onCancel }: { pr
         <Icon name={fullscreen.active ? "fullscreenExit" : "fullscreen"} size={18}/></button> : null}
     </div>
     {busy ? <div className="rc-progress">
-      <ProgressNotice seconds={progressAge}/>
+      <ProgressNotice project={project}/>
       <div className="meter" data-indeterminate={typeof view.progress === "number" && progressAge < 30 ? undefined : ""} style={{ ["--value" as string]: `${view.progress ?? 0}%` }} role="progressbar" aria-label="Render progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressAge < 30 ? view.progress : undefined}><span/></div>
       <div className="rc-meta"><span>{view.stageLabel}</span>{typeof view.progress === "number" ? <span>{progressAge >= 30 ? 'آخرین گزارش: ' : ''}{view.progress}%</span> : null}</div>
     </div> : null}
@@ -140,7 +141,7 @@ export function hasTimeline(project?: StudioProject): boolean {
   return project.engine === "talking" ? hasPlan(project) && Boolean(currentVersion(project)) : Boolean(project.external_ref);
 }
 
-function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () => void }) {
+function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () => void | Promise<unknown> }) {
   const [view, setView] = React.useState<"main" | "timeline">("main");
   if (!project) return <Empty icon="advanced" title="Nothing to edit yet" text="Once EditorGPT creates a project, the controls that apply to it appear here."/>;
   const advanced = advancedEditorUrl(project);
@@ -220,15 +221,21 @@ function TalkingShade({jobId, onSaved}: {jobId:string; onSaved:()=>void}) {
   </section>;
 }
 
-export function Workspace({ conversation, project, projects, onSelectProject, tab, onTab, sourceAttachment, onCancel, onSaved, onCollapse, showTabs, panelRef, resizer }: {
+export function Workspace({ conversation, project, projects, onSelectProject, tab, onTab, sourceAttachment, onCancel, onSaved, onCollapse, showTabs, panelRef, resizer, topbarEdit = false }: {
   conversation: StudioConversation | null; project?: StudioProject; projects: StudioProject[]; onSelectProject: (id: string) => void;
-  tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; sourceAttachment?: string; onCancel: () => void; onSaved: () => void;
+  tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; sourceAttachment?: string; onCancel: () => void; onSaved: () => void | Promise<unknown>;
   onCollapse?: () => void; showTabs: boolean; panelRef?: React.Ref<HTMLElement>;
   /** Drag handle on the panel's inner edge (desktop only), rendered by the page that owns the layout. */
   resizer?: React.ReactNode;
+  topbarEdit?: boolean;
 }) {
   const meta = statusMeta(project);
   const panel = usePanelFullscreen();
+  const action = React.useMemo(() => topbarEdit ? { active: panel.active, onClick: () => { void panel.toggle(); } } : null, [topbarEdit, panel.active, panel.toggle]);
+  useTopbarAction(action);
+  const view = renderView(project);
+  const rendering = tab === "edit" && ["queued", "rendering", "finalizing"].includes(view.phase);
+  const progressAge = useProgressAge(rendering, view.progress, view.stageLabel, project?.state?.last_observed_at || project?.updated_at);
   const setNode = React.useCallback((element: HTMLElement | null) => {
     panel.node.current = element;
     if (typeof panelRef === "function") panelRef(element);
@@ -236,7 +243,7 @@ export function Workspace({ conversation, project, projects, onSelectProject, ta
   }, [panelRef, panel.node]);
   return <section className="workspace" ref={setNode} data-max={panel.active || undefined} aria-label="Video workspace">
     {resizer}
-    <header className="ws-head">
+    <header className="ws-head" hidden={topbarEdit}>
       {showTabs ? <div className="tabs-bar" role="tablist" aria-label="Workspace">
         {(["preview", "edit"] as WorkspaceTab[]).map(item => <button key={item} role="tab" id={`ws-tab-${item}`} aria-controls={`ws-panel-${item}`} aria-selected={tab === item} tabIndex={tab === item ? 0 : -1} className="tab"
           onClick={() => onTab(item)}
@@ -249,7 +256,13 @@ export function Workspace({ conversation, project, projects, onSelectProject, ta
         data-tip={panel.active ? "Exit full screen" : "Full screen"}><Icon name={panel.active ? "fullscreenExit" : "fullscreen"} size={19}/></button>
       {onCollapse && !panel.active ? <button className="icon-btn" onClick={onCollapse} aria-label="Hide workspace" data-tip="Hide workspace"><Icon name="panelRight" size={19}/></button> : null}
     </header>
+    {topbarEdit && panel.active ? <button className="icon-btn ws-edit-exit" onClick={() => void panel.toggle()} aria-label="Exit full screen"><Icon name="fullscreenExit" size={18}/></button> : null}
     {project ? <div className="ws-titlebar"><h2 className="bidi wrap-safe" dir="auto" title={project.title}>{displayTitle(project.title, 80)}</h2><span className="badge" data-tone={meta.tone === "neutral" ? undefined : meta.tone}><i/>{meta.label}</span></div> : null}
+    {rendering ? <div className="ws-edit-progress" role="status" dir="rtl">
+      <div className="rc-meta"><span>{view.stageLabel}</span>{typeof view.progress === "number" ? <span>{progressAge >= 30 ? "آخرین گزارش: " : ""}{view.progress}٪</span> : null}</div>
+      <div className="meter" data-indeterminate={typeof view.progress === "number" && progressAge < 30 ? undefined : ""} style={{ ["--value" as string]: `${view.progress ?? 0}%` }} role="progressbar" aria-label="پیشرفت رندر" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressAge < 30 ? view.progress : undefined}><span/></div>
+      <ProgressNotice project={project}/>
+    </div> : null}
     <div className="ws-body">
       <div role="tabpanel" id="ws-panel-preview" aria-labelledby="ws-tab-preview" hidden={tab !== "preview"}><PreviewPane project={project} conversation={conversation} sourceAttachment={sourceAttachment} onCancel={onCancel}/></div>
       <div role="tabpanel" id="ws-panel-edit" aria-labelledby="ws-tab-edit" hidden={tab !== "edit"}><EditPane project={project} onSaved={onSaved}/></div>

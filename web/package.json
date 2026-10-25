@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --port 5173",
+    "dev": "vite --port 5187 --host 127.0.0.1",
+    "dev:legacy": "vite --port 5174 --host 127.0.0.1",
+    "dev:lan": "vite --port 5187 --host 0.0.0.0",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "node --test tests/*.test.mjs",

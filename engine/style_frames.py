@@ -164,7 +164,7 @@ BUILDERS = {"talking_1": _talking_1, "talking_2": _talking_2, "talking_3": _talk
 
 def render_mockup(video: Path, out: Path, *, style_id: str, at: float, hook: str, highlight: list[str] | None = None,
                   caption: str = "", card: str = "", accent: str = "#F5B800", name: str = "", tagline: str = "",
-                  grade: dict | None = None, caption_font: str = "default", width: int = 540) -> Path:
+                  grade: dict | None = None, caption_font: str = "default", width: int = 540, source_still: Path | None = None) -> Path:
     """Write a JPEG preview of ``style_id`` on the frame of ``video`` at ``at`` seconds."""
     if style_id not in BUILDERS:
         raise MockupUnavailable(f"unknown style {style_id!r}")
@@ -176,11 +176,12 @@ def render_mockup(video: Path, out: Path, *, style_id: str, at: float, hook: str
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
-        still = work / "frame.png"
-        grab = subprocess.run([ffmpeg, "-v", "error", "-y", "-ss", f"{max(0.0, at):.2f}", "-i", str(video),
-                               "-frames:v", "1", str(still)], capture_output=True, text=True, timeout=60)
-        if grab.returncode != 0 or not still.is_file():
-            raise MockupUnavailable((grab.stderr or "could not read a frame").strip()[-300:])
+        still = source_still or work / "frame.png"
+        if source_still is None:
+            grab = subprocess.run([ffmpeg, "-v", "error", "-y", "-threads", "1", "-ss", f"{max(0.0, at):.2f}", "-i", str(video),
+                                   "-frames:v", "1", "-threads", "1", str(still)], capture_output=True, text=True, timeout=20)
+            if grab.returncode != 0 or not still.is_file():
+                raise MockupUnavailable((grab.stderr or "could not read a frame").strip()[-300:])
         from PIL import Image
         with Image.open(still) as image:
             size = image.size
@@ -197,9 +198,9 @@ def render_mockup(video: Path, out: Path, *, style_id: str, at: float, hook: str
         for path in extra:
             inputs += ["-loop", "1", "-framerate", "30", "-t", f"{SECONDS + 0.3:.2f}", "-i", path]
         graph += f",{subtitles_filter(ass, fonts)},scale={width}:-2[out]"
-        command = [ffmpeg, "-v", "error", "-y", *inputs, "-filter_complex", graph, "-map", "[out]",
+        command = [ffmpeg, "-v", "error", "-y", "-threads", "1", "-filter_complex_threads", "1", *inputs, "-filter_complex", graph, "-map", "[out]",
                    "-ss", f"{SECONDS:.2f}", "-frames:v", "1", "-q:v", "3", str(out)]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=90)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=20)
     if result.returncode != 0 or not out.is_file():
         raise MockupUnavailable((result.stderr or "ffmpeg failed").strip()[-300:])
     return out
