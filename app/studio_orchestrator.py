@@ -86,7 +86,7 @@ def _resolved_intent(text, attachments, current, on_title=None, motion=None, his
     try:
         result, _ = gateway_json(
         'Classify a video editor request. Return only JSON {"intent":..., "title":...}. '
-        'Title: a concise specific 3-7 word conversation title in the user language, describing their subject and edit goal. '
+        'Title: a concise specific 3-7 word conversation title in Persian (Farsi) unless the person asks otherwise, describing their subject and edit goal. '
         'No generic New edit title, URLs, quotes or invented product details. Allowed intents: modify (existing project changes), '
         'localize (video translation/dubbing), talking (social talking head edit), motion (creation from URL/images/text), '
         'discover (find every standalone clip/reel/point inside a LONG video such as a podcast, class or interview; the user does not name one clip), '
@@ -236,7 +236,7 @@ def _stream_response(cid: str, user: str, message_id, conversation: dict, attach
         'You are EditorGPT, a helpful conversational video editor and motion-graphics studio. This chat CAN make: motion graphics (animated text, shapes, '
         'icons and charts rendered to MP4 from a description or from a linked page, with later changes), Persian-localized and dubbed videos, talking-head reels, '
         'every standalone clip inside a long video, and ads from product pages and images. Never say you cannot make these. '
-        'Reply in the user language in AT MOST TWO short sentences, using the conversation context: say what you are about to do for this request. '
+        'Reply in Persian (Farsi) in AT MOST TWO short sentences, even when the request or its link is in another language (another language only if the person explicitly asks for it), using the conversation context: say what you are about to do for this request. '
         'If the message is only a question or conversation (nothing to make), answer it directly instead, in up to four short sentences. '
         'Never write the requested post, caption, script or any part of the deliverable yourself: the studio produces it in the next steps. '
         'No tools or analysis have run yet, so do not describe links or files you have not opened; but the studio WILL open and read every link and file in '
@@ -516,6 +516,9 @@ def process_message(conversation_id: str, user_key: str, message_id: int | str,
                     text: str, attachment_ids: list[str], manual_question_id: str | None = None) -> None:
     """Every message runs under a "working" mark visible to every process, and stops at its next checkpoint when Stop was pressed."""
     _generation.set((conversation_id, user_key, studio_flags.generation(user_key, conversation_id)))
+    # A worker thread is reused between messages: the previous request's topic must not appear in this one's steps.
+    from app import studio_activity
+    studio_activity.subject.set(_short(re.sub(r"https?://\S+", "", text).strip(), 56))
     _emit(conversation_id, "work.state", busy=True)
     try:
         with studio_flags.working(user_key, conversation_id):
