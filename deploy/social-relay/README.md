@@ -73,3 +73,12 @@ Update yt-dlp (sites change often): bump `yt-dlp` in `requirements.txt` and rede
 (any public host, redirects checked hop by hop, up to 12 MB). The editor uses it automatically when its own network cannot reach a host
 (connection reset or timeout) and remembers the failing host for five minutes. The headers `x-final-url` and `x-upstream-status` carry the
 final address and the status. Redeploy the relay after updating (`vercel deploy --prod` in this folder); no new environment variable is needed.
+
+## Page rendering (`api/render.mjs`)
+
+Pages that only exist after their scripts run (single-page apps) are rendered by a real browser on the relay, outside the editor's network, and only
+the result comes back: `POST /api/render` with `{"url": "https://..."}` and the same `x-relay-secret` returns
+`{title, content, description, images[], screenshots[{y, full_page, body(base64 jpeg)}], final_url}`.
+Public addresses only (checked for the page and for every request it makes); GET only. `@sparticuz/chromium` + `puppeteer-core` are pinned in
+`package.json`; the function needs 1.7 GB and up to 120 s (see `vercel.json`). `node --test test/public.test.mjs` checks the address guard.
+Deploy: `vercel deploy --prod` in this folder. The editor uses it when its own network cannot reach a site, or its local browser fails.

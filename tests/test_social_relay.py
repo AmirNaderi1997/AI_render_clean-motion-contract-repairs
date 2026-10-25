@@ -326,3 +326,68 @@ def test_without_a_relay_the_direct_error_is_kept(monkeypatch):
     monkeypatch.setattr(studio_url, "_fetch_direct", direct)
     with pytest.raises(http.client.RemoteDisconnected):
         studio_url._fetch("https://store.example/p", max_bytes=1000, accept="text/html")
+
+
+def test_relayed_scripts_are_kept_so_only_the_first_reading_pays_for_them(monkeypatch, tmp_path):
+    from app import studio_url
+    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://relay.example/api/index")
+    monkeypatch.setenv("SOCIAL_RELAY_SECRET", SECRET)
+    monkeypatch.setattr(studio_url, "_public_url", lambda url: url)
+    monkeypatch.setattr(studio_url, "_static_cache_path", lambda url: tmp_path / "script.bin")
+    studio_url._DIRECT_FAILED.clear()
+    calls = []
+    body = b"x" * 30_000
+
+    class Client:
+        def __init__(self, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, json, headers):
+            calls.append(json["url"])
+            return types.SimpleNamespace(status_code=200, content=body, headers={"x-upstream-status": "200", "x-final-url": json["url"], "content-type": "application/javascript"})
+    import httpx
+    monkeypatch.setattr(httpx, "Client", Client)
+    first = studio_url._relay_fetch("https://store.example/assets/app-1a2b.js", max_bytes=10**7, accept="*/*", allow_http_error=False, with_status=True)
+    second = studio_url._relay_fetch("https://store.example/assets/app-1a2b.js", max_bytes=10**7, accept="*/*", allow_http_error=False, with_status=True)
+    assert first == second == (body, "https://store.example/assets/app-1a2b.js", "application/javascript", 200) and len(calls) == 1
+
+
+def test_a_page_that_needs_a_browser_is_rendered_by_the_relay_when_the_host_is_unreachable(monkeypatch, tmp_path):
+    import base64
+    from app import studio_url, public_page_browser as ppb
+    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://relay.example/api/index")
+    monkeypatch.setenv("SOCIAL_RELAY_SECRET", SECRET)
+    monkeypatch.setattr(studio_url, "_public_url", lambda url: url)
+    studio_url._DIRECT_FAILED["store.example"] = __import__("time").monotonic() + 100
+    monkeypatch.setattr(ppb, "render_page", lambda *a, **k: pytest.fail("the local browser must not wait for an unreachable host"))
+    assert ppb.relay_render_url() == "https://relay.example/api/render"
+    sent = {}
+
+    class Client:
+        def __init__(self, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, json, headers):
+            sent.update(url=url, json=json, headers=headers)
+            return types.SimpleNamespace(status_code=200, json=lambda: {"title": "Product", "content": "Name\nPrice", "description": "d",
+                                         "images": [{"url": "https://store.example/a.jpg", "alt": "a"}, {"url": ""}],
+                                         "screenshots": [{"y": 0, "full_page": True, "body": base64.b64encode(b"jpegbytes").decode()}]})
+    import httpx
+    monkeypatch.setattr(httpx, "Client", Client)
+    result = studio_url._render("https://store.example/p/1", tmp_path)
+    assert sent["url"] == "https://relay.example/api/render" and sent["headers"]["x-relay-secret"] == SECRET
+    assert result["title"] == "Product" and result["images"] == [{"url": "https://store.example/a.jpg", "alt": "a"}]
+    assert Path(result["screenshots"][0]["file"]).read_bytes() == b"jpegbytes" and result["screenshots"][0]["full_page"] is True
+
+
+def test_a_local_browser_failure_falls_back_to_the_relay_browser(monkeypatch, tmp_path):
+    from app import studio_url, public_page_browser as ppb
+    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://relay.example/api/index")
+    monkeypatch.setenv("SOCIAL_RELAY_SECRET", SECRET)
+    studio_url._DIRECT_FAILED.clear()
+    monkeypatch.setattr(ppb, "render_page", lambda *a, **k: (_ for _ in ()).throw(ValueError("page.goto: Timeout")))
+    monkeypatch.setattr(ppb, "render_page_via_relay", lambda url, out: {"title": "from relay", "content": "", "images": [], "screenshots": []})
+    assert studio_url._render("https://store.example/p", tmp_path)["title"] == "from relay"
+    monkeypatch.delenv("SOCIAL_RELAY_URL")
+    with pytest.raises(ValueError):
+        studio_url._render("https://store.example/p", tmp_path)

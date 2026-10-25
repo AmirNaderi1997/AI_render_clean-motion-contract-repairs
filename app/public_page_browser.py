@@ -36,7 +36,10 @@ def render_page(url: str, output: Path) -> dict:
             child.stdin.write(json.dumps(value)+'\n');child.stdin.flush()
         except (BrokenPipeError,OSError):
             pass  # Read the queued browser error/result rather than hiding it behind EPIPE.
-    deadline=time.monotonic()+45
+    from .studio_url import _relay_configured
+    # Through the relay every file is slower (Iran to Vercel and back): the same pages need more time to settle.
+    relayed=_relay_configured()
+    deadline=time.monotonic()+(100 if relayed else 45)
     reads=total=0
     pool=ThreadPoolExecutor(max_workers=6)
     def fetch_resource(request):
@@ -49,7 +52,7 @@ def render_page(url: str, output: Path) -> dict:
             messages.put((request['id'],raw,kind,status))
         except (OSError,ValueError):messages.put((request['id'],None,None,None))
     try:
-        write({'config':{'root':str(root),'url':url,'executable':executable}})
+        write({'config':{'root':str(root),'url':url,'executable':executable,'goto_ms':70000 if relayed else 25000,'settle_ms':30000 if relayed else 10000}})
         while time.monotonic()<deadline:
             try: line=messages.get(timeout=max(.1,deadline-time.monotonic()))
             except queue.Empty: break
@@ -87,3 +90,38 @@ def render_page(url: str, output: Path) -> dict:
         try:child.stdin.close()
         except OSError:pass
         child.stdout.close()
+
+
+def relay_render_url() -> str:
+    base = os.environ.get("SOCIAL_RELAY_URL", "").rstrip("/")
+    return (base[: -len("/api/index")] if base.endswith("/api/index") else base[: -len("/api")] if base.endswith("/api") else base) + "/api/render"
+
+
+def render_page_via_relay(url: str, output: Path) -> dict:
+    """The page is rendered by a browser on the relay (outside this network); only the text, pictures and screenshot come back.
+    Same result shape as ``render_page``."""
+    import httpx
+    from .studio_url import _public_url
+    url = _public_url(url)
+    try:
+        with httpx.Client(timeout=httpx.Timeout(150, connect=10)) as client:
+            response = client.post(relay_render_url(), json={"url": url}, headers={"x-relay-secret": os.environ["SOCIAL_RELAY_SECRET"]})
+    except httpx.HTTPError as exc:
+        raise ValueError(f"The relay browser was unreachable ({type(exc).__name__})") from exc
+    if response.status_code != 200:
+        try: detail = response.json().get("message") or response.json().get("error")
+        except ValueError: detail = ""
+        raise ValueError(f"The relay browser could not render the page (HTTP {response.status_code}{': ' + str(detail)[:160] if detail else ''})")
+    data = response.json()
+    output.mkdir(parents=True, exist_ok=True)
+    screens = []
+    for i, item in enumerate((data.get("screenshots") or [])[:3]):
+        raw = base64.b64decode(item["body"], validate=True)
+        if len(raw) > 12 * 1024 * 1024:
+            raise ValueError("Full-page screenshot is too large")
+        path = output / f"page-full-{i + 1}.jpg"
+        path.write_bytes(raw)
+        screens.append({"file": str(path), "scroll_y": item.get("y", 0), "full_page": bool(item.get("full_page"))})
+    return {"title": str(data.get("title") or ""), "content": str(data.get("content") or "")[:24000],
+            "images": [{"url": str(i.get("url") or ""), "alt": str(i.get("alt") or "")} for i in (data.get("images") or [])[:40] if i.get("url")],
+            "description": str(data.get("description") or ""), "screenshots": screens, "url": url}

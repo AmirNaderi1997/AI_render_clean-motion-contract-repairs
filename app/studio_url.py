@@ -5,6 +5,7 @@ requests all pass through this public-address/redirect-validated fetcher.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import http.client
 import ipaddress
 import json
@@ -53,15 +54,38 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 _DIRECT_FAILED: dict[str, float] = {}
+DIRECT_WAIT_S = 4.0
+_DIRECT_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="direct-fetch")
 
 
 def _relay_configured() -> bool:
     return bool(os.environ.get("SOCIAL_RELAY_URL") and len(os.environ.get("SOCIAL_RELAY_SECRET", "")) >= 32)
 
 
+_STATIC_TTL_S = 7 * 24 * 3600
+_STATIC_KINDS = {"application/javascript", "text/javascript", "text/css", "font/woff2", "font/woff", "application/font-woff2"}
+
+
+def _static_cache_path(url: str) -> Path:
+    from app.config import settings
+    import hashlib
+    return Path(settings.JOBS_DIR) / "relay_cache" / (hashlib.sha256(url.encode()).hexdigest() + ".bin")
+
+
 def _relay_fetch(url: str, *, max_bytes: int, accept: str, allow_http_error: bool, with_status: bool):
-    """The Vercel relay fetches the page from outside the blocked network. Same limits, same result shape as the direct fetch."""
+    """The Vercel relay fetches the page from outside the blocked network. Same limits, same result shape as the direct fetch.
+    The link back from the relay is slow (a 2 MB script takes half a minute), so scripts, styles and fonts are kept for a week:
+    a site's bundle is named after its content, and only its first reading pays for it."""
     import httpx
+    cached = _static_cache_path(url)
+    try:
+        if cached.is_file() and time.time() - cached.stat().st_mtime < _STATIC_TTL_S:
+            meta, _, body = cached.read_bytes().partition(b"\n")
+            kind, final = json.loads(meta)
+            result = (body, final, kind, 200)
+            return result if with_status else result[:3]
+    except (OSError, ValueError):
+        pass
     with httpx.Client(timeout=httpx.Timeout(45, connect=10)) as client:
         response = client.post(os.environ["SOCIAL_RELAY_URL"], json={"url": url, "mode": "page"},
                                headers={"x-relay-secret": os.environ["SOCIAL_RELAY_SECRET"], "x-relay-accept": accept})
@@ -75,6 +99,14 @@ def _relay_fetch(url: str, *, max_bytes: int, accept: str, allow_http_error: boo
         raise ValueError(f"The page returned HTTP {status}")
     final = urllib.parse.unquote(response.headers.get("x-final-url") or url)
     content_type = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if status == 200 and content_type in _STATIC_KINDS and len(data) > 20_000:
+        try:
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            temporary = cached.with_suffix(".tmp")
+            temporary.write_bytes(json.dumps([content_type, final]).encode() + b"\n" + data)
+            temporary.replace(cached)
+        except OSError:
+            pass
     return (data, final, content_type, status) if with_status else (data, final, content_type)
 
 
@@ -87,12 +119,28 @@ def _fetch(url: str, *, max_bytes: int, accept: str,
     host = urllib.parse.urlsplit(_public_url(url)).hostname or ""
     if time.monotonic() < _DIRECT_FAILED.get(host, 0):          # this host just failed directly: do not wait for it again for every image and script
         return _relay_fetch(url, max_bytes=max_bytes, accept=accept, allow_http_error=allow_http_error, with_status=with_status)
+    # A host this network half-reaches answers slowly rather than failing: give the direct attempt a hard wall-clock limit.
+    attempt = _DIRECT_POOL.submit(_fetch_direct, url, max_bytes=max_bytes, accept=accept, headers=headers, timeout=min(timeout, 8),
+                                  allow_http_error=allow_http_error, with_status=with_status)
     try:
-        return _fetch_direct(url, max_bytes=max_bytes, accept=accept, headers=headers, timeout=min(timeout, 8),
-                             allow_http_error=allow_http_error, with_status=with_status)
-    except (urllib.error.URLError, OSError, http.client.HTTPException, TimeoutError):
+        return attempt.result(timeout=DIRECT_WAIT_S)
+    except (urllib.error.URLError, OSError, http.client.HTTPException, TimeoutError, concurrent.futures.TimeoutError):
         _DIRECT_FAILED[host] = time.monotonic() + 300
         return _relay_fetch(url, max_bytes=max_bytes, accept=accept, allow_http_error=allow_http_error, with_status=with_status)
+
+
+def _render(url: str, output: Path) -> dict:
+    """Render a page that needs a browser. A host this network cannot reach (or a local browser that failed) is rendered by the relay instead."""
+    from .public_page_browser import render_page, render_page_via_relay
+    if not _relay_configured():
+        return render_page(url, output)
+    host = urllib.parse.urlsplit(url).hostname or ""
+    if time.monotonic() < _DIRECT_FAILED.get(host, 0):
+        return render_page_via_relay(url, output)
+    try:
+        return render_page(url, output)
+    except (OSError, ValueError):
+        return render_page_via_relay(url, output)
 
 
 def _fetch_direct(url: str, *, max_bytes: int, accept: str,
@@ -304,9 +352,8 @@ def inspect_page(url: str, output_dir: Path) -> dict:
     screenshots = []
     browser_error = None
     if sum(len(t) for t in parser.text) < 80 and not _structured_products(parser.structured):
-        from .public_page_browser import render_page
         try:
-            rendered = render_page(base, output_dir / 'page_screenshots')
+            rendered = _render(base, output_dir / 'page_screenshots')
             screenshots = rendered.get('screenshots', [])
             parser.title = rendered.get('title') or parser.title
             parser.text.extend(line.strip() for line in rendered.get('content', '').splitlines() if len(line.strip()) >= 2)
