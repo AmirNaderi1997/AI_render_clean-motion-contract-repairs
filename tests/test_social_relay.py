@@ -254,3 +254,75 @@ def test_the_node_binary_from_the_wheel_is_found_and_made_executable(monkeypatch
     monkeypatch.setattr(relay.Path, "chmod", lambda self, mode: None)
     monkeypatch.setattr(relay.Path, "is_file", lambda self: self.name == "node" and "nodejs_wheel" in str(self))
     assert relay._node() == "/tmp/node-runtime" and copies and copies[0][1] == "/tmp/node-runtime"
+
+
+class _Upstream:
+    def __init__(self, body=b"<html>ok</html>", status=200, ctype="text/html; charset=utf-8", headers=None):
+        self.status, self.code, self.body = status, status, body
+        self.headers = types.SimpleNamespace(get=lambda k, d=None: {"Content-Type": ctype, **(headers or {})}.get(k, d))
+    def read(self, n=-1): return self.body[:n]
+
+
+def test_page_mode_needs_the_secret_and_a_public_address(env, monkeypatch):
+    assert env.post("/api/index", json={"url": "https://store.example/p", "mode": "page"}).status_code == 401
+    monkeypatch.setattr(relay, "_public_host", lambda url: False)
+    assert env.post("/api/index", json={"url": "http://10.0.0.1/", "mode": "page"}, headers=HEADERS).status_code == 403
+
+
+def test_page_mode_returns_the_page_with_its_final_address_and_status(env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(relay, "_public_host", lambda url: seen.append(url) or True)
+
+    class Opener:
+        calls = 0
+        def open(self, request, timeout=0):
+            Opener.calls += 1
+            if Opener.calls == 1:
+                raise relay.urllib.error.HTTPError(request.full_url, 302, "found", types.SimpleNamespace(get=lambda k, d=None: "/final" if k == "Location" else d), None)
+            return _Upstream(b"<h1>Hello</h1>")
+    monkeypatch.setattr(relay.urllib.request, "build_opener", lambda *a: Opener())
+    response = env.post("/api/index", json={"url": "https://store.example/start", "mode": "page"}, headers=HEADERS)
+    assert response.status_code == 200 and response.content == b"<h1>Hello</h1>"
+    assert response.headers["x-final-url"] == "https://store.example/final" and response.headers["x-upstream-status"] == "200"
+    assert seen == ["https://store.example/start", "https://store.example/final"]          # every hop was checked
+
+
+def test_the_editor_falls_back_to_the_relay_when_its_own_network_cannot_reach_the_host(monkeypatch):
+    from app import studio_url
+    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://relay.example/api/index")
+    monkeypatch.setenv("SOCIAL_RELAY_SECRET", SECRET)
+    monkeypatch.setattr(studio_url, "_public_url", lambda url: url)
+    studio_url._DIRECT_FAILED.clear()
+    import http.client
+
+    def direct(*a, **k): raise http.client.RemoteDisconnected("closed")
+    monkeypatch.setattr(studio_url, "_fetch_direct", direct)
+    sent = {}
+
+    class Client:
+        def __init__(self, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, json, headers):
+            sent.update(url=url, json=json, headers=headers)
+            return types.SimpleNamespace(status_code=200, content=b"<html>page</html>", headers={"x-upstream-status": "200", "x-final-url": "https://store.example/p", "content-type": "text/html; charset=utf-8"})
+    import httpx
+    monkeypatch.setattr(httpx, "Client", Client)
+    data, final, ctype = studio_url._fetch("https://store.example/p", max_bytes=1000, accept="text/html")
+    assert (data, final, ctype) == (b"<html>page</html>", "https://store.example/p", "text/html")
+    assert sent["json"] == {"url": "https://store.example/p", "mode": "page"} and sent["headers"]["x-relay-secret"] == SECRET
+    calls = []
+    monkeypatch.setattr(studio_url, "_fetch_direct", lambda *a, **k: calls.append(1))
+    studio_url._fetch("https://store.example/img.png", max_bytes=1000, accept="image/*")
+    assert calls == []                                                                           # the host just failed: straight to the relay
+
+
+def test_without_a_relay_the_direct_error_is_kept(monkeypatch):
+    from app import studio_url
+    monkeypatch.delenv("SOCIAL_RELAY_URL", raising=False)
+    import http.client
+
+    def direct(*a, **k): raise http.client.RemoteDisconnected("closed")
+    monkeypatch.setattr(studio_url, "_fetch_direct", direct)
+    with pytest.raises(http.client.RemoteDisconnected):
+        studio_url._fetch("https://store.example/p", max_bytes=1000, accept="text/html")

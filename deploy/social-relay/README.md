@@ -65,3 +65,11 @@ The provider is behind Cloudflare, which refuses Python's default User-Agent; th
 - Without a working login or fallback the editor says so and asks the user to upload the file; it never pretends the reference was followed.
 
 Update yt-dlp (sites change often): bump `yt-dlp` in `requirements.txt` and redeploy.
+
+
+## Page fetch (fallback for the editor's page reader)
+
+`POST /api/index` with `{"url": "https://...", "mode": "page"}` and the same `x-relay-secret` header returns that public page or file
+(any public host, redirects checked hop by hop, up to 12 MB). The editor uses it automatically when its own network cannot reach a host
+(connection reset or timeout) and remembers the failing host for five minutes. The headers `x-final-url` and `x-upstream-status` carry the
+final address and the status. Redeploy the relay after updating (`vercel deploy --prod` in this folder); no new environment variable is needed.
