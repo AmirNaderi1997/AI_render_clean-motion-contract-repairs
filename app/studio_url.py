@@ -129,6 +129,20 @@ def _fetch(url: str, *, max_bytes: int, accept: str,
         return _relay_fetch(url, max_bytes=max_bytes, accept=accept, allow_http_error=allow_http_error, with_status=with_status)
 
 
+def _render(url: str, output: Path) -> dict:
+    """Render a page that needs a browser. A host this network cannot reach (or a local browser that failed) is rendered by the relay instead."""
+    from .public_page_browser import render_page, render_page_via_relay
+    if not _relay_configured():
+        return render_page(url, output)
+    host = urllib.parse.urlsplit(url).hostname or ""
+    if time.monotonic() < _DIRECT_FAILED.get(host, 0):
+        return render_page_via_relay(url, output)
+    try:
+        return render_page(url, output)
+    except (OSError, ValueError):
+        return render_page_via_relay(url, output)
+
+
 def _fetch_direct(url: str, *, max_bytes: int, accept: str,
                   headers: dict[str, str] | None = None, timeout: float = 20, allow_http_error: bool = False, with_status: bool = False):
     # The python.org macOS runtime does not always inherit the system Keychain
@@ -338,9 +352,8 @@ def inspect_page(url: str, output_dir: Path) -> dict:
     screenshots = []
     browser_error = None
     if sum(len(t) for t in parser.text) < 80 and not _structured_products(parser.structured):
-        from .public_page_browser import render_page
         try:
-            rendered = render_page(base, output_dir / 'page_screenshots')
+            rendered = _render(base, output_dir / 'page_screenshots')
             screenshots = rendered.get('screenshots', [])
             parser.title = rendered.get('title') or parser.title
             parser.text.extend(line.strip() for line in rendered.get('content', '').splitlines() if len(line.strip()) >= 2)
