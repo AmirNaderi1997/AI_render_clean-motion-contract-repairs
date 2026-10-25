@@ -1249,6 +1249,13 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
 def _revise_talking(conversation_id: str, user_key: str, project: dict, job, text: str, *, render: bool = True) -> bool:
     """Flow F for talking projects: interpret the request into typed operations, apply only those, re-render once.
     Returns False when the creative layer is unavailable so the keyword path below still works."""
+    from app.studio_render_intent import is_plain_rerender
+    if render and is_plain_rerender(text):
+        result = resume_project(project['id'], user_key, retry_confirmed=False)
+        if result.get('status') != 'running':
+            raise ValueError('موتور، شروع رندر مجدد را تأیید نکرد.')
+        _assistant(conversation_id, user_key, 'درخواست رندر مجدد همان پروژه پذیرفته شد؛ فایل‌ها و برنامهٔ ذخیره‌شده استفاده می‌شوند.')
+        return True
     import creative
     from creative import llm as creative_llm, revise
     if not creative.enabled() or not creative_llm.configured():
@@ -1515,6 +1522,7 @@ def _planned_slots(job) -> list[dict] | None:
 def _plan_frames(job_dir: Path, video: Path, content: dict, sentences: list[dict]) -> dict:
     """Style previews on a real frame, one per concept and one per style; failures are skipped, not faked."""
     import hashlib
+    import subprocess
     from engine.style_frames import PREVIEW_VERSION, MockupUnavailable, render_mockup
     # The preview renderer's version is part of the cache key, so improved previews replace stale images.
     folder = job_dir / "plan_frames" / hashlib.sha256(
@@ -1543,11 +1551,11 @@ def _plan_frames(job_dir: Path, video: Path, content: dict, sentences: list[dict
             if not target.is_file():
                 render_mockup(video, target, style_id=style, at=at, hook=text, highlight=highlight, **common)
             return key, f"{folder.name}/{name}"
-        except (MockupUnavailable, OSError) as exc:
+        except (MockupUnavailable, OSError, subprocess.SubprocessError) as exc:
             log.warning("plan preview %s skipped: %s", key, str(exc)[:200])
             return key, None
 
-    with ThreadPoolExecutor(max_workers=4) as pool:   # each preview is one short ffmpeg run
+    with ThreadPoolExecutor(max_workers=1) as pool:
         return {key: frame for key, frame in pool.map(one, jobs) if frame}
 
 
