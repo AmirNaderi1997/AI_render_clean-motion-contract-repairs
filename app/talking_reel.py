@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+from creative.review import QualityReviewRequired
 
 log = logging.getLogger(__name__)
 
@@ -321,6 +322,10 @@ def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None, requ
             _analyze(job_dir, raw_video, style=style, request=request, concept=concept)
         except TaskCanceled:
             current = load(job_dir); current.update(status="canceled", stage="", message="Canceled by user"); save(job_dir, current)
+        except QualityReviewRequired as exc:
+            current = load(job_dir)
+            current.update(status="awaiting_confirmation", stage="quality review", message=str(exc)[:800], progress=100)
+            save(job_dir, current)
         except Exception as exc:
             log.exception("talking reel analysis failed for %s", job_dir.name)
             current = load(job_dir)
@@ -487,23 +492,25 @@ def _record_render_time(job_dir: Path, raw_video: Path, seconds: float) -> None:
 def _stage(job_dir: Path, stage: str, **extra) -> None:
     _checkpoint(job_dir)
     state = load(job_dir)
-    if state.get('stage') != stage and 'message' not in extra:
-        state['message'] = ''
+    if state.get("stage") != stage and "message" not in extra:
+        state["message"] = ""
     state.update(stage=stage, **extra)
     save(job_dir, state)
 
-def _render_reporter(job_dir: Path):
-    current = {'stage':'rendering','message':'','pct':0}
-    def report():
-        _stage(job_dir,current['stage'],message=current['message'],progress=45+int(current['pct']*.55))
-    def progress(pct):
-        current['pct']=max(current['pct'],min(100,max(0,pct)))
-        report()
-    def stage(code,detail):
-        current.update(stage=code,message=detail)
-        report()
-    return progress,stage
 
+def _render_reporter(job_dir: Path, ceiling: int = 55):
+    """Keep the engine's current substage when percentage callbacks arrive."""
+    current = {"stage": "rendering", "message": "", "pct": 0}
+    def report():
+        _stage(job_dir, current["stage"], message=current["message"],
+               progress=45 + int(current["pct"] * ceiling / 100))
+    def progress(pct):
+        current["pct"] = max(current["pct"], min(100, max(0, pct)))
+        report()
+    def stage(code, detail):
+        current.update(stage=code, message=detail)
+        report()
+    return progress, stage
 
 def pause(job_dir: Path) -> dict:
     key = str(job_dir)
@@ -580,7 +587,7 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
     from engine.talking_reel import get_style
 
     media = get_style("talking_1")
-    _stage(job_dir, "transcribing", progress=5)
+    _stage(job_dir, "loading transcript" if (job_dir / "transcript.json").is_file() else "transcribing", progress=5)
     transcript = transcript_for(job_dir, video)
 
     state = load(job_dir)
@@ -594,6 +601,7 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
             state["hook"] = decisions["hook"]
             state["hook_highlight"] = decisions["hook_highlight"]
         save(job_dir, state)
+    _stage(job_dir, "planning render", progress=35)
     planned = plan_render(job_dir, video)
     settings, plan = planned.settings, planned.plan
     _stage(job_dir, "rendering", progress=45)
@@ -982,7 +990,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
     brain_name, decisions_key, default_music = SPLIT_STYLES[style]
     brain = import_module(brain_name)
     media = get_style(style)
-    _stage(job_dir, "transcribing", progress=5)
+    _stage(job_dir, "loading transcript" if (job_dir / "transcript.json").is_file() else "transcribing", progress=5)
     transcript = transcript_for(job_dir, video)
     state = load(job_dir)
     decisions = state.get(decisions_key)
@@ -994,6 +1002,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         if regenerate or not state.get("hook2"):
             state["hook2"] = decisions["hook"]
         save(job_dir, state)
+    _stage(job_dir, "planning render", progress=35)
     planned = plan_render(job_dir, video)
     decisions, transcript, hyperframes = planned.decisions, planned.transcript, planned.hyperframes
     render_settings, visual_plan, plan = planned.settings, planned.visual_plan, planned.plan
@@ -1001,10 +1010,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
     out = _next_output(job_dir)
     state = load(job_dir)
 
-    def progress(pct: int) -> None:
-        ceiling = 30 if hyperframes else 55
-        _stage(job_dir, "rendering rough cut" if hyperframes else "rendering",
-               progress=45 + int(pct * ceiling / 100))
+    progress, render_stage = _render_reporter(job_dir, 30 if hyperframes else 55)
 
     # The talking_1 default bed does not suit every style; an explicit choice wins.
     music = state.get("music")
@@ -1012,7 +1018,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         music = default_music
     rough = job_dir / "talking_reel_work" / "hyperframes_base.mp4" if hyperframes else out
     render_options=dict(work_dir=job_dir / "talking_reel_work",music=resolve_music(music),
-        cta=state.get("cta") or "",render_settings=render_settings,logo_path=custom_logo(job_dir),on_progress=progress)
+        cta=state.get("cta") or "",render_settings=render_settings,logo_path=custom_logo(job_dir),on_progress=progress,on_stage=render_stage)
     if hyperframes:
         from engine.native_checkpoint import render_cached
         reused=render_cached(media.render,video,plan,rough,options=render_options,

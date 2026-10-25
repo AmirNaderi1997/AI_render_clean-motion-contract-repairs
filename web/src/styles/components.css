@@ -158,8 +158,8 @@ textarea.input { resize: vertical; line-height: 1.5; }
 }
 .sheet-overlay { position: fixed; inset: 0; z-index: 300; background: var(--scrim); animation: fade-in var(--dur) var(--ease); }
 .sheet {
-  position: fixed; inset-inline: 0; inset-block-end: 0; z-index: 301;
-  max-height: calc(var(--app-h) - 24px); display: flex; flex-direction: column;
+  position: fixed; inset-inline: 0; inset-block-end: var(--sheet-keyboard-inset, 0px); z-index: 301;
+  max-height: calc(var(--sheet-visible-height, var(--app-h)) - 24px); display: flex; flex-direction: column;
   background: var(--elevated); border: 1px solid var(--border); border-bottom: 0;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0; box-shadow: var(--shadow-lg);
   padding-bottom: var(--safe-bottom);
@@ -170,9 +170,9 @@ textarea.input { resize: vertical; line-height: 1.5; }
 .sheet[data-closing] { transform: translateY(100%); }
 .sheet-handle { flex: none; display: grid; place-items: center; height: 28px; cursor: grab; }
 .sheet-handle::before { content: ""; width: 36px; height: 4px; border-radius: 4px; background: var(--border); }
-.sheet-body { overflow: auto; overscroll-behavior: contain; padding: 0 var(--space-5) var(--space-5); touch-action: pan-y; }
+.sheet-body { min-height: 0; overflow: auto; overscroll-behavior: contain; scroll-padding-block: 16px; padding: 0 var(--space-5) var(--space-5); touch-action: pan-y; }
 @media (min-width: 701px) {
-  .sheet { inset-inline: 0; margin-inline: auto; width: min(480px, 100%); inset-block-end: auto; inset-block-start: 50%; transform: translateY(-50%); border-radius: var(--radius-xl); border-bottom: 1px solid var(--border); animation: pop-in var(--dur) var(--ease); }
+  .sheet { inset-inline: 0; margin-inline: auto; width: min(480px, 100%); inset-block-end: auto; inset-block-start: var(--sheet-visible-center, 50%); transform: translateY(-50%); border-radius: var(--radius-xl); border-bottom: 1px solid var(--border); animation: pop-in var(--dur) var(--ease); }
   .sheet-handle { display: none; }
 }
 

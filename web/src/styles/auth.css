@@ -17,3 +17,7 @@
 .auth-sheet { display: grid; gap: var(--space-5); padding-top: var(--space-2); }
 .auth-sheet .auth-head { text-align: start; }
 .auth-sheet .auth-head h2 { font-size: 22px; }
+/* Prevent iOS input auto-zoom without disabling the user's pinch zoom. */
+@media (pointer: coarse) {
+  .auth-form .input { font-size: 16px; }
+}

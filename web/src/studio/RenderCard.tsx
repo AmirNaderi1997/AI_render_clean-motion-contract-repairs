@@ -28,14 +28,14 @@ export function RenderCard({ project, sourceUrl, startedAt, compact, onOpenPrevi
   onOpenPreview: () => void; onEditAgain: () => void; retryHref?: string;
 }) {
   const view = renderView(project);
-  const output = view.output ? `${api.studioOutputUrl(project.id)}?version=${encodeURIComponent(view.output)}` : undefined;
+  const output = view.output ? `${api.studioOutputUrl(project.id)}?candidate=${Boolean(view.review)}&version=${encodeURIComponent(view.output)}` : undefined;
   const busy = view.phase === "queued" || view.phase === "rendering" || view.phase === "finalizing";
   const elapsed = useElapsed(startedAt, busy);
   const version = String(view.output || "").match(/\/v(\d+)(?:_preview)?\.mp4(?:$|\?)/)?.[1] || project.current_version;
   const percent = view.progress;
-  const age = useProgressAge(busy, percent, view.stageLabel);
+  const age = useProgressAge(busy, percent, view.stageLabel, project.state?.last_observed_at || project.updated_at);
   const shownPercent = age >= 30 ? undefined : percent;
-  const title = view.phase === "done" ? "Your video is ready" : view.phase === "failed" ? "Rendering didn’t finish" : view.phase === "finalizing" ? "Finalizing your video" : "Rendering your video";
+  const title = view.review ? "ویدیو آمادهٔ بررسی شماست" : view.phase === "done" ? "Your video is ready" : view.phase === "failed" ? "Rendering didn’t finish" : view.phase === "finalizing" ? "Finalizing your video" : "Rendering your video";
 
   return <article className="render-card" data-phase={view.phase} data-compact={compact || undefined} aria-label={title}>
     <header className="rc-head">
@@ -58,11 +58,11 @@ export function RenderCard({ project, sourceUrl, startedAt, compact, onOpenPrevi
     {busy ? <div className="rc-progress">
       <div className="meter" data-indeterminate={typeof shownPercent === "number" ? undefined : ""} style={{ ["--value" as string]: `${shownPercent ?? 0}%` }} role="progressbar" aria-label="Render progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={shownPercent}><span/></div>
       <div className="rc-meta"><span>{view.stageLabel === title ? "" : view.stageLabel}</span>{typeof percent === "number" ? <span>{age >= 30 ? 'آخرین گزارش: ' : ''}{percent}%</span> : null}</div>
-      <ProgressNotice seconds={age}/>
+      <ProgressNotice project={project}/>
     </div> : null}
 
     {view.phase === "done" && output ? <div className="rc-actions">
-      <button className="btn btn-sm" onClick={() => void api.downloadAuthenticated(api.studioOutputUrl(project.id), `${project.title || "video"}.mp4`)}><Icon name="download" size={15}/>Download</button>
+      <button className="btn btn-sm" onClick={() => void api.downloadAuthenticated(output, `${project.title || "video"}.mp4`)}><Icon name="download" size={15}/>Download</button>
       <button className="btn btn-sm btn-secondary" onClick={onOpenPreview}><Icon name="eye" size={15}/>Open in Preview</button>
       <button className="btn btn-sm btn-ghost" onClick={onEditAgain}><Icon name="edit" size={15}/>Edit again</button>
     </div> : null}

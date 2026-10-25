@@ -33,13 +33,16 @@ export function useVisualViewportHeight() {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         root.style.setProperty("--app-h", `${Math.round(vv.height)}px`);
-        if (vv.offsetTop > 0) window.scrollTo(0, 0);
+        const editing = document.activeElement?.matches('input:not([type="range"]):not([type="checkbox"]), textarea, [contenteditable="true"]');
+        root.toggleAttribute("data-keyboard-open", Boolean(editing && window.innerHeight - vv.height > 120));
       });
     };
     update();
     vv.addEventListener("resize", update);
     vv.addEventListener("scroll", update);
-    return () => { vv.removeEventListener("resize", update); vv.removeEventListener("scroll", update); root.style.removeProperty("--app-h"); cancelAnimationFrame(frame); };
+    document.addEventListener("focusin", update);
+    document.addEventListener("focusout", update);
+    return () => { vv.removeEventListener("resize", update); vv.removeEventListener("scroll", update); document.removeEventListener("focusin", update); document.removeEventListener("focusout", update); root.removeAttribute("data-keyboard-open"); root.style.removeProperty("--app-h"); cancelAnimationFrame(frame); };
   }, []);
 }
 

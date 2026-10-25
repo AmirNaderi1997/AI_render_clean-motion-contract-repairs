@@ -1,4 +1,9 @@
 import React from "react";
+import { getUser } from "./auth";
+import { processingPreferences } from "./local/preferences";
+import { verifyLocalBackend } from "./local/backend";
+const ProjectRender = React.lazy(() => import("./local/ProjectRender").then(m => ({default:m.ProjectRender})));
+import { saveAsset, listAssets, readAsset, removeAsset, saveDraft, loadDraft, mediaMetadata } from "./local/storage";
 import { NavLink, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, StudioConversation, StudioEvent } from "./api";
 import { useAuth } from "./auth/AuthContext";
@@ -62,6 +67,7 @@ export default function Studio() {
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const cursorRef = React.useRef(0);
   const filesRef = React.useRef<PendingFile[]>([]);
+  const removedFilesRef = React.useRef(new Set<string>());
   const voiceEnabledRef = React.useRef(false);
   const legacyOpenRef = React.useRef("");
   const refreshTimerRef = React.useRef<number | null>(null);
@@ -71,6 +77,30 @@ export default function Studio() {
   // Conversation created only so attachments have somewhere to upload; we don't navigate until the user sends.
   const draftIdRef = React.useRef<string | null>(null);
   const activeId = conversationId || null;
+  const localOwner = getUser()?.id || "guest";
+  const localProject = activeId || "new";
+  const draftKey = `${localOwner}:${localProject}`;
+  const previousDraftKey = React.useRef(draftKey);
+  const [loadedDraftKey, setLoadedDraftKey] = React.useState("");
+  React.useEffect(() => {
+    let live = true;
+    if (previousDraftKey.current !== draftKey) {
+      setText("");
+      setFiles(previous => { previous.forEach(file=>URL.revokeObjectURL(file.url)); return []; });
+    }
+    previousDraftKey.current = draftKey;
+    void loadDraft(draftKey).then(value => { if (live && value) setText(previous => previous || value); }).catch(() => {}).finally(() => { if (live) setLoadedDraftKey(draftKey); });
+    void listAssets(localOwner, localProject).then(async records => {
+      for (const record of records) {
+        try {
+          const file = await readAsset(record);
+          if (live) setFiles(previous => previous.some(f => f.localId === record.id) ? previous : [...previous, { key: record.id, localId: record.id, file, progress: -1, url: URL.createObjectURL(file) }]);
+        } catch { if (live) setError("Some local media was removed by the browser; select the original again."); }
+      }
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [draftKey]);
+  React.useEffect(() => { if (loadedDraftKey !== draftKey) return; const timer = setTimeout(() => { void saveDraft(draftKey, text).catch(() => {}); }, 400); return () => clearTimeout(timer); }, [draftKey, text, loadedDraftKey]);
   const hasSpeech = typeof window !== "undefined" && Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
 
   React.useEffect(() => { voiceEnabledRef.current = Boolean(conversation?.status_voice_enabled); }, [conversation?.status_voice_enabled]);
@@ -105,6 +135,17 @@ export default function Studio() {
     if (!activeId) return;
     const controller = new AbortController(); let stopped = false;
     const connect = async () => {
+      try {
+        while (!stopped) {
+          const history = await api.studioEventHistory(activeId, cursorRef.current, controller.signal);
+          if (stopped) return;
+          if (history.length) {
+            cursorRef.current = Math.max(cursorRef.current, ...history.map(event => event.seq));
+            setEvents(value => [...value, ...history.filter(event => !value.some(item => item.seq === event.seq))]);
+          }
+          if (history.length < 500) break;
+        }
+      } catch { /* Older servers can still replay through the existing SSE cursor. */ }
       while (!stopped) {
         try {
           await api.streamStudioEvents(activeId, cursorRef.current, event => {
@@ -174,7 +215,7 @@ export default function Studio() {
     setWsTab("edit");
     if (layout === "desktop") { setDesktopOpen(true); lsSet("editorgpt.workspace", "open"); }
   }, [awaitingPlan?.id, layout]);
-  const qualityBlocked = current?.engine === 'talking' && current?.status === 'error' && Boolean(current?.state?.candidate_output);
+  const qualityBlocked = current?.engine === 'talking' && ['error','awaiting_confirmation'].includes(current?.status || '') && Boolean(current?.state?.candidate_output) && !current?.state?.last_observed?.output;
   const acceptOutput = async () => {
     if (!current || resuming) return;
     setResuming(true); setError('');
@@ -239,17 +280,28 @@ export default function Studio() {
     }
     if (autoLogo) logoUploadRef.current = true;
     setError("");
-    let id: string;
-    try { id = await ensureConversation("New media edit", false); } catch (e) { logoUploadRef.current = false; setError(friendlyError(e, "start the conversation")); return; }
     for (const file of list.slice(0, 12)) {
       const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const entry: PendingFile = { key, file, progress: 0, url: URL.createObjectURL(file) };
+      const entry: PendingFile = { key, file, progress: processingPreferences().mode === "online" ? 0 : -1, url: URL.createObjectURL(file) };
       setFiles(value => [...value, entry]);
+      if (processingPreferences().mode !== "online") try {
+        const saved = await saveAsset(file, localOwner, localProject);
+        entry.localId = saved.id;
+        if (removedFilesRef.current.has(key)) { await removeAsset(saved.id, localOwner); continue; }
+        setFiles(value => value.map(item => item.key === key ? { ...item, localId: saved.id } : item));
+      } catch (e) { setFiles(value => value.map(item => item.key === key ? { ...item, localNote: `Session only: ${String(e)}` } : item)); }
+      void mediaMetadata(file).then(meta => setFiles(value => value.map(item => item.key === key ? { ...item, localNote: `${meta.width}×${meta.height}${Number.isFinite(meta.duration) && meta.duration ? ` · ${Math.round(meta.duration)}s` : ""}` } : item))).catch(() => {});
+      const online = processingPreferences().mode === "online";
+      if (!autoLogo && !online) continue;
       try {
+        if (autoLogo && !online && !confirm("Upload this logo to the current project and continue?")) continue;
+        const id = await ensureConversation("New media edit", false);
+        setFiles(value => value.map(item => item.key === key ? {...item,progress:0} : item));
         const attachment = await api.uploadStudioAttachment(id, file, progress => setFiles(value => value.map(item => item.key === key ? { ...item, progress } : item)));
         setFiles(value => value.map(item => item.key === key ? { ...item, progress: 100, attachmentId: attachment.id } : item));
         if (autoLogo) {
           await send(undefined, { text: "attached", ids: [attachment.id] });
+          if (entry.localId) void removeAsset(entry.localId, localOwner).catch(() => {});
           setFiles(value => value.filter(item => item.key !== key));
           URL.revokeObjectURL(entry.url);
         }
@@ -257,15 +309,42 @@ export default function Studio() {
     }
     if (autoLogo) logoUploadRef.current = false;
   }
-  function removeFile(file: PendingFile) { setFiles(value => value.filter(item => item.key !== file.key)); URL.revokeObjectURL(file.url); }
+  function removeFile(file: PendingFile) { removedFilesRef.current.add(file.key); setFiles(value => value.filter(item => item.key !== file.key)); URL.revokeObjectURL(file.url); if (file.localId) void removeAsset(file.localId, localOwner).catch(() => {}); }
 
   async function send(override?: string, resend?: { text: string; ids: string[] }) {
     if (!authenticated) { requireLogin(); return; }
     const source = resend?.text ?? override ?? text;
-    const ids = resend?.ids ?? files.map(item => item.attachmentId!).filter(Boolean);
-    const finalText = source.trim() || (ids.length ? (manualQuestion?.key === "logo_asset" ? "attached" : "این فایل را بررسی کن و برای تدوین آماده کن") : "");
+    const ids = resend?.ids ? [...resend.ids] : files.map(item => item.attachmentId!).filter(Boolean);
+    const finalText = source.trim() || (ids.length || files.length ? (manualQuestion?.key === "logo_asset" ? "attached" : "این فایل را بررسی کن و برای تدوین آماده کن") : "");
     if (!finalText || sending) return;
-    if (!resend && files.some(item => !item.attachmentId)) { setError("Please wait for the uploads to finish."); return; }
+    const processing = processingPreferences();
+    const deviceRender = processing.engine === "device" || (processing.mode === "device" && processing.engine === "auto");
+    if (deviceRender) {
+      try {
+        const capabilities = await api.projectRenderCapabilities();
+        if (!capabilities.device_render_hold) throw new Error("This backend needs an update before safe device rendering. Nothing has been uploaded.");
+      } catch (error) { setError(error instanceof Error ? error.message : String(error)); return; }
+    }
+    if (processing.mode === "lan" || processing.engine === "lan") {
+      try { await verifyLocalBackend(); }
+      catch (error) { setError(error instanceof Error ? error.message : String(error)); return; }
+    }
+    if (!resend && files.some(item => !item.attachmentId)) {
+      const pendingFiles = files.filter(item => !item.attachmentId);
+      const mb = Math.round(pendingFiles.reduce((sum, f) => sum + f.file.size, 0) / 1024**2);
+      const destination = processing.mode === "lan" || processing.engine === "lan" ? `your Mac’s EditorGPT backend (${location.origin}), not the EditorGPT cloud` : `this installation’s backend (${location.origin})`;
+      if (!confirm(`AI editing needs ${pendingFiles.length} file(s), ${mb} MB, transferred to ${destination}. AI providers may receive text, frames or audio required for analysis. Render choice is separate. Allow this transfer? Cancel keeps the originals on this device.`)) return;
+      setSending(true);
+      try {
+        const id = await ensureConversation(finalText.slice(0, 70), false);
+        for (const entry of pendingFiles) {
+          const attached = await api.uploadStudioAttachment(id, entry.file, progress => setFiles(value => value.map(item => item.key === entry.key ? { ...item, progress } : item)));
+          ids.push(attached.id);
+          setFiles(value => value.map(item => item.key === entry.key ? { ...item, attachmentId: attached.id, progress: 100 } : item));
+        }
+      } catch (e) { setError(friendlyError(e, "upload media")); setFiles(value => value.map(item => item.attachmentId ? item : { ...item, progress: -1 })); setSending(false); return; }
+      setSending(false);
+    }
     // Show the message and the processing state immediately.
     setError(""); setSending(true); setStuck(true);
     if (!resend) {
@@ -276,7 +355,10 @@ export default function Studio() {
     lastSendRef.current = { text: finalText, ids };
     try {
       const id = await ensureConversation(finalText.slice(0, 70));
-      await api.sendStudioMessage(id, finalText, ids, { execution_mode: conversation || !activeId ? (manual ? "manual" : "auto") : undefined, manual_question_id: manualQuestion?.id });
+      await api.sendStudioMessage(id, finalText, ids, { execution_mode: conversation || !activeId ? (manual ? "manual" : "auto") : undefined, manual_question_id: manualQuestion?.id,
+        render_target: deviceRender ? "browser" : "server" });
+      void saveDraft(draftKey, "").catch(() => {});
+      files.forEach(file => { removedFilesRef.current.add(file.key); if (file.localId) void removeAsset(file.localId, localOwner).catch(() => {}); });
       if (manualQuestion?.id && (finalText === 'approve' || (manualQuestion.key === 'logo_asset' && finalText === 'attached'))) setSubmittedQuestionId(manualQuestion.id);
       await refresh(id);
       setPending(null); setLocalFiles(list => { list.forEach(file => URL.revokeObjectURL(file.url)); return []; });
@@ -349,6 +431,7 @@ export default function Studio() {
       </header> : null}
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-inner">
+          {current ? <React.Suspense fallback={null}><ProjectRender key={current.id} project={current} onChanged={()=>void refresh()}/></React.Suspense> : null}
           {!conversation && !pending ? <div className="thread-loading" role="status" aria-label="Loading conversation"><span className="skeleton"/><span className="skeleton"/><span className="skeleton"/></div> : null}
           <Thread items={items} events={events} conversation={conversation} projects={projects} localFiles={localFiles} thinking={thinking} sourceUrl={sourceUrl} linkTitles={linkTitles} compactRender={layout === "desktop" && desktopOpen}
             onOpenPreview={id => openWorkspace("preview", id)} onEditAgain={editAgain}
@@ -385,8 +468,9 @@ export default function Studio() {
 
     {layout === "tablet" && overlayOpen ? <button className="ws-backdrop" onClick={() => setOverlayOpen(false)} aria-label="Close workspace" tabIndex={-1}/> : null}
     <Workspace conversation={conversation} project={current} projects={projects} onSelectProject={setSelectedProject} tab={wsTab} onTab={setWsTab}
-      sourceAttachment={sourceAttachment} onCancel={stop} onSaved={() => void refresh()} showTabs={layout !== "mobile"} onCollapse={layout === "mobile" ? undefined : closeWorkspace}
+      sourceAttachment={sourceAttachment} onCancel={stop} onSaved={() => refresh()} showTabs={layout !== "mobile"} onCollapse={layout === "mobile" ? undefined : closeWorkspace}
       panelRef={workspaceRef}
+      topbarEdit={layout === "mobile" && mobileView === "edit"}
       resizer={layout === "desktop" && wsVisible ? <Resizer panel={workspaceRef} edge="start" label="عرض پنل پیش‌نمایش" width={shownWorkspace}
         bounds={() => ({ min: WORKSPACE_BOUNDS.min, max: Math.min(WORKSPACE_BOUNDS.max, (studioRef.current?.clientWidth ?? 1400) - MIN_CHAT) })}
         onResize={setLiveWorkspace} onDragState={setResizingWorkspace} onCommit={value => { setWorkspaceWidth(value); setLiveWorkspace(null); }}/> : undefined}/>

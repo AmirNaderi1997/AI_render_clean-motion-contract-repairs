@@ -8,6 +8,21 @@ const msg = (id, role, s, content = "x") => ({ id, role, content, attachments: [
 const ev = (seq, type, s, data = {}) => ({ id: seq, seq, type, data, created_at: at(s) });
 const project = (state = {}, status = "running") => ({ id: "p1", conversation_id: "c", engine: "motion", title: "T", status, current_version: 1, state, created_at: at(0), updated_at: at(0) });
 
+test('reload keeps saved narration even when completion has no text', () => {
+  const messages=[msg(1,'assistant',2,'گزارش ذخیره‌شدهٔ موتور')];
+  const events=[ev(1,'assistant.response.delta',1,{response_id:'r',text:'گزارش'}),ev(2,'assistant.response.completed',2,{response_id:'r',message_id:1})];
+  const items=buildTimeline({messages,events,projects:[],processing:false});
+  assert.deepEqual(items.filter(i=>i.kind==='message').map(i=>i.content),['گزارش ذخیره‌شدهٔ موتور']);
+});
+
+test('legacy selection requests are neutral, not failures', () => {
+  const items=buildTimeline({messages:[msg(1,'assistant',2,'عملیات متوقف شد: یکی از گزینه‌های همین مرحله را انتخاب کنید.')],events:[ev(1,'tool.failed',1,{message:'یکی از گزینه‌های همین مرحله را انتخاب کنید.'})],projects:[],processing:false});
+  const activity=items.find(i=>i.kind==='activity');
+  assert.equal(activity.steps[0].status,'done');
+  assert.equal(activity.steps[0].label,'منتظر انتخاب شما');
+  assert.match(items.find(i=>i.kind==='message').content,/منتظر انتخاب شما/);
+});
+
 test('real model deltas update one bubble and reconcile with the saved message', () => {
   const events=[ev(1,'assistant.response.started',1,{response_id:'r1'}),
     ev(2,'assistant.response.delta',2,{response_id:'r1',text:'سلام'}),
@@ -25,6 +40,11 @@ test('legacy canned receipts are hidden without deleting other narration', () =>
     ev(2,'agent.narration',2,{narration_id:'real-step',message:'Actual engine update'})],projects:[],processing:false});
   assert.equal(items.length,1);
   assert.equal(items[0].content,'Actual engine update');
+});
+
+test('phase heartbeats do not flood chat messages', () => {
+  const items = buildTimeline({messages:[],events:[ev(1,'agent.narration',1,{narration_id:'phase:planning:15',message:'waiting'})],projects:[],processing:false});
+  assert.equal(items.filter(i=>i.kind==='message').length,0);
 });
 
 test('uploaded logo approval gate is actionable without waiting for a heartbeat', () => {
@@ -120,6 +140,12 @@ test("renderView is truthful about each phase", () => {
   assert.equal(renderView(project({ last_observed: { stage: "transcribing" } })).phase, "queued");
 });
 
+test('a rendered candidate needing QC review is not a render failure', () => {
+  const view=renderView(project({candidate_output:'exports/v1.mp4',creative_review:{status:'needs_attention',summary:'review'},last_observed:{status:'error'}},'error'));
+  assert.equal(view.phase,'done');assert.equal(view.review,true);
+  assert.equal(view.output,'exports/v1.mp4');
+});
+
 test("a finished project opened from history gets an inline render card", () => {
   const items = buildTimeline({ messages: [msg(1, "assistant", 1)], events: [], projects: [project({ last_observed: { output: "/api/x" } }, "done")], processing: false });
   assert.equal(items.at(-1).kind, "render");
@@ -132,8 +158,8 @@ test("processing flags", () => {
   assert.equal(isProcessing({ sending: false, messages: m, events: [], now: T0 + 10 * 60000 }), false);
   assert.equal(isProcessing({ sending: false, messages: m, events: [ev(1, "tool.failed", 2)], now: T0 + 5000 }), false);
   assert.equal(isProcessing({ sending: false, messages: [msg(1, "user", 0), msg(2, "assistant", 1)], events: [], now: T0 + 2000 }), false);
-  assert.equal(thinkingLabel([ev(1, "message.started", 1)], m), "Thinking");
-  assert.equal(thinkingLabel([], m), "Thinking");
+  assert.equal(thinkingLabel([ev(1, "message.started", 1)], m), "در حال بررسی…");
+  assert.equal(thinkingLabel([], m), "در حال بررسی…");
 });
 
 test("AI waiting updates share one operation and preserve a later attempt", () => {
@@ -148,7 +174,7 @@ test("AI waiting updates share one operation and preserve a later attempt", () =
   assert.equal(block.steps[0].events.length,3);
   assert.equal(block.steps[0].status,"done");
   assert.equal(block.steps[1].status,"active");
-  assert.equal(block.steps[1].label,"Exploring creative concepts");
+  assert.equal(block.steps[1].label,"بررسی ایده‌های تدوین");
 });
 
 test("object choices from the backend become labelled answers, never [object Object]", () => {
@@ -159,7 +185,7 @@ test("object choices from the backend become labelled answers, never [object Obj
 });
 
 test("timeouts get a plain-language summary", () => {
-  assert.match(friendlyFailure("LM API ReadTimeout"), /too long/);
+  assert.match(friendlyFailure("LM API ReadTimeout"), /مهلت/);
   assert.equal(friendlyFailure("some other failure"), "some other failure");
 });
 

@@ -15,6 +15,7 @@ from app import brand_profile, creative_plan
 from app import jobs as jobstore
 from app.studio_store import repo, run
 from app import studio_flags
+from app.studio_manual import SelectionRequired
 from app.studio_tools import execute, idempotency_key
 from brain.lm_gateway import conversation_scope
 
@@ -23,6 +24,11 @@ log = logging.getLogger(__name__)
 
 _BARE_LINK = re.compile(r"(?<![\w@/.:-])((?:[a-z0-9][a-z0-9-]*\.)+[a-z]{2,24}/[^\s<>\]\[\)\(،؛]+)", re.IGNORECASE)
 _LABELED_LINK = re.compile(r"(?:\burl|\blink|لینک|آدرس)[^\n:：]{0,24}[:：]\s*(?:\n\s*)?(\S[^\n]{0,160})", re.IGNORECASE)
+
+
+def _require_server_render(project: dict) -> None:
+    if project.get("state", {}).get("render_target") == "browser":
+        raise creative_plan.PlanError("رندر روی دستگاه انتخاب شده است؛ این موتور رندر مرورگری ندارد. برای حفظ تمام موشن‌ها و زیرنویس‌های برنامه، در کارت محل رندر، مک محلی یا سرور را صریحاً انتخاب کنید. رندر سرور خودکار شروع نشد.")
 
 
 def _urls(text: str) -> list[str]:
@@ -492,6 +498,7 @@ def _answer_manual_checkpoint(cid, user, project, text, question_id):
         run(repo.update_project(project['id'], user, state={**project['state'], 'manual_checkpoint': updated_checkpoint, 'manual_editing': False}))
         _emit(cid, 'question.required', kind='manual', question='برنامهٔ اصلاح‌شده را بررسی و تأیید کنید.')
         return True
+    _require_server_render(project)
     if not run(repo.claim_manual_checkpoint(project['id'], user, question_id)):
         raise ValueError('این مرحله قبلاً تأیید شده است؛ درخواست تکراری اجرا نشد.')
     _emit(cid, 'manual.approved', project_id=project['id'], question_id=question_id,
@@ -752,6 +759,9 @@ def _process_message(conversation_id: str, user_key: str, message_id: int | str,
             run(repo.update_project(pid, user_key, state={**project['state'], 'manual_mode': True}))
     except _Stopped:
         _emit(conversation_id, "message.stopped", stopped=["message"])
+    except SelectionRequired as exc:
+        _emit(conversation_id, "question.required", kind="manual", question=str(exc))
+        _assistant(conversation_id, user_key, str(exc))
     except Exception as exc:
         log.exception("Studio message failed")
         message = str(exc)[:500] or "عملیات انجام نشد"
@@ -1537,7 +1547,9 @@ def _talking_context(job) -> tuple[Path, dict, list[dict]]:
     from app import talking_reel
     video = job.dir / "raw" / job.raw_name
     status = talking_reel.public(talking_reel.load(job.dir))
-    sentences = talking_reel.transcript_for(job.dir, video)["sentences"]
+    cached = job.dir / "transcript.json"
+    transcript = json.loads(cached.read_text()) if cached.is_file() else talking_reel.transcript_for(job.dir, video)
+    sentences = transcript["sentences"]
     return video, status, sentences
 
 
@@ -1545,7 +1557,7 @@ def _planned_slots(job) -> list[dict] | None:
     """The picture slots the renderer will use (nothing is generated); None when the plan cannot be read."""
     from app import talking_reel
     try:
-        planned = talking_reel.plan_render(job.dir, job.dir / "raw" / job.raw_name, prepare_media=False)
+        planned = talking_reel.plan_render(job.dir, job.dir / "raw" / job.raw_name, prepare_media=False, apply_edits=False)
     except Exception as exc:
         log.warning("picture slots unavailable: %s", type(exc).__name__)
         return None
@@ -1564,6 +1576,13 @@ def _plan_frames(job_dir: Path, video: Path, content: dict, sentences: list[dict
     index = beats[0]["sentence"] if beats else min(len(sentences) - 1, max(0, len(sentences) // 3))
     line = sentences[index] if sentences else {"start": content["duration_s"] / 3, "end": content["duration_s"] / 3, "text": ""}
     at = (line["start"] + line["end"]) / 2
+    # Decode the real source once, not once per style (4K HEVC can exhaust a small worker).
+    folder.mkdir(parents=True, exist_ok=True)
+    still = folder / "source.jpg"
+    if not still.is_file():
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-threads", "1", "-ss", str(max(0, at)),
+                        "-i", str(video), "-vf", "scale=720:-2", "-frames:v", "1", "-threads", "1", "-y", str(still)],
+                       check=True, capture_output=True, timeout=20)
     hook = content["hook"]["text"]
     card = (content.get("pictures") or [{}])[0].get("title") or content["concept"]["name"] or hook
     brand = content["brand"]
@@ -1582,7 +1601,7 @@ def _plan_frames(job_dir: Path, video: Path, content: dict, sentences: list[dict
         target = folder / name
         try:
             if not target.is_file():
-                render_mockup(video, target, style_id=style, at=at, hook=text, highlight=highlight, **common)
+                render_mockup(video, target, style_id=style, at=at, hook=text, highlight=highlight, source_still=still, **common)
             return key, f"{folder.name}/{name}"
         except (MockupUnavailable, OSError, subprocess.SubprocessError) as exc:
             log.warning("plan preview %s skipped: %s", key, str(exc)[:200])
@@ -1590,6 +1609,28 @@ def _plan_frames(job_dir: Path, video: Path, content: dict, sentences: list[dict
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         return {key: frame for key, frame in pool.map(one, jobs) if frame}
+
+
+from concurrent.futures import ThreadPoolExecutor as _PreviewPool
+_preview_pool = _PreviewPool(max_workers=1, thread_name_prefix="plan-thumbnails")
+
+
+def _schedule_plan_frames(project: dict, user_key: str, job, video: Path, content: dict, sentences: list[dict], version_id: str) -> None:
+    """Optional thumbnails must never gate approval or keep a GET request open."""
+    def work():
+        import fcntl
+        lock_file = job.dir / ".plan-thumbnails.lock"
+        with lock_file.open("a") as lock:
+            try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError: return
+            try:
+                frames = _plan_frames(job.dir, video, content, sentences)
+                status = "ready" if frames else "unavailable"
+            except Exception as exc:
+                log.warning("Plan thumbnails unavailable project=%s error=%s; approval remains available", project["id"], type(exc).__name__)
+                frames, status = {}, "unavailable"
+            run(repo.attach_plan_frames(project["id"], user_key, version_id, frames, status))
+    _preview_pool.submit(work)
 
 
 async def _refresh_plan(conversation_id: str, user_key: str, project: dict, job, *, source: str, note: str = "",
@@ -1604,12 +1645,12 @@ async def _refresh_plan(conversation_id: str, user_key: str, project: dict, job,
         seconds = float((await asyncio.to_thread(execute, "inspect_media", {"path": str(video)}))["duration"])
     estimate = render_stats.estimate(f"talking:{status.get('style')}", seconds)
     has_logo = bool(talking_reel.custom_logo(job.dir) or brand_profile.logo_path(user_key))
-    slots = await asyncio.to_thread(_planned_slots, job)
+    slots = await asyncio.to_thread(_planned_slots, job) if status.get("style") in {"talking_2", "talking_3"} else None
     content = creative_plan.build_talking(status, sentences=sentences, video_seconds=seconds, estimate=estimate,
                                           has_logo=has_logo, slots=slots)
-    content["frames"] = await asyncio.to_thread(_plan_frames, job.dir, video, content, sentences)
+    content["frames"] = {}
     state, created = creative_plan.add_version(project["state"], content, source=source, note=note)
-    state.update(plan_pending=False, source_seconds=seconds)
+    state.update(plan_pending=False, source_seconds=seconds, plan_preview_status="pending")
     if after_analysis and not created:
         state["workflow"] = "awaiting_approval"
         state["plan"]["approved_id"] = None
@@ -1619,6 +1660,7 @@ async def _refresh_plan(conversation_id: str, user_key: str, project: dict, job,
     project = await repo.update_project(project["id"], user_key, state=state, source="plan" if created else None,
                                         status="awaiting_confirmation" if waiting else project["status"])
     version = creative_plan.current(state)
+    _schedule_plan_frames(project, user_key, job, video, content, sentences, version["id"])
     if created and announce:
         await repo.emit(conversation_id, "plan.ready", {"project_id": project["id"], "version_id": version["id"],
                                                         "version": version["n"], "message": "برنامهٔ تدوین آماده است"})
@@ -1633,6 +1675,7 @@ async def approve_plan(project_id: str, user_key: str, version_id: str) -> dict:
     project = await repo.get_project(project_id, user_key)
     if project["engine"] != "talking":
         raise creative_plan.PlanError("تأیید برنامه برای این نوع پروژه از کارت تأیید همان پروژه انجام می‌شود.")
+    _require_server_render(project)
     state = creative_plan.approve(project["state"], version_id)
     job = jobstore.get(project["external_ref"])
     if not job:
@@ -1792,6 +1835,7 @@ def confirm_action(action_id: str, user_key: str) -> dict:
         project=run(repo.get_project(action['project_id'],user_key))
         if project['engine']!='localize' or project['external_ref']!=action['payload']['project_ref']:
             raise ValueError('Action does not match this project')
+        _require_server_render(project)
         localize.start_render(project['external_ref'])
         run(repo.update_action(action_id,'running'))
         run(repo.update_project(project['id'],user_key,status='running',state={**project['state'],
@@ -1833,6 +1877,7 @@ def resume_project(project_id: str, user_key: str, *, retry_confirmed: bool = Fa
     """Resume one existing motion job, preserving valid scene/narration checkpoints."""
     import fcntl
     project = run(repo.get_project(project_id, user_key))
+    _require_server_render(project)
     if project['state'].get('manual_checkpoint'):
         raise ValueError('این پروژه در انتظار تأیید مرحله است؛ از کارت همان چت ادامه بدهید.')
     if project['engine'] == 'talking':
@@ -1931,8 +1976,7 @@ async def _announce_creative(conversation_id: str, user_key: str, project: dict,
         others = len(plan.get("alternatives") or [])
         text = (f"ایدهٔ انتخاب‌شده: «{chosen.get('name', '')}» — {chosen.get('angle', '')}\n\n"
                 f"هوک: {chosen.get('hook', '')}\n\n"
-                f"از بین {others + 1} ایده این را انتخاب کردم چون: {plan.get('verdict', '')}\n"
-                "می‌توانید همین‌جا بگویید چه چیزی عوض شود، مثلاً «هوک قوی‌تر باشد».")
+                "این پیشنهاد تدوین است؛ ویدیو هنوز رندر نشده. برنامه را بررسی و تأیید کنید یا تغییر دلخواهتان را بگویید.")
     elif error:
         text = "طراحی خلاقانهٔ ایده در دسترس نبود (محدودیت یا کندی سرویس هوش مصنوعی)؛ ادیت استاندارد انجام می‌شود."
     else:
@@ -1978,6 +2022,19 @@ async def _sync_motion_messages(conversation_id,project,job,user_key):
 
 
 async def sync_conversation(conversation_id: str, user_key: str) -> None:
+    """Single flight across API processes: repeated polling must not repeat plan work."""
+    import fcntl
+    from app.studio_flags import conversation_dir
+    await repo.get_conversation(conversation_id, user_key)  # ownership before touching disk
+    directory = conversation_dir(user_key, conversation_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / ".sync.lock").open("a") as lock:
+        try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError: return
+        await _sync_conversation_once(conversation_id, user_key)
+
+
+async def _sync_conversation_once(conversation_id: str, user_key: str) -> None:
     conversation = await repo.get_conversation(conversation_id, user_key)
     for project in conversation.get("projects", []):
         ref = project.get("external_ref")
@@ -2030,6 +2087,8 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                     await _refresh_plan(conversation_id, user_key, project, job, source="agent", after_analysis=not legacy_plan)
                     continue
                 workflow = project["state"].get("workflow")
+                if raw_status == 'awaiting_confirmation' and status.get('candidate_output'):
+                    project['state']['workflow'] = 'user_review'
                 if workflow == "awaiting_approval":
                     continue  # nothing runs until the user approves the current plan version
                 if workflow in {"production", "analyzing", "quality_evaluation", "user_review"}:
@@ -2102,7 +2161,7 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
                  status.get('creative_review') != project['state'].get('creative_review')))
             workflow_changed = project["state"].get("workflow") != initial_workflow
             if observed != project["state"].get("last_observed") or candidate_changed or activity_changed or workflow_changed:
-                state = {**project["state"], "last_observed": observed}
+                state = {**project["state"], "last_observed": observed, "last_observed_at": int(time.time() * 1000)}
                 if engine == 'talking' and status.get('candidate_output'):
                     state['candidate_output'] = status['candidate_output']
                     state['creative_review'] = status.get('creative_review')

@@ -26,7 +26,7 @@ function TextField({ id, label, type = "text", value, onChange, error, autoCompl
 }) {
   return <div className="field">
     <label htmlFor={id}>{label}</label>
-    <input id={id} className="input" type={type} autoComplete={autoComplete} value={value} onChange={event => onChange(event.target.value)}
+    <input id={id} className="input" type={type} inputMode={type === "email" ? "email" : undefined} autoCapitalize={type === "email" ? "none" : undefined} autoCorrect={type === "email" ? "off" : undefined} spellCheck={type === "email" ? false : undefined} autoComplete={autoComplete} value={value} onChange={event => onChange(event.target.value)}
       aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined} autoFocus={autoFocus} required dir={ltr ? "ltr" : undefined}/>
     {error ? <span className="field-error" id={`${id}-error`} role="alert">{error}</span> : null}
   </div>;
@@ -40,7 +40,7 @@ export function LoginForm({ onDone, onSwitch, autoFocus = true }: { onDone: () =
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setErrors({}); setLoading(true);
-    try { await api.login(email, password); onDone(); }
+    try { await api.login(email.trim(), password); onDone(); }
     catch (error) { setErrors({ form: friendlyError(error, "sign you in") }); }
     finally { setLoading(false); }
   }

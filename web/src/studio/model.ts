@@ -53,49 +53,64 @@ export function normalizeChoices(raw: unknown, kind?: string): QuestionChoice[] 
 /** Plain-language summary of a backend failure message; the raw text stays available in the details. */
 export function friendlyFailure(message: string | undefined): string {
   const text = (message || "").trim();
-  if (!text) return "Something went wrong with this step.";
-  if (/timeout|timed out|ReadTimeout/i.test(text)) return "The AI service took too long to respond. This is usually temporary.";
-  if (/LM API|gateway|HTTP 5\d\d/i.test(text)) return "The AI service had a problem. This is usually temporary.";
+  if (!text) return "این مرحله نیاز به بررسی دارد.";
+  if (/timeout|timed out|ReadTimeout/i.test(text)) return "این مرحله در مهلت تعیین‌شده کامل نشد. جزئیات خطا را بررسی کنید؛ تلاش دوباره خودکار انجام نمی‌شود.";
+  if (/LM API|gateway|HTTP 5\d\d/i.test(text)) return "سرویس هوش مصنوعی پاسخ قابل‌استفاده نداد؛ جزئیات خطا ثبت شده است.";
   return text;
 }
 
 export interface PendingMessage { id: string; content: string; attachments: string[]; createdAt: number; failed?: boolean }
 
+export function publicAssistantText(text: string): string {
+  if (text === 'عملیات متوقف شد: یکی از گزینه‌های همین مرحله را انتخاب کنید.') return 'منتظر انتخاب شما: یکی از گزینه‌های همین مرحله را انتخاب کنید.';
+  // Old versions exposed the internal A/B/C critic verdict. Preserve storage/audit;
+  // show the actual proposal, not private scoring prose, in the conversation.
+  if (text.startsWith("ایدهٔ انتخاب‌شده:")) return text.replace(/\n\nاز بین [\s\S]*?(?=\nمی‌توانید|$)/, "");
+  return text;
+}
+
 export const TOOL_LABELS: Record<string, string> = {
-  analyze_talking_reel: "Analyzing your video",
-  localize_video: "Reviewing speech and captions",
-  inspect_url: "Reading the page",
-  create_storyboard: "Writing the storyboard",
-  generate_visual_assets: "Creating visual assets",
-  cancel_operation: "Canceling",
-  creative_direction: "Exploring creative directions",
-  understanding_request: "Understanding your request",
-  creative_brief: "Understanding the brief",
-  creative_concepts: "Exploring creative concepts",
-  creative_review: "Reviewing creative directions",
-  creative_storyboard: "Developing the selected storyboard",
-  motion_generation: "Generating motion",
+  analyze_talking_reel: "تحلیل ویدیو",
+  localize_video: "بررسی گفتار و زیرنویس",
+  inspect_url: "خواندن صفحه",
+  create_storyboard: "طراحی استوری‌بورد",
+  generate_visual_assets: "آماده‌سازی دارایی‌های تصویری",
+  cancel_operation: "توقف پردازش",
+  creative_direction: "طراحی ایدهٔ تدوین",
+  understanding_request: "بررسی درخواست شما",
+  creative_brief: "بررسی هدف و محتوا",
+  creative_concepts: "بررسی ایده‌های تدوین",
+  creative_review: "ارزیابی ایده‌ها",
+  creative_storyboard: "تکمیل استوری‌بورد",
+  motion_generation: "ساخت موشن",
   motion_so: "کلیپ موشن هوشمند",
-  visual_analysis: "Analyzing visual content",
-  visual_review: "Reviewing visual quality",
-  translation: "Preparing the translation",
-  script: "Writing the script",
+  visual_analysis: "تحلیل محتوای تصویر",
+  visual_review: "بررسی کیفیت بصری",
+  translation: "آماده‌سازی ترجمه",
+  script: "نوشتن سناریو",
 };
 export const STAGE_LABELS: Record<string, string> = {
-  transcribing: "Transcribing speech", "finding captions": "Finding on-screen captions",
-  translating: "Preparing the Persian translation", "generating voice": "Creating the voice-over",
-  "choosing style": "Choosing an editing style", "editing text": "Preparing captions and hooks",
-  planning: "Planning the edit", generating: "Creating visual assets", "generating assets": "Creating visual assets",
-  analyzing: "Analyzing your video", transcribed: "Speech transcription is ready", storyboard: "Preparing the storyboard",
-  "storyboard ready": "Storyboard ready", "tracking the face": "Tracking the speaker",
-  "planning visual beats": "Planning visual beats", "finding pictures": "Finding supporting images",
-  "building motion graphics": "Building motion graphics", "reviewing motion graphics": "Reviewing motion graphics",
-  "improving motion graphics": "Improving motion graphics", queued: "Waiting to start", pending: "Planning the edit",
-  "directing the edit": "Exploring creative directions"
+  "loading transcript": "خواندن متن ذخیره‌شدهٔ گفتار", "planning render": "آماده‌سازی برنامهٔ رندر",
+  "rendering source preparation": "تبدیل فرمت و آماده‌سازی ویدیو", "rendering captions": "آماده‌سازی زیرنویس و تیتر",
+  "rendering outro": "ساخت صفحهٔ پایانی و لوگو", "rendering shot": "رندر بخش‌های تدوین",
+  "rendering composition": "ترکیب تصویر و صدا و رمزگذاری خروجی", "rendering finalizing": "نهایی‌سازی فایل ویدیو",
+  transcribing: "استخراج متن گفتار", "finding captions": "شناسایی زیرنویس روی تصویر",
+  translating: "آماده‌سازی ترجمهٔ فارسی", "generating voice": "ساخت گویندگی",
+  "choosing style": "انتخاب سبک تدوین", "editing text": "آماده‌سازی زیرنویس و هوک",
+  planning: "طراحی برنامهٔ تدوین", generating: "آماده‌سازی دارایی‌ها", "generating assets": "آماده‌سازی دارایی‌ها",
+  analyzing: "تحلیل ویدیو", transcribed: "متن گفتار آماده است", storyboard: "طراحی استوری‌بورد",
+  "storyboard ready": "استوری‌بورد آماده است", "tracking the face": "ردیابی گوینده",
+  "planning visual beats": "طراحی بخش‌های تصویری", "finding pictures": "انتخاب تصاویر مکمل",
+  "building motion graphics": "ساخت موشن‌گرافیک", "reviewing motion graphics": "بازبینی موشن‌گرافیک",
+  "improving motion graphics": "اصلاح موشن‌گرافیک", queued: "در صف شروع", pending: "طراحی برنامهٔ تدوین",
+  "directing the edit": "طراحی ایدهٔ تدوین"
 };
 const RENDER_STAGE_LABELS: Record<string, string> = {
-  rendering: "Rendering your video", "rendering rough cut": "Rendering the rough cut",
-  "rendering motion graphics": "Rendering motion graphics", queued: "Waiting to render",
+  "rendering source preparation": "تبدیل فرمت و آماده‌سازی ویدیو", "rendering captions": "آماده‌سازی زیرنویس و تیتر",
+  "rendering outro": "ساخت صفحهٔ پایانی و لوگو", "rendering shot": "رندر بخش‌های تدوین",
+  "rendering composition": "ترکیب تصویر و صدا و رمزگذاری خروجی", "rendering finalizing": "نهایی‌سازی فایل ویدیو",
+  rendering: "رندر ویدیو", "rendering rough cut": "رندر نسخهٔ اولیه",
+  "rendering motion graphics": "رندر موشن‌گرافیک", queued: "در صف رندر",
 };
 
 export function parseTime(value: string | number | undefined | null): number {
@@ -109,13 +124,14 @@ export const isRenderStage = (stage: unknown) => stageKey(stage).startsWith("ren
 
 function stepLabel(event: StudioEvent): string {
   const { tool, stage, message } = event.data;
+  if (event.type === 'tool.failed' && message === 'یکی از گزینه‌های همین مرحله را انتخاب کنید.') return 'منتظر انتخاب شما';
   if (tool && TOOL_LABELS[tool]) return TOOL_LABELS[tool];
   const known = STAGE_LABELS[stageKey(stage)] || STAGE_LABELS[String(message || "").toLocaleLowerCase().replace(/[._-]+/g, " ")];
   if (known) return known;
-  if (event.type === "agent.thinking_summary") return "Understanding your request";
-  if (event.type === "storyboard.ready") return "Storyboard ready";
-  if (event.type === "tool.failed") return "This step needs attention";
-  return "Working on your edit";
+  if (event.type === "agent.thinking_summary") return "بررسی درخواست شما";
+  if (event.type === "storyboard.ready") return "استوری‌بورد آماده است";
+  if (event.type === "tool.failed") return "این مرحله نیاز به بررسی دارد";
+  return "در حال تدوین";
 }
 
 function stepKey(event: StudioEvent): string | null {
@@ -131,6 +147,7 @@ function stepKey(event: StudioEvent): string | null {
 }
 
 export interface RenderView {
+  review?: boolean;
   phase: "idle" | "queued" | "rendering" | "finalizing" | "done" | "failed";
   progress?: number;
   stageLabel: string;
@@ -143,6 +160,10 @@ export function renderView(project: StudioProject | undefined): RenderView {
   const stage = stageKey(observed.stage);
   const progress = typeof observed.progress === "number" ? Math.max(0, Math.min(100, Math.round(observed.progress))) : undefined;
   if (!project) return { phase: "idle", stageLabel: "" };
+  const candidate = project.state?.candidate_output;
+  if (candidate && project.state?.creative_review?.status !== 'passed' && !observed.output && project.status !== 'running') {
+    return {phase:'done',review:true,output:String(candidate),progress:100,stageLabel:'ویدیو رندر شده؛ منتظر بررسی شما',message:project.state?.creative_review?.summary};
+  }
   if (observed.output) return { phase: "done", output: String(observed.output), progress: 100, stageLabel: "Your video is ready" };
   if (project.status === "error" || observed.status === "error") return { phase: "failed", stageLabel: "Rendering stopped", message: observed.message ? String(observed.message) : undefined };
   if (project.status === "done") return { phase: "finalizing", progress: 100, stageLabel: "Finalizing your video" };
@@ -168,10 +189,11 @@ export interface TimelineInput {
 }
 
 export function buildTimeline({ messages, events, projects, pending, processing, discoveryId, motionId }: TimelineInput): TimelineItem[] {
-  const streamedIds = new Set(events.filter(e => e.type.startsWith('assistant.response.') && e.data.message_id != null).map(e => String(e.data.message_id)));
+  const savedIds = new Set(messages.filter(m => m.role === 'assistant').map(m => String(m.id)));
+  const savedResponses = new Set(events.filter(e => e.type.startsWith('assistant.response.') && savedIds.has(String(e.data.message_id))).map(e => e.data.response_id));
   type Entry = { t: number; order: number; tie: number; message?: StudioMessage; event?: StudioEvent };
   const entries: Entry[] = [
-    ...messages.filter(message => !(message.role === 'assistant' && streamedIds.has(String(message.id)))).map(message => ({ t: parseTime(message.created_at), order: 0, tie: Number(message.id) || 0, message })),
+    ...messages.map(message => ({ t: parseTime(message.created_at), order: 0, tie: Number(message.id) || 0, message })),
     ...events.map(event => ({ t: parseTime(event.created_at), order: 1, tie: event.seq, event })),
   ].sort((a, b) => a.t - b.t || a.order - b.order || a.tie - b.tie);
 
@@ -191,11 +213,12 @@ export function buildTimeline({ messages, events, projects, pending, processing,
       flush();
       const message = entry.message;
       if (message.role === "user") lastUserIndex = items.length;
-      items.push({ kind: "message", id: `m-${message.role}-${message.id}`, role: message.role, content: message.content, attachments: message.attachments || [], createdAt: entry.t });
+      items.push({ kind: "message", id: `m-${message.role}-${message.id}`, role: message.role, content: message.role === "assistant" ? publicAssistantText(message.content) : message.content, attachments: message.attachments || [], createdAt: entry.t });
       continue;
     }
     const event = entry.event!;
     if (event.type.startsWith('assistant.response.')) {
+      if (savedResponses.has(event.data.response_id)) continue;
       const id = `response:${event.data.response_id}`;
       const content = String(event.data.text || '');
       const previous = items.find(item => item.kind === 'message' && item.id === id);
@@ -207,7 +230,7 @@ export function buildTimeline({ messages, events, projects, pending, processing,
     }
     if (event.type === 'agent.narration') {
       // Retain the audit history but no longer display the old canned receipt.
-      if (String(event.data.narration_id || '').startsWith('received:')) continue;
+      if (/^(received:|phase:)/.test(String(event.data.narration_id || ''))) continue;
       const id = `narration:${event.data.narration_id || event.seq}`;
       const content = String(event.data.message || '').trim();
       if (!content) continue;
@@ -261,10 +284,18 @@ export function buildTimeline({ messages, events, projects, pending, processing,
     step.events.push(event);
     step.endedAt = entry.t;
     if (typeof event.data.progress === "number") step.progress = Math.round(event.data.progress);
-    const note = String(event.data.message || "").trim();
-    if (note && !step.notes.includes(note)) step.notes.push(note);
+    const rawNote = String(event.data.message || "").trim();
+    const note = /^Planning the edit\.?$/i.test(rawNote) ? STAGE_LABELS.planning : rawNote;
+    if (note && !step.notes.includes(note)) {
+      if (/در انتظار پاسخ سرویس هوش مصنوعی/.test(note)) step.notes = step.notes.filter(n => !/در انتظار پاسخ سرویس هوش مصنوعی/.test(n));
+      step.notes.push(note);
+      step.notes = step.notes.slice(-5);
+    }
     if (event.type === "tool.completed" || event.type === "storyboard.ready") step.status = "done";
-    if (event.type === "tool.failed") step.status = "failed";
+    if (event.type === "tool.failed") step.status = /^یکی از گزینه‌های همین مرحله را انتخاب کنید[.؟]?$/u.test(note) ? "done" : "failed";
+    if (event.type === 'tool.failed' && projects.some(p => p.id === event.data.project_id && p.state?.candidate_output && p.state?.creative_review?.summary === note)) {
+      step.status = 'done'; step.label = 'بازبینی خروجی؛ منتظر نظر شما';
+    }
     if (event.type === "agent.thinking_summary") step.status = "done";
   }
   flush();
@@ -343,7 +374,7 @@ export function isProcessing(args: { sending: boolean; messages: StudioMessage[]
 /** Label for the bottom-of-conversation indicator when no step is active. */
 export function thinkingLabel(events: StudioEvent[], messages: StudioMessage[]): string {
   void events; void messages;
-  return "Thinking";
+  return "در حال بررسی…";
 }
 
 export function activeStep(items: TimelineItem[]): ActivityStep | undefined {

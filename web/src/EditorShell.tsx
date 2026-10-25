@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api, StudioConversation } from "./api";
 import { Icon } from "./components/Icon";
 import { Resizer, usePanelWidth } from "./components/Resizer";
-import { ShellContext } from "./components/ShellContext";
+import { ShellContext, TopbarAction } from "./components/ShellContext";
 import { useFocusTrap, useMediaQuery, useVisualViewportHeight } from "./components/hooks";
 import { useAuth } from "./auth/AuthContext";
 import { isLocalDevelopment } from "./auth";
@@ -34,6 +34,7 @@ export default function EditorShell() {
   const [query, setQuery] = React.useState("");
   const [conversations, setConversations] = React.useState<StudioConversation[]>([]);
   const [pageTitle, setPageTitle] = React.useState("");
+  const [topbarAction, setTopbarAction] = React.useState<TopbarAction | null>(null);
   const sidebarRef = React.useRef<HTMLElement>(null);
   const [sidebarWidth, setSidebarWidth] = usePanelWidth("editorgpt.sidebar.width", SIDEBAR_BOUNDS);
   const [liveWidth, setLiveWidth] = React.useState<number | null>(null);
@@ -44,7 +45,6 @@ export default function EditorShell() {
   useVisualViewportHeight();
   useFocusTrap(drawer && isMobile, sidebarRef);
 
-  React.useEffect(() => { try { document.documentElement.dataset.theme = localStorage.getItem("editorgpt.theme") || "dark"; } catch { document.documentElement.dataset.theme = "dark"; } }, []);
   React.useEffect(() => { try { localStorage.setItem("editorgpt.sidebar", collapsed ? "collapsed" : "open"); } catch { /* storage unavailable */ } }, [collapsed]);
 
   const refreshChats = React.useCallback(() => {
@@ -68,7 +68,7 @@ export default function EditorShell() {
   React.useEffect(() => { if (!isMobile) setDrawer(false); }, [isMobile]);
   React.useEffect(() => { if (searching) searchRef.current?.focus(); }, [searching]);
 
-  const shellValue = React.useMemo(() => ({ openNav: () => setDrawer(true), setTitle: setPageTitle }), []);
+  const shellValue = React.useMemo(() => ({ openNav: () => setDrawer(true), setTitle: setPageTitle, setAction: setTopbarAction }), []);
   const visible = React.useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return [...conversations].sort((a, b) => parseTime(b.updated_at) - parseTime(a.updated_at)).filter(item => !needle || (item.title || "").toLocaleLowerCase().includes(needle));
@@ -134,7 +134,7 @@ export default function EditorShell() {
         <header className="topbar">
           <button className="icon-btn icon-btn-lg" onClick={() => setDrawer(true)} aria-label="Open navigation" aria-expanded={drawer}><Icon name="menu"/></button>
           <div className="topbar-title">{topTitle}</div>
-          <button className="icon-btn icon-btn-lg" onClick={() => navigate("/studio")} aria-label="New edit"><Icon name="edit"/></button>
+          {topbarAction ? <button className="icon-btn icon-btn-lg" onClick={topbarAction.onClick} aria-pressed={topbarAction.active} aria-label={topbarAction.active ? "Exit full screen" : "Full screen"}><Icon name={topbarAction.active ? "fullscreenExit" : "fullscreen"}/></button> : <button className="icon-btn icon-btn-lg" onClick={() => navigate("/studio")} aria-label="New edit"><Icon name="edit"/></button>}
         </header>
         <main id="main-content" className={`main${kind === "legacy" ? " eg-legacy" : ""}`} data-route={kind} tabIndex={-1}>
           {kind === "legacy" ? <div className="legacy-frame"><Outlet/></div> : <Outlet/>}

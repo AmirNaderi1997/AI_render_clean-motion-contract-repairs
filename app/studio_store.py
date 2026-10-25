@@ -284,8 +284,9 @@ class Repository:
 
     async def create_project(self, conversation_id: str, user_key: str, engine: str, title: str,
                              state: dict | None = None, external_ref: str | None = None) -> dict:
-        await self.get_conversation(conversation_id, user_key)
-        pid, created = new_id(), now(); state = state or {}
+        conversation = await self.get_conversation(conversation_id, user_key)
+        pid, created = new_id(), now(); state = dict(state or {})
+        state.setdefault("render_target", conversation.get("state", {}).get("render_target", "server"))
         value = {"id": pid, "conversation_id": conversation_id, "user_key": user_key, "engine": engine, "title": title[:255],
                  "status": "planning", "external_ref": external_ref, "current_version": 1,
                  "state": state, "created_at": iso(created), "updated_at": iso(created)}
@@ -318,6 +319,31 @@ class Repository:
             row = _read()["projects"].get(project_id)
             if row is None or row.get("user_key", user_key) != user_key: raise KeyError(project_id)
             return copy.deepcopy(row)
+
+    async def attach_plan_frames(self, project_id: str, user_key: str, version_id: str, frames: dict, status: str) -> None:
+        """Merge optional thumbnails under the row lock; never overwrite a concurrent approval."""
+        def merge(state):
+            state = copy.deepcopy(state)
+            versions = (state.get("plan") or {}).get("versions") or []
+            if not versions or versions[-1]["id"] != version_id: return None
+            versions[-1]["content"]["frames"] = frames
+            state["plan_preview_status"] = status
+            return state
+        if DB_AVAILABLE:
+            async with AsyncSessionLocal() as db:
+                row = await db.scalar(select(StudioProject).where(StudioProject.id == project_id).with_for_update())
+                if row is None or row.user_key != user_key: raise KeyError(project_id)
+                state = merge(row.state)
+                if state is not None:
+                    row.state = state
+                    await db.commit()
+        else:
+            with _lock:
+                data = _read(); row = data["projects"].get(project_id)
+                if row is None or row.get("user_key") != user_key: raise KeyError(project_id)
+                state = merge(row["state"])
+                if state is not None:
+                    row["state"] = state; _write(data)
 
     async def update_project(self, project_id: str, user_key: str, *, source: str | None = None, **changes: Any) -> dict:
         allowed = {"title", "status", "external_ref", "state"}; changes = {k: v for k, v in changes.items() if k in allowed}

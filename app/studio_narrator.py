@@ -8,25 +8,37 @@ and two messages never interleave.
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 import logging
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Any
 
 log = logging.getLogger(__name__)
 _lock = threading.Lock()
 _queues: dict[str, ThreadPoolExecutor] = {}
-MAX_CHARS = 520
+MAX_CHARS = 320
+_recent: dict[tuple, str] = {}
 
 SYSTEM = (
     "You are the voice of a video and motion-graphics studio, talking to the person who asked for the work. Write ONE short chat message "
-    "(1 to 3 sentences, at most about 60 words) about what the studio has just done or found, in Persian (Farsi) even when the request, page or video is in another language (another language only if the person asked for it), "
+    "(1 to 2 sentences, at most about 40 words) about what the studio has just done or found. Write in Persian unless facts explicitly specify another language. "
     "first person, natural, in your own words. Use ONLY the facts given: name concrete things (a page title, a number, a colour, a short quoted phrase). "
     "Never invent details, never claim anything the facts do not say, never promise results, never describe internal steps or tools. "
     "If a fact says something could not be determined or read, say so plainly in one clause. No headings, no bullet lists, no emojis, no greeting."
 )
+
+
+def _public_narration(text: str, facts: dict) -> bool:
+    if re.search(r"<think>|```|\b(?:analysis|verdict|chain.of.thought)\s*:", text, re.I): return False
+    if facts.get("language", "fa") == "fa":
+        persian = len(re.findall(r"[\u0600-\u06ff]", text))
+        latin = len(re.findall(r"[A-Za-z]", text))
+        if persian < 3 or persian < latin * .7: return False
+    return True
 
 
 def _executor(conversation_id: str) -> ThreadPoolExecutor:
@@ -68,12 +80,12 @@ def _stream(conversation_id: str, user_key: str, kind: str, facts: dict, attachm
                 text += chunk
                 if len(text) > MAX_CHARS * 1.6:
                     break                                        # enough: the message is cut at a sentence end below
-                if not flushed or time.monotonic() - tick > 0.12:
+                if _public_narration(text, facts) and (not flushed or time.monotonic() - tick > 0.12):
                     _emit(conversation_id, "assistant.response.delta", response_id=response_id, text=text)
                     flushed, tick = text, time.monotonic()
             text = _trim(text)
-            if not text:
-                raise ValueError("empty narration")
+            if not text or not _public_narration(text, facts):
+                raise ValueError("Narration must be public-facing and in the requested language")
             if studio_flags.generation(user_key, conversation_id) != generation:
                 _emit(conversation_id, "assistant.response.failed", response_id=response_id, text="", message_id=None, error="")
                 return
@@ -91,12 +103,22 @@ def narrate(conversation_id: str, user_key: str, kind: str, facts: dict[str, Any
             fallback: str = "", background: bool = True):
     """Say what ``kind`` of step just happened, from ``facts``. Returns the future (``.result()`` to wait for the message to be posted)."""
     from app import studio_flags
+    generation = studio_flags.generation(user_key, conversation_id)
+    identity = (user_key, conversation_id, kind, generation)
+    digest = hashlib.sha256(json.dumps([facts, attachments, fallback], sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+    with _lock:
+        if _recent.get(identity) == digest:
+            done = Future(); done.set_result(None); return done
+        _recent[identity] = digest
+        if len(_recent) > 512: _recent.pop(next(iter(_recent)))
+    queued_at = time.monotonic()
 
     def run_narration(generation: int) -> None:
+        if not attachments and time.monotonic() - queued_at > 45: return
         with studio_flags.working(user_key, conversation_id):
             _stream(conversation_id, user_key, kind, facts, attachments, fallback, generation)
 
-    job = _executor(conversation_id).submit(run_narration, studio_flags.generation(user_key, conversation_id))
+    job = _executor(conversation_id).submit(run_narration, generation)
     if not background:
         job.result()
     return job

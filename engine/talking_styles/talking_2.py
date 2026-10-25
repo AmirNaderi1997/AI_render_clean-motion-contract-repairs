@@ -418,12 +418,15 @@ def speaker_crop(
 def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Optional[Path] = None,
            cta: str = "", render_settings: Optional[dict] = None,
            logo_path: Optional[Path] = None, overlay: Optional[Path] = None,
-           on_progress: Optional[Callable[[int], None]] = None, **_ignored) -> Path:
+           on_progress: Optional[Callable[[int], None]] = None, on_stage=None, **_ignored) -> Path:
     """`overlay` is an optional transparent WebM (engine/tscaps_overlay.py) composited above the ASS layer."""
     ffmpeg = ass_burner_ffmpeg()
     if ffmpeg is None:
         raise RuntimeError("Talking reels need an ffmpeg with libass (brew install ffmpeg-full)")
-    video = base.prepare_render_source(video, work_dir)
+    if on_stage: on_stage('rendering source preparation', 'در حال بررسی و تبدیل فرمت فایل ورودی')
+    video = base.prepare_render_source(video, work_dir, (lambda pct: on_progress(round(pct * .1))) if on_progress else None)
+    if on_progress: on_progress(10)
+    if on_stage: on_stage('rendering captions', 'در حال آماده‌سازی زیرنویس و قاب‌های گوینده و تصاویر')
     sw, sh, _ = probe_video(video)
     settings = render_settings or {}
     gs = settings.get("grade") or {}
@@ -507,8 +510,10 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         vf.append(f"[0:a]asetpts=PTS-STARTPTS,"
                   f"afade=t=in:d={fade:.3f},afade=t=out:st={shot.length - fade:.3f}:d={fade:.3f}[a{k}]")
         length = max(1, round((elapsed+shot.length)*fps_value)-round(elapsed*fps_value))/fps_value
+        if on_stage: on_stage('rendering shot', f'در حال رندر بخش {k + 1} از {len(plan.shots)}؛ گوینده و قاب تصویری بالا')
         clips.append((base.cached_shot(inputs,vf,k,length,work_dir),length)); elapsed += shot.length
-        if on_progress: on_progress(min(60,round(elapsed/max(plan.duration,.001)*60)))
+        if on_progress: on_progress(min(60,10+round(elapsed/max(plan.duration,.001)*50)))
+    if on_stage: on_stage('rendering composition', 'در حال ترکیب بخش‌ها، زیرنویس و صدا و رمزگذاری خروجی')
     inputs = base.shot_concat(clips,work_dir)
     vf = ['[0:v]setpts=PTS-STARTPTS[cv]','[0:a]asetpts=PTS-STARTPTS[ca]']
     next_input = 1

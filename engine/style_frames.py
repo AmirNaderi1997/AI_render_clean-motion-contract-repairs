@@ -164,7 +164,7 @@ BUILDERS = {"talking_1": _talking_1, "talking_2": _talking_2, "talking_3": _talk
 
 def render_mockup(video: Path, out: Path, *, style_id: str, at: float, hook: str, highlight: list[str] | None = None,
                   caption: str = "", card: str = "", accent: str = "#F5B800", name: str = "", tagline: str = "",
-                  grade: dict | None = None, caption_font: str = "default", width: int = 540) -> Path:
+                  grade: dict | None = None, caption_font: str = "default", width: int = 540, source_still: Path | None = None) -> Path:
     """Write a JPEG preview of ``style_id`` on the frame of ``video`` at ``at`` seconds."""
     if style_id not in BUILDERS:
         raise MockupUnavailable(f"unknown style {style_id!r}")
@@ -176,11 +176,12 @@ def render_mockup(video: Path, out: Path, *, style_id: str, at: float, hook: str
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
-        still = work / "frame.png"
-        grab = subprocess.run([ffmpeg, "-v", "error", "-y", "-threads", "1", "-ss", f"{max(0.0, at):.2f}", "-i", str(video),
-                               "-vf", "scale=720:-2", "-frames:v", "1", "-threads", "1", str(still)], capture_output=True, text=True, timeout=20)
-        if grab.returncode != 0 or not still.is_file():
-            raise MockupUnavailable((grab.stderr or "could not read a frame").strip()[-300:])
+        still = source_still or work / "frame.png"
+        if source_still is None:
+            grab = subprocess.run([ffmpeg, "-v", "error", "-y", "-threads", "1", "-ss", f"{max(0.0, at):.2f}", "-i", str(video),
+                                   "-vf", "scale=720:-2", "-frames:v", "1", "-threads", "1", str(still)], capture_output=True, text=True, timeout=20)
+            if grab.returncode != 0 or not still.is_file():
+                raise MockupUnavailable((grab.stderr or "could not read a frame").strip()[-300:])
         from PIL import Image
         with Image.open(still) as image:
             size = image.size

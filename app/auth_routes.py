@@ -195,4 +195,6 @@ async def logout(request: Request, body: LogoutBody | None = None):
             auth.logout(refresh_value)
     response = JSONResponse({"ok": True})
     response.delete_cookie(REFRESH_COOKIE, path="/", samesite="lax")
+    from app.media_session import COOKIE
+    response.delete_cookie(COOKIE, path="/", samesite="lax")
     return response

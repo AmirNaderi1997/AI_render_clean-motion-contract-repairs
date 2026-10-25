@@ -1109,8 +1109,21 @@ export const api = {
     const form = new FormData(); form.append("file", file);
     return uploadWithProgress(`${BASE}/studio/conversations/${id}/attachments`, form, onProgress);
   },
-  async sendStudioMessage(id: string, content: string, attachment_ids: string[], options: { execution_mode?: "auto" | "manual"; manual_question_id?: string } = {}): Promise<StudioMessage> {
+  async sendStudioMessage(id: string, content: string, attachment_ids: string[], options: { execution_mode?: "auto" | "manual"; manual_question_id?: string; render_target?: "server" | "browser" } = {}): Promise<StudioMessage> {
     return j(await authFetch(`${BASE}/studio/conversations/${id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, attachment_ids, ...options }) }));
+  },
+  async setProjectRenderTarget(id: string, target: "server" | "browser"): Promise<StudioProject> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/render-target`, {method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({target})}));
+  },
+  async projectRenderCapabilities(): Promise<{device_render_hold:boolean}> {
+    return j(await authFetch(`${BASE}/studio/render-capabilities`));
+  },
+  async browserProject(id: string): Promise<{renderer:string;revision:string;width:number;height:number;fps:number;durationInFrames:number;props:Record<string,unknown>;assets:{id:string;bytes:number}[]}> {
+    return j(await authFetch(`${BASE}/studio/projects/${id}/browser-render`));
+  },
+  async saveBrowserProject(id: string, revision: string, blob: Blob) {
+    const form=new FormData();form.append("file",blob,"device.mp4");
+    return j(await authFetch(`${BASE}/studio/projects/${id}/browser-render/output?revision=${encodeURIComponent(revision)}`,{method:"POST",body:form}));
   },
   async confirmStudioAction(id: string): Promise<StudioAction> {
     return j(await authFetch(`${BASE}/studio/actions/${id}/confirm`, { method: "POST" }));
@@ -1211,6 +1224,9 @@ export const api = {
   },
   brandLogoUrl(): string { return `${BASE}/studio/profile/logo`; },
   studioOutputUrl(id: string): string { return `${BASE}/studio/projects/${id}/output`; },
+  async prepareMediaPlayback(): Promise<void> {
+    await j(await authFetch(`${BASE}/studio/media-session`, {method:"POST", credentials:"same-origin"}));
+  },
   studioAssetUrl(id: string, index: number): string { return `${BASE}/studio/projects/${id}/assets/${index}`; },
   studioAttachmentUrl(conversationId: string, attachmentId: string): string { return `${BASE}/studio/conversations/${conversationId}/attachments/${attachmentId}`; },
   studioEventAudioUrl(conversationId: string, eventSeq: number): string { return `${BASE}/studio/conversations/${conversationId}/events/${eventSeq}/audio`; },
@@ -1231,5 +1247,8 @@ export const api = {
     // A proxy may close an otherwise healthy SSE response. Avoid a tight
     // reconnect loop that would repeatedly authenticate and query PostgreSQL.
     if (!signal.aborted) await new Promise(resolve => setTimeout(resolve, 750));
+  },
+  async studioEventHistory(id: string, after: number, signal: AbortSignal): Promise<StudioEvent[]> {
+    return j(await authFetch(`${BASE}/studio/conversations/${id}/event-history?after=${after}`, {signal}));
   },
 };
