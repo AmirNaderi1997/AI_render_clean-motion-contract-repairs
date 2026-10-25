@@ -41,7 +41,7 @@ try {
   const page=await context.newPage();
   page.on('console',m=>debug('CONSOLE '+m.type()+' '+m.text().slice(0,200)));
   page.on('pageerror',e=>debug('PAGEERROR '+String(e).slice(0,300)));
-  await page.goto(config.url,{waitUntil:'domcontentloaded',timeout:25000});
+  await page.goto(config.url,{waitUntil:'domcontentloaded',timeout:config.goto_ms||25000});
   await page.waitForFunction(()=>((document.querySelector('main')||document.body)?.innerText||'').trim().length>120,{},{timeout:10000}).catch(()=>{});
   // Trigger lazy content throughout the page before a TRUE full-page capture.
   // Never silently label a clipped/sample image as the whole page.

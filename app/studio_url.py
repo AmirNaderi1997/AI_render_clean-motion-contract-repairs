@@ -5,6 +5,7 @@ requests all pass through this public-address/redirect-validated fetcher.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import http.client
 import ipaddress
 import json
@@ -53,6 +54,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 _DIRECT_FAILED: dict[str, float] = {}
+DIRECT_WAIT_S = 4.0
+_DIRECT_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="direct-fetch")
 
 
 def _relay_configured() -> bool:
@@ -87,10 +90,12 @@ def _fetch(url: str, *, max_bytes: int, accept: str,
     host = urllib.parse.urlsplit(_public_url(url)).hostname or ""
     if time.monotonic() < _DIRECT_FAILED.get(host, 0):          # this host just failed directly: do not wait for it again for every image and script
         return _relay_fetch(url, max_bytes=max_bytes, accept=accept, allow_http_error=allow_http_error, with_status=with_status)
+    # A host this network half-reaches answers slowly rather than failing: give the direct attempt a hard wall-clock limit.
+    attempt = _DIRECT_POOL.submit(_fetch_direct, url, max_bytes=max_bytes, accept=accept, headers=headers, timeout=min(timeout, 8),
+                                  allow_http_error=allow_http_error, with_status=with_status)
     try:
-        return _fetch_direct(url, max_bytes=max_bytes, accept=accept, headers=headers, timeout=min(timeout, 8),
-                             allow_http_error=allow_http_error, with_status=with_status)
-    except (urllib.error.URLError, OSError, http.client.HTTPException, TimeoutError):
+        return attempt.result(timeout=DIRECT_WAIT_S)
+    except (urllib.error.URLError, OSError, http.client.HTTPException, TimeoutError, concurrent.futures.TimeoutError):
         _DIRECT_FAILED[host] = time.monotonic() + 300
         return _relay_fetch(url, max_bytes=max_bytes, accept=accept, allow_http_error=allow_http_error, with_status=with_status)
 

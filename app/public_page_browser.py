@@ -36,7 +36,10 @@ def render_page(url: str, output: Path) -> dict:
             child.stdin.write(json.dumps(value)+'\n');child.stdin.flush()
         except (BrokenPipeError,OSError):
             pass  # Read the queued browser error/result rather than hiding it behind EPIPE.
-    deadline=time.monotonic()+45
+    from .studio_url import _relay_configured
+    # Through the relay every file is slower (Iran to Vercel and back): the same pages need more time to settle.
+    relayed=_relay_configured()
+    deadline=time.monotonic()+(100 if relayed else 45)
     reads=total=0
     pool=ThreadPoolExecutor(max_workers=6)
     def fetch_resource(request):
@@ -49,7 +52,7 @@ def render_page(url: str, output: Path) -> dict:
             messages.put((request['id'],raw,kind,status))
         except (OSError,ValueError):messages.put((request['id'],None,None,None))
     try:
-        write({'config':{'root':str(root),'url':url,'executable':executable}})
+        write({'config':{'root':str(root),'url':url,'executable':executable,'goto_ms':70000 if relayed else 25000}})
         while time.monotonic()<deadline:
             try: line=messages.get(timeout=max(.1,deadline-time.monotonic()))
             except queue.Empty: break
