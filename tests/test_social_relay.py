@@ -326,3 +326,27 @@ def test_without_a_relay_the_direct_error_is_kept(monkeypatch):
     monkeypatch.setattr(studio_url, "_fetch_direct", direct)
     with pytest.raises(http.client.RemoteDisconnected):
         studio_url._fetch("https://store.example/p", max_bytes=1000, accept="text/html")
+
+
+def test_relayed_scripts_are_kept_so_only_the_first_reading_pays_for_them(monkeypatch, tmp_path):
+    from app import studio_url
+    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://relay.example/api/index")
+    monkeypatch.setenv("SOCIAL_RELAY_SECRET", SECRET)
+    monkeypatch.setattr(studio_url, "_public_url", lambda url: url)
+    monkeypatch.setattr(studio_url, "_static_cache_path", lambda url: tmp_path / "script.bin")
+    studio_url._DIRECT_FAILED.clear()
+    calls = []
+    body = b"x" * 30_000
+
+    class Client:
+        def __init__(self, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, json, headers):
+            calls.append(json["url"])
+            return types.SimpleNamespace(status_code=200, content=body, headers={"x-upstream-status": "200", "x-final-url": json["url"], "content-type": "application/javascript"})
+    import httpx
+    monkeypatch.setattr(httpx, "Client", Client)
+    first = studio_url._relay_fetch("https://store.example/assets/app-1a2b.js", max_bytes=10**7, accept="*/*", allow_http_error=False, with_status=True)
+    second = studio_url._relay_fetch("https://store.example/assets/app-1a2b.js", max_bytes=10**7, accept="*/*", allow_http_error=False, with_status=True)
+    assert first == second == (body, "https://store.example/assets/app-1a2b.js", "application/javascript", 200) and len(calls) == 1

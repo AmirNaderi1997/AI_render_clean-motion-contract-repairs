@@ -52,7 +52,7 @@ def render_page(url: str, output: Path) -> dict:
             messages.put((request['id'],raw,kind,status))
         except (OSError,ValueError):messages.put((request['id'],None,None,None))
     try:
-        write({'config':{'root':str(root),'url':url,'executable':executable,'goto_ms':70000 if relayed else 25000}})
+        write({'config':{'root':str(root),'url':url,'executable':executable,'goto_ms':70000 if relayed else 25000,'settle_ms':30000 if relayed else 10000}})
         while time.monotonic()<deadline:
             try: line=messages.get(timeout=max(.1,deadline-time.monotonic()))
             except queue.Empty: break
