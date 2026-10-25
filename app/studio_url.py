@@ -5,11 +5,14 @@ requests all pass through this public-address/redirect-validated fetcher.
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
+import os
 import re
 import socket
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,8 +52,51 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+_DIRECT_FAILED: dict[str, float] = {}
+
+
+def _relay_configured() -> bool:
+    return bool(os.environ.get("SOCIAL_RELAY_URL") and len(os.environ.get("SOCIAL_RELAY_SECRET", "")) >= 32)
+
+
+def _relay_fetch(url: str, *, max_bytes: int, accept: str, allow_http_error: bool, with_status: bool):
+    """The Vercel relay fetches the page from outside the blocked network. Same limits, same result shape as the direct fetch."""
+    import httpx
+    with httpx.Client(timeout=httpx.Timeout(45, connect=10)) as client:
+        response = client.post(os.environ["SOCIAL_RELAY_URL"], json={"url": url, "mode": "page"},
+                               headers={"x-relay-secret": os.environ["SOCIAL_RELAY_SECRET"], "x-relay-accept": accept})
+    if response.status_code != 200:
+        raise ValueError(f"The relay could not fetch the page (HTTP {response.status_code})")
+    data = response.content
+    if len(data) > max_bytes:
+        raise ValueError("The remote resource is too large")
+    status = int(response.headers.get("x-upstream-status") or 200)
+    if status >= 400 and not allow_http_error:
+        raise ValueError(f"The page returned HTTP {status}")
+    final = urllib.parse.unquote(response.headers.get("x-final-url") or url)
+    content_type = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+    return (data, final, content_type, status) if with_status else (data, final, content_type)
+
+
 def _fetch(url: str, *, max_bytes: int, accept: str,
            headers: dict[str, str] | None = None, timeout: float = 20, allow_http_error: bool = False, with_status: bool = False):
+    """Directly first; when this network cannot reach the host (reset, timeout) the relay outside it answers instead."""
+    if not _relay_configured():
+        return _fetch_direct(url, max_bytes=max_bytes, accept=accept, headers=headers, timeout=timeout,
+                             allow_http_error=allow_http_error, with_status=with_status)
+    host = urllib.parse.urlsplit(_public_url(url)).hostname or ""
+    if time.monotonic() < _DIRECT_FAILED.get(host, 0):          # this host just failed directly: do not wait for it again for every image and script
+        return _relay_fetch(url, max_bytes=max_bytes, accept=accept, allow_http_error=allow_http_error, with_status=with_status)
+    try:
+        return _fetch_direct(url, max_bytes=max_bytes, accept=accept, headers=headers, timeout=min(timeout, 8),
+                             allow_http_error=allow_http_error, with_status=with_status)
+    except (urllib.error.URLError, OSError, http.client.HTTPException, TimeoutError):
+        _DIRECT_FAILED[host] = time.monotonic() + 300
+        return _relay_fetch(url, max_bytes=max_bytes, accept=accept, allow_http_error=allow_http_error, with_status=with_status)
+
+
+def _fetch_direct(url: str, *, max_bytes: int, accept: str,
+                  headers: dict[str, str] | None = None, timeout: float = 20, allow_http_error: bool = False, with_status: bool = False):
     # The python.org macOS runtime does not always inherit the system Keychain
     # roots. Use certifi's maintained CA bundle while keeping verification and
     # hostname checks fully enabled (never fall back to an unverified context).

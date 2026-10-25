@@ -25,7 +25,7 @@ import urllib.request
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 HOSTS = {"instagram.com", "youtube.com", "youtu.be", "tiktok.com", "vimeo.com", "x.com", "twitter.com", "facebook.com", "fb.watch"}
@@ -48,6 +48,7 @@ app = FastAPI(title="editor social relay", docs_url=None, redoc_url=None, openap
 
 class Fetch(BaseModel):
     url: str
+    mode: str = "video"          # "page": fetch one public page or file for the editor (its own network cannot reach some hosts)
 
 
 def _allowed(url: str) -> bool:
@@ -225,12 +226,62 @@ def health():
             "cookies": bool(os.environ.get("YTDLP_COOKIES_B64"))}
 
 
+PAGE_MAX = 12 * 1024 * 1024
+
+
+def _public_host(url: str) -> bool:
+    import ipaddress
+    import socket
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
+        return False
+    try:
+        addresses = socket.getaddrinfo(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80))
+    except socket.gaierror:
+        return False
+    return bool(addresses) and all(ipaddress.ip_address(item[4][0]).is_global for item in addresses)
+
+
+class _Stay(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # redirects are followed by hand so every hop is checked
+        return None
+
+
+def _page(url: str, accept: str):
+    """GET one public resource (redirects checked hop by hop, size capped) and send it back with its final address and status in headers."""
+    opener = urllib.request.build_opener(_Stay)
+    current = url
+    for _ in range(6):
+        if not _public_host(current):
+            raise HTTPException(403, "host_not_allowed")
+        request = urllib.request.Request(current, headers={"User-Agent": BROWSER_UA, "Accept": accept, "Accept-Language": "fa,en;q=0.8"})
+        try:
+            response = opener.open(request, timeout=25)
+        except urllib.error.HTTPError as exc:
+            target = exc.headers.get("Location") if exc.headers is not None else None
+            if exc.code in {301, 302, 303, 307, 308} and target:
+                current = urllib.parse.urljoin(current, target)
+                continue
+            response = exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise HTTPException(502, f"fetch_failed: {type(exc).__name__}")
+        data = response.read(PAGE_MAX + 1)
+        if len(data) > PAGE_MAX:
+            raise HTTPException(413, "too_large")
+        status = int(getattr(response, "status", None) or getattr(response, "code", 200) or 200)
+        return Response(content=data, media_type=response.headers.get("Content-Type", "application/octet-stream"),
+                        headers={"x-final-url": urllib.parse.quote(current, safe=":/?&=%#@+,;~"), "x-upstream-status": str(status)})
+    raise HTTPException(502, "too_many_redirects")
+
+
 @app.post("/api/index")
 @app.post("/api")
 @app.post("/")
-def fetch(body: Fetch, x_relay_secret: str | None = Header(default=None)):
+def fetch(body: Fetch, x_relay_secret: str | None = Header(default=None), x_relay_accept: str | None = Header(default=None)):
     if not _authorized(x_relay_secret):
         raise HTTPException(401, "unauthorized")
+    if body.mode == "page":
+        return _page(body.url, x_relay_accept or "text/html,application/xhtml+xml,*/*;q=0.8")
     if not _allowed(body.url):
         raise HTTPException(403, "host_not_allowed")
     work = Path(tempfile.mkdtemp(prefix="relay-", dir="/tmp"))
