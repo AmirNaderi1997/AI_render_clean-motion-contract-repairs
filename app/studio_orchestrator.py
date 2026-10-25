@@ -21,8 +21,29 @@ from brain.lm_gateway import conversation_scope
 log = logging.getLogger(__name__)
 
 
+_BARE_LINK = re.compile(r"(?<![\w@/.:-])((?:[a-z0-9][a-z0-9-]*\.)+[a-z]{2,24}/[^\s<>\]\[\)\(،؛]+)", re.IGNORECASE)
+_LABELED_LINK = re.compile(r"(?:\burl|\blink|لینک|آدرس)[^\n:：]{0,24}[:：]\s*(?:\n\s*)?(\S[^\n]{0,160})", re.IGNORECASE)
+
+
 def _urls(text: str) -> list[str]:
-    return re.findall(r"https?://[^\s<>\]\[\)\(]+", text)
+    """Every link of a message, with its scheme: also the ones written without it ("store.example.com/shop/item")."""
+    found = re.findall(r"https?://[^\s<>\]\[\)\(]+", text)
+    for bare in _BARE_LINK.findall(re.sub(r"https?://[^\s<>\]\[\)\(]+", " ", text)):
+        url = "https://" + bare.rstrip(".,;:!?")
+        if url not in found:
+            found.append(url)
+    return found
+
+
+def _dangling_link(text: str) -> str:
+    """A line that says "URL:" / "link:" / "لینک:" but whose value is not a usable link (a bare site name, a copied "site · id"); "" when there is none."""
+    if _urls(text):
+        return ""
+    for value in _LABELED_LINK.findall(text):
+        value = value.strip()
+        if re.search(r"[a-z0-9-]+\.[a-z]{2,24}\b", value, re.IGNORECASE):
+            return value[:120]
+    return ""
 
 
 def _style(text: str) -> str | None:
@@ -643,7 +664,7 @@ def _process_message(conversation_id: str, user_key: str, message_id: int | str,
         # ONE path for every kind of work: the opening reply, the understanding step, then this intake (reference video, linked pages, screenshots, all
         # narrated), then the flow's own tools. Only the tools differ between localize, talking reels, discovery, ads and motion graphics.
         sources = None
-        if intent in _SOURCE_INTENTS and (_urls(text) or (intent in {"motion", "motion_graphic"} and any(a["kind"] == "video" for a in attachments))):
+        if intent in _SOURCE_INTENTS and (_urls(text) or _dangling_link(text) or (intent in {"motion", "motion_graphic"} and any(a["kind"] == "video" for a in attachments))):
             sources = _gather_sources(conversation_id, user_key, text, attachments, brief=intent == "motion", max_pages=1 if intent == "motion" else 2,
                                       video_role="reference" if intent in {"motion", "motion_graphic"} else "source")
             if not sources.ok:
@@ -877,6 +898,18 @@ def _gather_sources(conversation_id: str, user_key: str, text: str, attachments:
     """The one intake for every flow: a reference video (uploaded or linked) is analysed as STYLE, the other links are read as CONTENT. Each is narrated."""
     references, pages = _link_hosts(text)
     result = Sources()
+    dangling = "" if (pages or references) else _dangling_link(text)
+    if dangling:
+        # The message points at a page it never gives (a site name and an id copied from a shop screen): say so and ask, never write from nothing.
+        _emit(conversation_id, "tool.failed", tool="inspect_url", message="لینک کامل صفحه در پیام نبود.")
+        from app import studio_narrator
+        studio_narrator.narrate(conversation_id, user_key, "source_link_incomplete", {"written_in_the_message": dangling,
+                            "problem": "this is a site name or an id, not a link the studio can open; no page was read",
+                            "ask": "send the full link of the page (it starts with https://) or write the name, features and price"},
+                            fallback=f"فقط «{dangling}» در پیام آمده بود و این یک لینک کامل نیست، پس صفحه‌ای را نخواندم. لینک کامل صفحه (که با https:// شروع می‌شود) "
+                                     "یا نام، ویژگی‌ها و قیمت محصول را بفرستید تا چیزی از خودم نسازم.", background=False)
+        result.ok = False
+        return result
     # A video that is the footage to edit (talking, localize, discover) is not a reference; only a LINKED reference is analysed then.
     uploaded = next((item for item in attachments if item.get("kind") == "video"), None) if video_role == "reference" else None
     if uploaded or references:
@@ -1249,6 +1282,13 @@ def _create_motion(conversation_id: str, user_key: str, message_id: int | str,
 def _revise_talking(conversation_id: str, user_key: str, project: dict, job, text: str, *, render: bool = True) -> bool:
     """Flow F for talking projects: interpret the request into typed operations, apply only those, re-render once.
     Returns False when the creative layer is unavailable so the keyword path below still works."""
+    from app.studio_render_intent import is_plain_rerender
+    if render and is_plain_rerender(text):
+        result = resume_project(project['id'], user_key, retry_confirmed=False)
+        if result.get('status') != 'running':
+            raise ValueError('موتور، شروع رندر مجدد را تأیید نکرد.')
+        _assistant(conversation_id, user_key, 'درخواست رندر مجدد همان پروژه پذیرفته شد؛ فایل‌ها و برنامهٔ ذخیره‌شده استفاده می‌شوند.')
+        return True
     import creative
     from creative import llm as creative_llm, revise
     if not creative.enabled() or not creative_llm.configured():
@@ -1515,6 +1555,7 @@ def _planned_slots(job) -> list[dict] | None:
 def _plan_frames(job_dir: Path, video: Path, content: dict, sentences: list[dict]) -> dict:
     """Style previews on a real frame, one per concept and one per style; failures are skipped, not faked."""
     import hashlib
+    import subprocess
     from engine.style_frames import PREVIEW_VERSION, MockupUnavailable, render_mockup
     # The preview renderer's version is part of the cache key, so improved previews replace stale images.
     folder = job_dir / "plan_frames" / hashlib.sha256(
@@ -1543,11 +1584,11 @@ def _plan_frames(job_dir: Path, video: Path, content: dict, sentences: list[dict
             if not target.is_file():
                 render_mockup(video, target, style_id=style, at=at, hook=text, highlight=highlight, **common)
             return key, f"{folder.name}/{name}"
-        except (MockupUnavailable, OSError) as exc:
+        except (MockupUnavailable, OSError, subprocess.SubprocessError) as exc:
             log.warning("plan preview %s skipped: %s", key, str(exc)[:200])
             return key, None
 
-    with ThreadPoolExecutor(max_workers=4) as pool:   # each preview is one short ffmpeg run
+    with ThreadPoolExecutor(max_workers=1) as pool:
         return {key: frame for key, frame in pool.map(one, jobs) if frame}
 
 

@@ -487,8 +487,23 @@ def _record_render_time(job_dir: Path, raw_video: Path, seconds: float) -> None:
 def _stage(job_dir: Path, stage: str, **extra) -> None:
     _checkpoint(job_dir)
     state = load(job_dir)
+    if state.get('stage') != stage and 'message' not in extra:
+        state['message'] = ''
     state.update(stage=stage, **extra)
     save(job_dir, state)
+
+def _render_reporter(job_dir: Path):
+    current = {'stage':'rendering','message':'','pct':0}
+    def report():
+        _stage(job_dir,current['stage'],message=current['message'],progress=45+int(current['pct']*.55))
+    def progress(pct):
+        current['pct']=max(current['pct'],min(100,max(0,pct)))
+        report()
+    def stage(code,detail):
+        current.update(stage=code,message=detail)
+        report()
+    return progress,stage
+
 
 def pause(job_dir: Path) -> dict:
     key = str(job_dir)
@@ -588,8 +603,7 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
     out = exports / f"talking_reel_v{version}.mp4"
     state = load(job_dir)
 
-    def progress(pct: int) -> None:
-        _stage(job_dir, "rendering", progress=45 + int(pct * 0.55))
+    progress, render_stage = _render_reporter(job_dir)
 
     media.render(video, plan, out, hook=state["hook"], highlight=state.get("hook_highlight") or [],
                  name=state.get("name") or "", title=state.get("title") or "",
@@ -597,7 +611,7 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
                  cta=state.get("cta") or "",
                  render_settings=settings,
                  logo_path=custom_logo(job_dir),
-                 on_progress=progress)
+                 on_progress=progress, on_stage=render_stage)
     _review_creative_output(job_dir,out)
     state = load(job_dir)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",

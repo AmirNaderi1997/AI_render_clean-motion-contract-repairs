@@ -103,11 +103,18 @@ def render_page_via_relay(url: str, output: Path) -> dict:
     import httpx
     from .studio_url import _public_url
     url = _public_url(url)
-    try:
-        with httpx.Client(timeout=httpx.Timeout(150, connect=10)) as client:
-            response = client.post(relay_render_url(), json={"url": url}, headers={"x-relay-secret": os.environ["SOCIAL_RELAY_SECRET"]})
-    except httpx.HTTPError as exc:
-        raise ValueError(f"The relay browser was unreachable ({type(exc).__name__})") from exc
+    response = None
+    for attempt in range(3):
+        try:
+            with httpx.Client(timeout=httpx.Timeout(150, connect=10)) as client:
+                response = client.post(relay_render_url(), json={"url": url}, headers={"x-relay-secret": os.environ["SOCIAL_RELAY_SECRET"]})
+            break
+        except httpx.TransportError as exc:
+            if attempt == 2:
+                raise ValueError(f"The relay browser was unreachable ({type(exc).__name__})") from exc
+            time.sleep(1.5)
+        except httpx.HTTPError as exc:
+            raise ValueError(f"The relay browser was unreachable ({type(exc).__name__})") from exc
     if response.status_code != 200:
         try: detail = response.json().get("message") or response.json().get("error")
         except ValueError: detail = ""

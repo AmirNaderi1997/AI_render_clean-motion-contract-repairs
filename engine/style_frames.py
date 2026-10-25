@@ -177,8 +177,8 @@ def render_mockup(video: Path, out: Path, *, style_id: str, at: float, hook: str
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         still = work / "frame.png"
-        grab = subprocess.run([ffmpeg, "-v", "error", "-y", "-ss", f"{max(0.0, at):.2f}", "-i", str(video),
-                               "-frames:v", "1", str(still)], capture_output=True, text=True, timeout=60)
+        grab = subprocess.run([ffmpeg, "-v", "error", "-y", "-threads", "1", "-ss", f"{max(0.0, at):.2f}", "-i", str(video),
+                               "-vf", "scale=720:-2", "-frames:v", "1", "-threads", "1", str(still)], capture_output=True, text=True, timeout=20)
         if grab.returncode != 0 or not still.is_file():
             raise MockupUnavailable((grab.stderr or "could not read a frame").strip()[-300:])
         from PIL import Image
@@ -193,13 +193,13 @@ def render_mockup(video: Path, out: Path, *, style_id: str, at: float, hook: str
         extra, graph, ass_text = BUILDERS[style_id](work, fonts, data)
         ass = work / "preview.ass"
         ass.write_text(ass_text, encoding="utf-8")
-        inputs = ["-loop", "1", "-framerate", "30", "-t", f"{SECONDS + 0.3:.2f}", "-i", str(still)]
+        inputs = ["-threads", "1", "-itsoffset", str(SECONDS), "-loop", "1", "-framerate", "30", "-t", f"{SECONDS + 0.3:.2f}", "-i", str(still)]
         for path in extra:
-            inputs += ["-loop", "1", "-framerate", "30", "-t", f"{SECONDS + 0.3:.2f}", "-i", path]
+            inputs += ["-threads", "1", "-itsoffset", str(SECONDS), "-loop", "1", "-framerate", "30", "-t", f"{SECONDS + 0.3:.2f}", "-i", path]
         graph += f",{subtitles_filter(ass, fonts)},scale={width}:-2[out]"
-        command = [ffmpeg, "-v", "error", "-y", *inputs, "-filter_complex", graph, "-map", "[out]",
-                   "-ss", f"{SECONDS:.2f}", "-frames:v", "1", "-q:v", "3", str(out)]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=90)
+        command = [ffmpeg, "-v", "error", "-y", "-filter_threads", "1", "-filter_complex_threads", "1", *inputs, "-filter_complex", graph, "-map", "[out]",
+                   "-ss", f"{SECONDS:.2f}", "-threads", "1", "-frames:v", "1", "-q:v", "3", str(out)]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=20)
     if result.returncode != 0 or not out.is_file():
         raise MockupUnavailable((result.stderr or "ffmpeg failed").strip()[-300:])
     return out
