@@ -391,3 +391,15 @@ def test_a_local_browser_failure_falls_back_to_the_relay_browser(monkeypatch, tm
     monkeypatch.delenv("SOCIAL_RELAY_URL")
     with pytest.raises(ValueError):
         studio_url._render("https://store.example/p", tmp_path)
+
+
+@pytest.mark.parametrize("text", ["رندر بگیر", "رندر رو بگیر.", "لطفاً رندر کن", "render", "render it please", "رندر بزن"])
+def test_a_bare_render_request_is_a_plain_rerender(text):
+    from app.studio_render_intent import is_plain_rerender
+    assert is_plain_rerender(text)
+
+
+@pytest.mark.parametrize("text", ["رندر نکن", "لوگو رو عوض کن و رندر بگیر", "چرا رندر بگیر؟", "رندر با موزیک دیگه", "render with a new hook"])
+def test_a_render_request_with_changes_is_not_a_plain_rerender(text):
+    from app.studio_render_intent import is_plain_rerender
+    assert not is_plain_rerender(text)

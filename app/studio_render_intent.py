@@ -8,4 +8,5 @@ def is_plain_rerender(text: str) -> bool:
     return bool(re.fullmatch(
         r'(?:(?:لطفا|لطفاً) )?(?:(?:مجدد|مجدداً|دوباره|بازم) رندر (?:بگیر|کن)|'
         r'رندر (?:رو |را )?(?:مجدد|دوباره) (?:بگیر|کن)|'
-        r'(?:re-?render|render again)(?: please)?)',text))
+        r'(?:رندر (?:رو |را )?(?:بگیر|کن|بزن)|(?:بزن|شروع کن) رندر|رندر شروع کن)|'
+        r'(?:re-?render|render again|render|render it)(?: please)?)',text))
