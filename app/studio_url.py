@@ -86,9 +86,17 @@ def _relay_fetch(url: str, *, max_bytes: int, accept: str, allow_http_error: boo
             return result if with_status else result[:3]
     except (OSError, ValueError):
         pass
-    with httpx.Client(timeout=httpx.Timeout(45, connect=10)) as client:
-        response = client.post(os.environ["SOCIAL_RELAY_URL"], json={"url": url, "mode": "page"},
-                               headers={"x-relay-secret": os.environ["SOCIAL_RELAY_SECRET"], "x-relay-accept": accept})
+    response = None
+    for attempt in range(3):                                      # a name lookup or connection can fail once on a busy host
+        try:
+            with httpx.Client(timeout=httpx.Timeout(45, connect=10)) as client:
+                response = client.post(os.environ["SOCIAL_RELAY_URL"], json={"url": url, "mode": "page"},
+                                       headers={"x-relay-secret": os.environ["SOCIAL_RELAY_SECRET"], "x-relay-accept": accept})
+            break
+        except httpx.TransportError:
+            if attempt == 2:
+                raise
+            time.sleep(1.5)
     if response.status_code != 200:
         raise ValueError(f"The relay could not fetch the page (HTTP {response.status_code})")
     data = response.content
