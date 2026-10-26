@@ -269,7 +269,8 @@ def _prepare(provider: dict, messages: list[dict], *, model: str, tokens: int, t
         # OpenAI's reasoning models take max_completion_tokens (thinking tokens count against it), no temperature, and a reasoning effort.
         body = {k: v for k, v in body.items() if k not in ("max_tokens", "temperature")}
         body["max_completion_tokens"] = max(int(tokens or 0) * 3, 2500)
-        body.setdefault("reasoning_effort", "low")
+        # Big structured jobs (scripts, concepts, plans: thousands of tokens) get real thinking; short answers stay quick.
+        body.setdefault("reasoning_effort", "medium" if int(tokens or 0) >= 3500 else "low")
     if stream:
         body = {**body, "stream": True}
     return key, f"{base}/chat/completions", headers, body

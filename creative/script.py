@@ -262,7 +262,8 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
             continue
         draft = candidate
     final = measure(draft, duration_s, outro_s=outro_s, must_name=brief.must_name)
-    # Fitting the video is not a matter of taste: if the script still overruns, tighten it (at most twice, no critic call).
+    # Fitting the video is not a matter of taste: if the script still overruns, tighten it (at most twice), then the result is reviewed once more.
+    tightened = False
     for _ in range(2):
         if final["total_speech_s"] <= final["budget_s"] or time.monotonic() - started > budget_s * 1.25:
             break
@@ -280,6 +281,17 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
         report.history.append({"attempt": report.attempts, "tighten": True, "speech_s_before": final["total_speech_s"], "speech_s_after": after["total_speech_s"]})
         if after["total_speech_s"] < final["total_speech_s"]:
             draft, final = tighter, after
+            tightened = True
+    if tightened and review is not None and review.verdict != "ship" and time.monotonic() - started <= budget_s * 1.6:
+        # The verdict was about the draft BEFORE it was tightened to fit: the draft that would ship must be judged itself.
+        try:
+            second = critique(draft, brief, concept, reference, final, used=used)
+        except CreativeUnavailable as exc:
+            log.warning("final script review unavailable: %s", exc)
+        else:
+            review = second
+            report.history.append({"attempt": report.attempts + 1, "verdict": review.verdict, "must_fix": review.must_fix[:6], "change": review.change,
+                                   "speech_s": final["total_speech_s"], "structure": draft.structure, "after_tightening": True})
     report.review = review
     report.structure = draft.structure
     report.speech_seconds = final["total_speech_s"]
