@@ -266,10 +266,10 @@ export default function Studio() {
     catch (e) { setError(friendlyError(e, 'accept output')); }
     finally { setResuming(false); }
   };
+  const [askResume, setAskResume] = React.useState(false);       // window.confirm can be silently blocked: ask inline
   const resume = async () => {
     if (!current || resuming) return;
-    const warning = 'تحلیل و دارایی‌های آماده دوباره تولید نمی‌شوند. تکمیل مراحل ناقص ممکن است هزینهٔ API داشته باشد، حتی اگر تلاش قبلی timeout شده باشد. هر تصویر و صدا جداگانه محاسبه می‌شود و هزینهٔ دقیق در دسترس نیست. برای ادامه و هر مدیای ناقص فقط یک تلاش انجام شود؟';
-    if (!window.confirm(warning)) return;
+    setAskResume(false);
     setResuming(true); setError("");
     try { await api.resumeStudioProject(current.id,true); await refresh(); }
     catch (e) { setError(friendlyError(e, "continue this project")); }
@@ -499,7 +499,13 @@ export default function Studio() {
             <button className="btn btn-secondary" disabled={resuming} onClick={() => void acceptOutput()}>تأیید خروجی</button>
             <button className="btn btn-secondary" disabled={resuming} onClick={() => void send('ایرادهای واقعی کنترل کیفیت همین خروجی را اصلاح کن؛ انتخاب‌های طراحی تأییدشده را حفظ کن و مدیای پولی جدید بدون تأیید تولید نکن.')}>درست کردن</button>
             {advancedEditorUrl(current) ? <a className="btn btn-secondary" href={advancedEditorUrl(current)!}>ویرایش دستی</a> : null}
-          </div> : current && (["talking", "localize"].includes(current.engine) || (current.engine === "motion" && current.state?.confirmed)) && ["error", "canceled", "paused"].includes(current.status) ? <button className="btn btn-secondary" disabled={resuming} onClick={() => void resume()}><Icon name="play" size={14}/>{resuming ? "در حال ادامه…" : "ادامه از مرحلهٔ متوقف‌شده"}</button> : null}
+          </div> : current && (["talking", "localize"].includes(current.engine) || (current.engine === "motion" && current.state?.confirmed)) && ["error", "canceled", "paused"].includes(current.status) ? (askResume
+            ? <div className="resume-confirm" role="alertdialog">
+                <p>تحلیل و دارایی‌های آماده دوباره تولید نمی‌شوند. تکمیل مراحل ناقص ممکن است هزینهٔ API داشته باشد؛ هر مدیای ناقص فقط یک تلاش می‌شود.</p>
+                <button className="btn" disabled={resuming} onClick={() => void resume()}>بله، ادامه بده</button>{" "}
+                <button className="btn btn-secondary" onClick={() => setAskResume(false)}>انصراف</button>
+              </div>
+            : <button className="btn btn-secondary" disabled={resuming} onClick={() => setAskResume(true)}><Icon name="play" size={14}/>{resuming ? "در حال ادامه…" : "ادامه از مرحلهٔ متوقف‌شده"}</button>) : null}
           {!current && !processing && !pending && lastUserMessage && messages[messages.length - 1]?.content.startsWith('عملیات متوقف شد:') ? <button className="btn btn-secondary" disabled={sending} onClick={() => {
             if (window.confirm('هنوز پروژه‌ای ساخته نشده است. درخواست اصلی با همان فایل‌ها دوباره بررسی شود؟ این کار ممکن است هزینهٔ API داشته باشد؛ تولید نهایی همچنان نیازمند تأیید برنامه است.')) void send(undefined, { text: lastUserMessage.content, ids: lastUserMessage.attachments || [] });
           }}><Icon name="play" size={14}/>تلاش مجدد درخواست</button> : null}

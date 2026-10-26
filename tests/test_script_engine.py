@@ -233,3 +233,9 @@ def test_evidence_matching_tolerates_punctuation_joined_quotes_and_arabic_letter
     for evidence in ("«ابزار برش می‌زند» … «تدوینگر خوب هنوز کارگردان لحظه‌هاست»", "ماشین سریع‌تر است اما سلیقه ندارد", "L2: «ماشین سريع‌تر است، اما سلیقه ندارد.» | «چشم انتخاب می‌کند»"):
         review = script._verify(scores(8, evidence=evidence), GOOD, script.measure(GOOD, 15), False)
         assert all(s.verified for s in review.scores), evidence
+
+
+def test_multiword_subject_term_is_heard_when_a_third_of_its_words_are_spoken():
+    d = draft("یاقوت می‌درخشد؛ نقره ۹۲۵ است.", "ماشین سریع‌تر است، اما سلیقه ندارد.", "تدوینگر خوب هنوز کارگردان لحظه‌هاست.")
+    assert not script.measure(d, 15, must_name=["یاقوت تراش کله‌قندی"])["problems"] or all("یاقوت" not in p for p in script.measure(d, 15, must_name=["یاقوت تراش کله‌قندی"])["problems"])
+    assert any("موضوع ویدیو" in p for p in script.measure(GOOD, 15, must_name=["یاقوت تراش کله‌قندی"])["problems"])
