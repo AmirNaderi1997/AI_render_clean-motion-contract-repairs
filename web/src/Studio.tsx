@@ -108,9 +108,10 @@ export default function Studio() {
   React.useEffect(() => { const id = window.setInterval(() => setNow(Date.now()), 15000); return () => window.clearInterval(id); }, []);
 
   const refreshList = React.useCallback(() => authenticated ? api.listStudioConversations().then(setConversations).catch(() => undefined) : Promise.resolve(), [authenticated]);
-  const refresh = React.useCallback(async (id = activeId) => {
+  // `quiet` is for background updates (a live event arrived, the tab came back): a dropped connection there is not worth an error, the next update catches up.
+  const refresh = React.useCallback(async (id = activeId, quiet = false) => {
     if (!id) return;
-    try { setConversation(await api.getStudioConversation(id)); } catch (e) { setError(friendlyError(e, "load conversation")); }
+    try { setConversation(await api.getStudioConversation(id)); } catch (e) { if (!quiet) setError(friendlyError(e, "load conversation")); }
   }, [activeId]);
   React.useEffect(() => { void refreshList(); }, [refreshList]);
   React.useEffect(() => {
@@ -134,6 +135,16 @@ export default function Studio() {
   React.useEffect(() => {
     if (!activeId) return;
     const controller = new AbortController(); let stopped = false;
+    let connection: AbortController | null = null;      // the current live connection; replaced when the tab comes back, its socket is likely dead
+    const resume = () => {
+      if (document.visibilityState === "hidden" || stopped) return;
+      connection?.abort();
+      void refresh(activeId, true);
+    };
+    controller.signal.addEventListener("abort", () => connection?.abort(), { once: true });
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("online", resume);
+    window.addEventListener("pageshow", resume);
     const connect = async () => {
       try {
         while (!stopped) {
@@ -148,22 +159,26 @@ export default function Studio() {
       } catch { /* Older servers can still replay through the existing SSE cursor. */ }
       while (!stopped) {
         try {
+          connection = new AbortController();
           await api.streamStudioEvents(activeId, cursorRef.current, event => {
             cursorRef.current = Math.max(cursorRef.current, event.seq);
             setEvents(value => value.some(item => item.seq === event.seq) ? value : [...value, event]);
             if (refreshTimerRef.current != null) window.clearTimeout(refreshTimerRef.current);
-            refreshTimerRef.current = window.setTimeout(() => void refresh(activeId), 180);
+            refreshTimerRef.current = window.setTimeout(() => void refresh(activeId, true), 180);
             if (listTimerRef.current == null) listTimerRef.current = window.setTimeout(() => {
               listTimerRef.current = null; void refreshList(); window.dispatchEvent(new Event("editorgpt:conversations-updated"));
             }, 1200);
             if (event.type === "narration.ready" && voiceEnabledRef.current) void api.authenticatedObjectUrl(api.studioEventAudioUrl(activeId, event.data.event_seq)).then(url => { const audio = new Audio(url); void audio.play().finally(() => URL.revokeObjectURL(url)); });
-          }, controller.signal);
-        } catch { if (!controller.signal.aborted) await new Promise(resolve => setTimeout(resolve, 1200)); }
+          }, connection.signal);
+        } catch { if (!controller.signal.aborted) await new Promise(resolve => setTimeout(resolve, connection?.signal.aborted ? 150 : 1200)); }
       }
     };
     void connect();
     return () => {
       stopped = true; controller.abort();
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("online", resume);
+      window.removeEventListener("pageshow", resume);
       if (refreshTimerRef.current != null) window.clearTimeout(refreshTimerRef.current);
       if (listTimerRef.current != null) window.clearTimeout(listTimerRef.current);
       refreshTimerRef.current = null; listTimerRef.current = null;
