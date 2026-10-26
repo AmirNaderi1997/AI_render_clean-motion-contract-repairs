@@ -25,10 +25,10 @@ sentences (speech-to-text output, colloquial Tehrani Persian). Return ONLY a JSO
   "hook": "<pinned hook title in Persian, 3-8 words, a curiosity gap that makes people keep
            watching, usually first person and ending with ... when it teases; must be faithful
            to what the speaker actually says>",
-  "hook_highlight": ["<1-2 words or short phrases copied exactly from hook to show in yellow>"],
+  "hook_highlight": ["<1-2 words or short phrases copied exactly from hook to show in yellow; ALWAYS at least one, the word that carries the curiosity>"],
   "captions": [{"i": <sentence index>, "text": "<corrected caption>"}],
   "drop": [<indices of sentences to cut: filler, false starts, an off-topic "yes"/"ok" at the end>],
-  "bw": [<1-3 indices of the most emotional or dramatic sentences, shown in black and white>],
+  "bw": [<3-6 indices of the most emotional, dramatic or insightful sentences, spread over the WHOLE talk (roughly one every 20-30 seconds of speech), shown in black and white>],
   "notes": [{"i": <index of one of the "bw" sentences>, "text": "<2-4 word punchy key takeaway of it>"}],
   "cold_open": {"i": <sentence index>, "text": "<the single most provocative 2-4 second line of the
                 talk, copied word for word from that sentence's transcript (a contiguous part of it),
@@ -43,7 +43,8 @@ Caption rules:
 - Keep English terms the speaker says in Latin script (e.g. scalable, Drop Servicing).
 - Write numbers with Persian digits.
 - Do not add words the speaker did not say. Do not summarise.
-Keep "notes" to at most 2 and "bw" to at most 3. Each note is shown alone, word by word, over its
+Pick several key moments, not one: "bw" has 3 to 6 sentences (fewer only when the talk is under a minute) and "notes" gives
+each of them its takeaway (at most 5 notes). Each note is shown alone, word by word, over its
 black-and-white moment: write it in Persian words only (no English words, no Latin script)."""
 
 FILLER_WORDS = re.compile(r"^(?:[اآ]+[ِ]?)+$|^(?:ا?م+|ا?و?م+|ا?ه+)$")
@@ -121,7 +122,7 @@ def normalize(data: dict, count: int) -> dict:
         text = str((item or {}).get("text") or "").strip()
         if k is not None and text and k not in drop:
             captions[k] = text
-    bw = [k for k in (index(v) for v in data.get("bw") or []) if k is not None and k not in drop][:3]
+    bw = [k for k in (index(v) for v in data.get("bw") or []) if k is not None and k not in drop][:6]
     notes = []
     for item in data.get("notes") or []:
         k = index((item or {}).get("i"))
@@ -137,8 +138,17 @@ def normalize(data: dict, count: int) -> dict:
     if not hook:
         raise RuntimeError("the LLM returned no hook title")
     highlight = [str(h).strip() for h in data.get("hook_highlight") or [] if str(h).strip() and str(h).strip() in hook]
-    return {"hook": hook, "hook_highlight": highlight[:2], "captions": captions, "drop": drop,
-            "bw": bw, "notes": notes[:2], "cold_open": cold_open}
+    return {"hook": hook, "hook_highlight": highlight[:2] or default_highlight(hook), "captions": captions, "drop": drop,
+            "bw": bw, "notes": notes[:5], "cold_open": cold_open}
+
+
+def default_highlight(hook: str) -> list[str]:
+    """The hook always has a yellow word: when the model named none, the longest word (the first of equals), punctuation left out."""
+    words = [w for w in (re.sub(r"[^\w\u200c]", "", part) for part in hook.split()) if len(w) >= 3]
+    if not words:
+        return []
+    best = max(words, key=len)
+    return [best] if best in hook else []
 
 
 def is_filler(word: str) -> bool:

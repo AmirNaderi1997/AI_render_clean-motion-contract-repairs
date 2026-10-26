@@ -91,6 +91,8 @@ def ass_time(t: float) -> str:
 
 
 def ass_text(text: str) -> str:
+    from .persian_text import join_lam_alef
+    text = join_lam_alef(text)
     return text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\n", "\\N")
 
 
