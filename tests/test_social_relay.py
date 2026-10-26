@@ -289,7 +289,7 @@ def test_page_mode_returns_the_page_with_its_final_address_and_status(env, monke
 
 def test_the_editor_falls_back_to_the_relay_when_its_own_network_cannot_reach_the_host(monkeypatch):
     from app import studio_url
-    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://relay.example/api/index")
+    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://editorgpt-social-relay.vercel.app/api/index")
     monkeypatch.setenv("SOCIAL_RELAY_SECRET", SECRET)
     monkeypatch.setattr(studio_url, "_public_url", lambda url: url)
     studio_url._DIRECT_FAILED.clear()
@@ -330,7 +330,7 @@ def test_without_a_relay_the_direct_error_is_kept(monkeypatch):
 
 def test_relayed_scripts_are_kept_so_only_the_first_reading_pays_for_them(monkeypatch, tmp_path):
     from app import studio_url
-    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://relay.example/api/index")
+    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://editorgpt-social-relay.vercel.app/api/index")
     monkeypatch.setenv("SOCIAL_RELAY_SECRET", SECRET)
     monkeypatch.setattr(studio_url, "_public_url", lambda url: url)
     monkeypatch.setattr(studio_url, "_static_cache_path", lambda url: tmp_path / "script.bin")
@@ -355,12 +355,12 @@ def test_relayed_scripts_are_kept_so_only_the_first_reading_pays_for_them(monkey
 def test_a_page_that_needs_a_browser_is_rendered_by_the_relay_when_the_host_is_unreachable(monkeypatch, tmp_path):
     import base64
     from app import studio_url, public_page_browser as ppb
-    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://relay.example/api/index")
+    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://editorgpt-social-relay.vercel.app/api/index")
     monkeypatch.setenv("SOCIAL_RELAY_SECRET", SECRET)
     monkeypatch.setattr(studio_url, "_public_url", lambda url: url)
     studio_url._DIRECT_FAILED["store.example"] = __import__("time").monotonic() + 100
     monkeypatch.setattr(ppb, "render_page", lambda *a, **k: pytest.fail("the local browser must not wait for an unreachable host"))
-    assert ppb.relay_render_url() == "https://relay.example/api/render"
+    assert ppb.relay_render_url() == "https://editorgpt-social-relay.vercel.app/api/render"
     sent = {}
 
     class Client:
@@ -375,14 +375,14 @@ def test_a_page_that_needs_a_browser_is_rendered_by_the_relay_when_the_host_is_u
     import httpx
     monkeypatch.setattr(httpx, "Client", Client)
     result = studio_url._render("https://store.example/p/1", tmp_path)
-    assert sent["url"] == "https://relay.example/api/render" and sent["headers"]["x-relay-secret"] == SECRET
+    assert sent["url"] == "https://editorgpt-social-relay.vercel.app/api/render" and sent["headers"]["x-relay-secret"] == SECRET
     assert result["title"] == "Product" and result["images"] == [{"url": "https://store.example/a.jpg", "alt": "a"}]
     assert Path(result["screenshots"][0]["file"]).read_bytes() == b"jpegbytes" and result["screenshots"][0]["full_page"] is True
 
 
 def test_a_local_browser_failure_falls_back_to_the_relay_browser(monkeypatch, tmp_path):
     from app import studio_url, public_page_browser as ppb
-    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://relay.example/api/index")
+    monkeypatch.setenv("SOCIAL_RELAY_URL", "https://editorgpt-social-relay.vercel.app/api/index")
     monkeypatch.setenv("SOCIAL_RELAY_SECRET", SECRET)
     studio_url._DIRECT_FAILED.clear()
     monkeypatch.setattr(ppb, "render_page", lambda *a, **k: (_ for _ in ()).throw(ValueError("page.goto: Timeout")))

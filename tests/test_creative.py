@@ -110,8 +110,10 @@ def test_pick_overrules_a_choice_the_scores_contradict():
     assert _pick(close, concepts).id == "A"   # small gaps respect the critic's explicit choice
 
 
-def test_non_talk_kinds_never_pick_an_engine_style(patch):
+def test_non_talk_kinds_never_pick_an_engine_style(patch, monkeypatch):
     patch(Fake())
+    # The script engine is strict now (a script that was not approved never ships); this test is about styles, not scripts.
+    monkeypatch.setattr(creative.director, "_write_script", lambda *a, **k: None)
     plan = creative.direct_product({"product_name": "صندلی"}, "تیزر ۳۰ ثانیه", image_count=3)
     assert plan.kind == "product" and plan.style is None and all(c.style_hint is None for c in plan.concepts)
 
