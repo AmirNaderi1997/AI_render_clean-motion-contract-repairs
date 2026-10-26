@@ -227,3 +227,9 @@ def test_the_topic_must_be_spoken():
     assert not any("موضوع ویدیو" in p for p in ok["problems"]) and not ok["notes"]
     late = draft("ابزار می‌بُرد؛ تصمیم با توست.", "این کار آدم است.", "هوش مصنوعی تدوینگر را کنار نمی‌گذارد.")
     assert any("دو جملهٔ اول" in n for n in script.measure(late, 15, must_name=["تدوینگر"])["notes"])
+
+
+def test_evidence_matching_tolerates_punctuation_joined_quotes_and_arabic_letters():
+    for evidence in ("«ابزار برش می‌زند» … «تدوینگر خوب هنوز کارگردان لحظه‌هاست»", "ماشین سریع‌تر است اما سلیقه ندارد", "L2: «ماشین سريع‌تر است، اما سلیقه ندارد.» | «چشم انتخاب می‌کند»"):
+        review = script._verify(scores(8, evidence=evidence), GOOD, script.measure(GOOD, 15), False)
+        assert all(s.verified for s in review.scores), evidence

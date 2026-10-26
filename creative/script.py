@@ -157,14 +157,23 @@ def measure(draft: ScriptDraft, duration_s: float, *, outro_s: float = 0.0, must
 def _verify(review: ScriptReview, draft: ScriptDraft, measured: dict, has_reference: bool) -> ScriptReview:
     """A score only stands if its evidence is on the page: a quoted phrase from the script or a real measured number."""
     text = script_text(draft) + " " + " ".join(f"{line.title} {line.see}" for line in draft.lines)
-    squash = lambda value: re.sub(r"\s+", "", value)
+    squash = lambda value: re.sub(r"[\s\u200c\u200d\u200f\u200e.,،؛;:!?؟«»\"'“”‘’()\[\]…\-–—]+", "", value.replace("ي", "ی").replace("ك", "ک"))
     body = squash(text)
+
+    def on_page(evidence: str) -> bool:
+        """A quote counts if it, or each piece of it (the critic often joins several quotes with … | + /), is in the script."""
+        whole = squash(evidence)
+        if len(whole) >= 6 and whole in body:
+            return True
+        pieces = [squash(part) for part in re.split(r"\s*(?:…|\.\.\.|\||\+|/|؛|;|\n|[«»\"“”])\s*", evidence)]
+        pieces = [part for part in pieces if len(part) >= 6]
+        return bool(pieces) and all(part in body for part in pieces)
+
     seen: dict[str, CriterionScore] = {}
     for score in review.scores:
         if score.criterion not in CRITERIA or score.criterion in seen:
             continue
-        evidence = squash(score.evidence).strip("«»\"'.…")
-        quoted = len(evidence) >= 6 and evidence in body
+        quoted = on_page(score.evidence)
         measured_fact = score.criterion == "timing" and any(ch.isdigit() for ch in score.evidence)
         none_ok = score.criterion == "reference_alignment" and not has_reference
         if not (quoted or measured_fact or none_ok):
