@@ -162,7 +162,9 @@ export interface MusicStatus {
 }
 
 export interface StudioAttachment { id: string; kind: "video" | "image" | "audio"; filename: string; mime_type: string; size_bytes: number }
-export interface StudioMessage { id: number; role: "user" | "assistant"; content: string; attachments: string[]; created_at: string }
+export type AgentMode = "lite" | "medium";
+export interface StudioAgentRun { id: string; message_id: string; agent_mode: AgentMode; status: string; plan?: {summary: string; steps: {tool: string; label: string}[]}; error?: string }
+export interface StudioMessage { id: number; role: "user" | "assistant"; content: string; attachments: string[]; created_at: string; agent_mode?: AgentMode; agent_run_id?: string }
 export interface StudioProject {
   id: string; conversation_id: string; engine: "localize" | "talking" | "motion";
   title: string; status: string; external_ref?: string; current_version: number;
@@ -174,6 +176,7 @@ export interface StudioConversation {
   created_at: string; updated_at: string; messages?: StudioMessage[]; projects?: StudioProject[]; actions?: StudioAction[];
   /** The server's own answer to "is anything working for this chat" (any process: the API, the worker, a narration, a motion graphic). */
   busy?: boolean;
+  agent_runs?: StudioAgentRun[];
 }
 export interface StudioEvent { id: number; seq: number; type: string; data: Record<string, any>; created_at: string }
 
@@ -1117,14 +1120,23 @@ export const api = {
   async getStudioConversation(id: string): Promise<StudioConversation> {
     return j(await authFetch(`${BASE}/studio/conversations/${id}`));
   },
-  async updateStudioConversation(id: string, patch: { title?: string; status_voice_enabled?: boolean; execution_mode?: "auto" | "manual" }): Promise<StudioConversation> {
+  async agentPreferences(): Promise<{default_agent_mode: AgentMode}> {
+    return j(await authFetch(`${BASE}/studio/agent-preferences`));
+  },
+  async saveAgentPreferences(default_agent_mode: AgentMode): Promise<{default_agent_mode: AgentMode}> {
+    return j(await authFetch(`${BASE}/studio/agent-preferences`, {method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({default_agent_mode})}));
+  },
+  async resumeAgentRun(id: string, decision: "approve" | "retry" | "cancel") {
+    return j(await authFetch(`${BASE}/studio/agent-runs/${id}/resume`, {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({decision})}));
+  },
+  async updateStudioConversation(id: string, patch: { title?: string; status_voice_enabled?: boolean; execution_mode?: "auto" | "manual"; agent_mode?: AgentMode }): Promise<StudioConversation> {
     return j(await authFetch(`${BASE}/studio/conversations/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }));
   },
   async uploadStudioAttachment(id: string, file: File, onProgress?: (value: number) => void): Promise<StudioAttachment> {
     const form = new FormData(); form.append("file", file);
     return uploadWithProgress(`${BASE}/studio/conversations/${id}/attachments`, form, onProgress);
   },
-  async sendStudioMessage(id: string, content: string, attachment_ids: string[], options: { execution_mode?: "auto" | "manual"; manual_question_id?: string; render_target?: "server" | "browser" } = {}): Promise<StudioMessage> {
+  async sendStudioMessage(id: string, content: string, attachment_ids: string[], options: { execution_mode?: "auto" | "manual"; manual_question_id?: string; render_target?: "server" | "browser"; agent_mode?: AgentMode } = {}): Promise<StudioMessage> {
     return j(await authFetch(`${BASE}/studio/conversations/${id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content, attachment_ids, ...options }) }));
   },
   async setProjectRenderTarget(id: string, target: "server" | "browser"): Promise<StudioProject> {

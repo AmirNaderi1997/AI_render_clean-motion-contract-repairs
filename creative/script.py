@@ -240,7 +240,7 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
             review = critique(draft, brief, concept, reference, measured, used=used)
         except CreativeUnavailable as exc:
             log.warning("script critic unavailable: %s", exc)
-            review = ScriptReview(verdict="rewrite" if measured["problems"] else "ship", must_fix=measured["problems"],
+            review = ScriptReview(verdict="rewrite", must_fix=measured["problems"] + ["بازبینی مستقل کیفیت انجام نشد؛ سناریو تأیید نشده است."],
                                   summary="منتقد در دسترس نبود؛ فقط بررسی‌های اندازه‌گیری‌شده انجام شد.")
             review.scores = []
         report.attempts = attempt + 1

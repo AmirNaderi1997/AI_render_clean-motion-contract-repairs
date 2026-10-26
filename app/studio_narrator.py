@@ -14,6 +14,7 @@ import logging
 import threading
 import time
 import uuid
+import contextvars
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Any
 
@@ -89,7 +90,9 @@ def _stream(conversation_id: str, user_key: str, kind: str, facts: dict, attachm
             if studio_flags.generation(user_key, conversation_id) != generation:
                 _emit(conversation_id, "assistant.response.failed", response_id=response_id, text="", message_id=None, error="")
                 return
-            saved = run(repo.add_message(conversation_id, user_key, "assistant", text, attachments or None))
+            mode = facts.get("agent_mode")
+            saved = run(repo.add_message(conversation_id, user_key, "assistant", text, attachments or None,
+                                        **({"agent_mode": mode} if mode in {"lite", "medium"} else {})))
             _emit(conversation_id, "assistant.response.completed", response_id=response_id, text=text, message_id=saved["id"], attachments=list(attachments or []))
             return
         except Exception as exc:
@@ -118,7 +121,9 @@ def narrate(conversation_id: str, user_key: str, kind: str, facts: dict[str, Any
         with studio_flags.working(user_key, conversation_id):
             _stream(conversation_id, user_key, kind, facts, attachments, fallback, generation)
 
-    job = _executor(conversation_id).submit(run_narration, generation)
+    # Keep authenticated Gateway accounting/cancellation context in the worker.
+    context = contextvars.copy_context()
+    job = _executor(conversation_id).submit(context.run, run_narration, generation)
     if not background:
         job.result()
     return job

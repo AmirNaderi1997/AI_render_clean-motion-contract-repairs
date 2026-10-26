@@ -93,7 +93,8 @@ def render_page(url: str, output: Path) -> dict:
 
 
 def relay_render_url() -> str:
-    base = os.environ.get("SOCIAL_RELAY_URL", "").rstrip("/")
+    from app.page_relay import config
+    base = config()[0].rstrip("/")
     return (base[: -len("/api/index")] if base.endswith("/api/index") else base[: -len("/api")] if base.endswith("/api") else base) + "/api/render"
 
 
@@ -101,13 +102,14 @@ def render_page_via_relay(url: str, output: Path) -> dict:
     """The page is rendered by a browser on the relay (outside this network); only the text, pictures and screenshot come back.
     Same result shape as ``render_page``."""
     import httpx
-    from .studio_url import _public_url
-    url = _public_url(url)
+    from app.page_relay import config
+    from .studio_url import _relay_public_url
+    url = _relay_public_url(url)
     response = None
     for attempt in range(3):
         try:
             with httpx.Client(timeout=httpx.Timeout(150, connect=10)) as client:
-                response = client.post(relay_render_url(), json={"url": url}, headers={"x-relay-secret": os.environ["SOCIAL_RELAY_SECRET"]})
+                response = client.post(relay_render_url(), json={"url": url}, headers={"x-relay-secret": config()[1]})
             break
         except httpx.TransportError as exc:
             if attempt == 2:

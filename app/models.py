@@ -219,6 +219,7 @@ class StudioMessage(Base):
     )
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
+    agent_mode: Mapped[str] = mapped_column(String(16), default="lite", server_default="lite")
     attachments: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -307,3 +308,22 @@ class StudioEvent(Base):
     event_type: Mapped[str] = mapped_column(String(64))
     data: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class StudioAgentPreference(Base):
+    __tablename__ = "studio_agent_preferences"
+    user_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    default_mode: Mapped[str] = mapped_column(String(16), default="lite")
+
+
+class StudioAgentRun(Base):
+    __tablename__ = "studio_agent_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("studio_conversations.id", ondelete="CASCADE"), index=True)
+    user_key: Mapped[str] = mapped_column(String(64), index=True)
+    message_id: Mapped[str] = mapped_column(String(64))
+    agent_mode: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    __table_args__ = (UniqueConstraint("conversation_id", "message_id", name="uq_studio_agent_message"),)

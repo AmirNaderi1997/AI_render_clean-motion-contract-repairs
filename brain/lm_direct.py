@@ -109,6 +109,7 @@ def config() -> dict:
             "base_url": saved_p.get("base_url") or base["base_url"], "model": saved_p.get("model") or base["model"],
             "format": saved_p.get("format") if saved_p.get("format") in FORMATS else base["format"],
             "extra_header_name": saved_p.get("extra_header_name", ""),
+            "prefer_stream": bool(saved_p.get("prefer_stream", False)),
         })
     return {"enabled": bool(saved.get("enabled", True)), "providers": providers,
             "stt": {"enabled": True, "model": "small", "improve_low_quality": True, **saved.get("stt", {})}}
@@ -143,6 +144,7 @@ def status() -> dict:
 
 def save_config(enabled: bool, providers: list[dict], stt: dict | None = None) -> dict:
     seen, order, overrides = set(), [], {}
+    previous = {p["id"]: p for p in config()["providers"]}
     for item in providers:
         pid = item.get("id")
         if pid not in PROVIDERS or pid in seen:
@@ -154,7 +156,8 @@ def save_config(enabled: bool, providers: list[dict], stt: dict | None = None) -
         header = str(item.get("extra_header_name") or "").strip()[:60]
         if header and not all(c.isalnum() or c in "-_" for c in header):
             raise ValueError("Header names may contain letters, digits, - and _ only")
-        overrides[pid] = {"enabled": bool(item.get("enabled", True)), "base_url": base, "model": model, "format": fmt, "extra_header_name": header}
+        overrides[pid] = {"enabled": bool(item.get("enabled", True)), "base_url": base, "model": model, "format": fmt, "extra_header_name": header,
+                          "prefer_stream": previous[pid]["prefer_stream"] if item.get("prefer_stream") is None else bool(item["prefer_stream"])}
     stt = stt if stt is not None else config()["stt"]
     if stt.get('model') not in {'base','small','medium','large-v3'}:
         raise ValueError('Unsupported local Whisper model')
@@ -216,11 +219,12 @@ def _to_gemini(messages: list[dict], tokens: int, temperature) -> dict:
 def _from_gemini(data: dict, model: str) -> dict:
     candidates = data.get("candidates") or []
     parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
-    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict) and not p.get('thought'))
     if not text:
         raise DirectError("Gemini returned no text")
     usage = data.get("usageMetadata") or {}
-    return {"model": model, "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+    finish = candidates[0].get('finishReason','STOP') if candidates else 'STOP'
+    return {"model": model, "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": 'length' if finish=='MAX_TOKENS' else 'stop' if finish=='STOP' else finish.lower()}],
             "usage": {"prompt_tokens": usage.get("promptTokenCount"), "completion_tokens": usage.get("candidatesTokenCount")}}
 
 
@@ -240,10 +244,24 @@ def _prepare(provider: dict, messages: list[dict], *, model: str, tokens: int, t
     if name and header_value_for(provider["id"]):
         headers[name] = header_value_for(provider["id"])
     if provider["format"] == "gemini":
-        if extra and (extra.get("tools") or extra.get("response_format")):
+        if extra and (extra.get("tools") or (extra.get("response_format") and extra['response_format'].get('type')!='json_object')):
             raise DirectError("Gemini native format does not carry tools or structured output")
+        native = _to_gemini(messages, tokens, temperature)
+        if (extra or {}).get('response_format',{}).get('type')=='json_object':
+            native['generationConfig']['responseMimeType']='application/json'
+        if model == 'gemini-3.5-flash':
+            native['generationConfig']['thinkingConfig']={'thinkingLevel':'minimal' if tokens<=512 else 'low'}
+        if base == 'https://rafiei-telegram-api-relay.vercel.app/api/gemini':
+            # The approved relay owns the Google key; the client authenticates
+            # with a separate relay secret and must not append native API paths.
+            relay_secret = settings.GEMINI_RELAY_SECRET
+            if not relay_secret:
+                raise DirectError('Gemini relay secret is not configured')
+            headers['x-relay-secret'] = relay_secret
+            headers['x-gemini-model'] = model
+            return relay_secret, base, headers, native
         headers["x-goog-api-key"] = key
-        return key, f"{base}/models/{model}:generateContent", headers, _to_gemini(messages, tokens, temperature)
+        return key, f"{base}/models/{model}:generateContent", headers, native
     headers["Authorization"] = f"{PROVIDERS[provider['id']].get('auth', 'Bearer')} {key}"
     body = adapters.payload("chat", model, messages, tokens=tokens, temperature=temperature, extra=extra)
     if stream:
@@ -253,6 +271,18 @@ def _prepare(provider: dict, messages: list[dict], *, model: str, tokens: int, t
 
 def call(provider: dict, messages: list[dict], *, model: str, tokens: int, temperature=None, timeout: float = 90, extra=None) -> dict:
     """One request to one provider. Returns an OpenAI-shaped chat response or raises DirectError."""
+    if provider.get("prefer_stream") and provider["format"] == "openai" and not any((extra or {}).get(k) for k in ("tools", "tool_choice", "functions", "function_call")):
+        # Jarvis's tested transport accepts SSE while synchronous responses can
+        # disconnect before headers. Collect SSE without replaying the request or
+        # changing the selected provider/model; callers still validate the result.
+        metadata = {}
+        text = "".join(stream_call(provider, messages, model=model, tokens=tokens, temperature=temperature,
+                                   timeout=timeout, extra=extra, _metadata=metadata))
+        if not text.strip(): raise DirectError("Provider returned no text", 502)
+        result = {"model": metadata.get("model", model), "choices": [{"message": {"role": "assistant", "content": text},
+                   "finish_reason": metadata.get("finish_reason")} ]}
+        if "usage" in metadata: result["usage"] = metadata["usage"]
+        return result
     key, url, headers, body = _prepare(provider, messages, model=model, tokens=tokens, temperature=temperature, extra=extra, stream=False)
     try:
         response = _post(url, headers, body, timeout)
@@ -269,13 +299,13 @@ def call(provider: dict, messages: list[dict], *, model: str, tokens: int, tempe
     return _from_gemini(data, model) if provider["format"] == "gemini" else data
 
 
-def stream_call(provider: dict, messages: list[dict], *, model: str, tokens: int, temperature=None, timeout: float = 60):
+def stream_call(provider: dict, messages: list[dict], *, model: str, tokens: int, temperature=None, timeout: float = 60, extra=None, _metadata=None):
     """Real token streaming from one provider (OpenAI-compatible SSE). The native Gemini format has no stream here: its whole answer is yielded once."""
     if provider["format"] == "gemini":
         yield adapters.text("chat", call(provider, messages, model=model, tokens=tokens, temperature=temperature, timeout=timeout))
         return
     from .http_ssl import ssl_context
-    key, url, headers, body = _prepare(provider, messages, model=model, tokens=tokens, temperature=temperature, extra=None, stream=True)
+    key, url, headers, body = _prepare(provider, messages, model=model, tokens=tokens, temperature=temperature, extra=extra, stream=True)
     started = time.monotonic()
     try:
         with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(timeout, 10)), verify=ssl_context(), follow_redirects=False) as client:
@@ -299,12 +329,16 @@ def stream_call(provider: dict, messages: list[dict], *, model: str, tokens: int
                         continue
                     if chunk.get("error"):
                         raise DirectError("provider reported a stream error", 502)
+                    if _metadata is not None:
+                        if chunk.get("model"): _metadata["model"] = chunk["model"]
+                        if chunk.get("usage"): _metadata["usage"] = chunk["usage"]
                     choices = chunk.get("choices") or []
                     delta = (choices[0].get("delta") or {}).get("content") if choices else None
                     if delta:
                         yield delta
                     if choices and choices[0].get("finish_reason"):
                         done = True
+                        if _metadata is not None: _metadata["finish_reason"] = choices[0]["finish_reason"]
                 if not done:
                     raise DirectError("stream ended before completion", 502)
     except httpx.TimeoutException as exc:
@@ -366,7 +400,10 @@ def try_fallback(messages: list[dict], *, candidates: list[str], tokens: int, te
         model = model_for(provider, candidates)
         started = time.monotonic()
         try:
-            response = call(provider, messages, model=model, tokens=tokens, temperature=temperature, timeout=min(timeout, 120), extra=extra)
+            provider_extra = extra
+            if validate is not None and provider['format']=='gemini':
+                provider_extra={**(extra or {}),'response_format':{'type':'json_object'}}
+            response = call(provider, messages, model=model, tokens=tokens, temperature=temperature, timeout=min(timeout, 120), extra=provider_extra)
             if validate is not None:
                 # Structured callers (JSON plans): an answer that does not parse is no answer; ask the next provider instead.
                 try:

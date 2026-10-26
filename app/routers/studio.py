@@ -100,6 +100,7 @@ class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=255)
     status_voice_enabled: bool | None = None
     execution_mode: Literal["auto", "manual"] | None = None
+    agent_mode: Literal["lite", "medium"] | None = None
 
 
 class MessageCreate(BaseModel):
@@ -108,6 +109,7 @@ class MessageCreate(BaseModel):
     execution_mode: Literal["auto", "manual"] | None = None
     manual_question_id: str | None = Field(default=None, max_length=64)
     render_target: Literal["server", "browser"] | None = None
+    agent_mode: Literal["lite", "medium"] = "lite"  # old API clients remain Lite
 
 
 class StoryboardUpdate(BaseModel):
@@ -122,7 +124,57 @@ class LegacyProjectOpen(BaseModel):
 
 @router.post("/conversations", status_code=201)
 async def create_conversation(request: Request, body: ConversationCreate):
-    return await repo.create_conversation(_user(request), body.title.strip() or "گفتگوی جدید")
+    from app.agents.store import preference
+    value = await repo.create_conversation(_user(request), body.title.strip() or "گفتگوی جدید")
+    return await repo.set_conversation(value["id"], _user(request), state={"agent_mode": await preference(_user(request))})
+
+
+class AgentPreference(BaseModel):
+    default_agent_mode: Literal["lite", "medium"]
+
+
+@router.get("/agent-preferences")
+async def get_agent_preference(request: Request):
+    from app.agents.store import preference
+    return {"default_agent_mode": await preference(_user(request))}
+
+
+@router.put("/agent-preferences")
+async def put_agent_preference(request: Request, body: AgentPreference):
+    from app.agents.store import preference
+    return {"default_agent_mode": await preference(_user(request), body.default_agent_mode)}
+
+
+class AgentResume(BaseModel):
+    decision: Literal["approve", "retry", "cancel"]
+
+
+@router.post("/agent-runs/{run_id}/resume")
+async def resume_agent(request: Request, run_id: str, body: AgentResume):
+    from app.agents import store
+    from app.agents.dispatcher import dispatch, ensure_available
+    user = _user(request)
+    try:
+        record = await store.get_run(run_id, user)
+        if record["agent_mode"] != "medium": raise HTTPException(409, "This run is not Medium")
+        if body.decision == "cancel":
+            claimed = await store.update(run_id, user, status="cancelled", claim={"waiting_approval", "waiting_job", "failed"})
+        else:
+            ensure_available("medium")
+            if body.decision == "approve":
+                claimed = await store.update(run_id, user, status="queued", claim={"waiting_approval"}, patch={"resume": {"approve": True}})
+            else:
+                # Retry resumes the persisted graph; the operation ledger forbids uncertain writes.
+                from app.studio_flags import generation
+                claimed = await store.update(run_id, user, status="queued", claim={"failed"},
+                    patch={"stop_generation": generation(user, record["conversation_id"])})
+            if claimed: await dispatch(run_id, user)
+        if not claimed: raise HTTPException(409, "This run has already advanced; refresh the conversation")
+        await repo.emit(record["conversation_id"], "agent.run.updated", {"run_id": run_id,
+                        "agent_mode": "medium", "status": claimed["status"]})
+        return {"id": run_id, "status": claimed["status"]}
+    except KeyError: raise HTTPException(404, "execution not found")
+    except ValueError as exc: raise HTTPException(409, str(exc))
 
 
 @router.get("/conversations")
@@ -177,6 +229,10 @@ async def get_conversation(request: Request, conversation_id: str):
         conversation = await repo.get_conversation(conversation_id, _user(request))
         from app.studio_orchestrator import conversation_busy
         payload = _public_conversation(conversation)
+        from app.agents.store import runs
+        payload["agent_runs"] = [{"id": r["id"], "message_id": r["message_id"], "agent_mode": r["agent_mode"],
+                                  "status": r["status"], "plan": r["data"].get("plan"), "error": r["data"].get("error")}
+                                 for r in await runs(conversation_id, _user(request))]
         payload["busy"] = await asyncio.to_thread(conversation_busy, conversation, _user(request))      # the server's own word, whichever process is working
         return payload
     except KeyError:
@@ -188,9 +244,12 @@ async def update_conversation(request: Request, conversation_id: str, body: Conv
     try:
         changes = body.model_dump(exclude_unset=True)
         mode = changes.pop("execution_mode", None)
-        if mode:
+        agent_mode = changes.pop("agent_mode", None)
+        if mode or agent_mode:
             old = await repo.get_conversation(conversation_id, _user(request))
-            changes["state"] = {**old.get("state", {}), "execution_mode": mode}
+            changes["state"] = {**old.get("state", {})}
+            if mode: changes["state"]["execution_mode"] = mode
+            if agent_mode: changes["state"]["agent_mode"] = agent_mode
             if mode == 'auto': changes['state']['manual_session'] = None
         return await repo.set_conversation(conversation_id, _user(request), **changes)
     except KeyError:
@@ -270,6 +329,14 @@ async def send_message(request: Request, conversation_id: str, body: MessageCrea
     user_key = _user(request)
     try:
         conversation = await repo.get_conversation(conversation_id, user_key)
+        from app.agents.dispatcher import ensure_available
+        from app.agents import store as agent_store
+        try: ensure_available(body.agent_mode)
+        except ValueError as exc: raise HTTPException(503, str(exc))
+        if body.agent_mode == "medium":
+            active = await agent_store.runs(conversation_id, user_key)
+            if any(r["agent_mode"] == "medium" and r["status"] in {"queued", "running", "waiting_approval", "waiting_job"} for r in active):
+                raise HTTPException(409, "Medium در همین گفتگو یک اجرای فعال دارد؛ آن را ادامه دهید یا متوقف کنید. انتخاب موتور پیام جدید محفوظ است.")
         if body.render_target == "browser":
             current_id = conversation.get("state", {}).get("current_project_id")
             if current_id and not any(p.get("id") == current_id and p.get("state", {}).get("render_target_override") for p in conversation.get("projects", [])):
@@ -278,7 +345,7 @@ async def send_message(request: Request, conversation_id: str, body: MessageCrea
                 if (current["state"].get("render_started") and current["status"] == "running") or (active_job and active_job.render.status in {"queued", "running"}):
                     raise HTTPException(409, "A backend render is active. Stop it explicitly before switching to this device.")
                 await repo.update_project(current_id, user_key, state={**current["state"], "render_target": "browser"})
-        preferences = {}
+        preferences = {"agent_mode": body.agent_mode}
         if body.execution_mode: preferences["execution_mode"] = body.execution_mode
         if body.render_target: preferences["render_target"] = body.render_target
         if preferences:
@@ -291,10 +358,19 @@ async def send_message(request: Request, conversation_id: str, body: MessageCrea
             spec = question(session)
             selected = next((c for c in spec['choices'] if c['value'] == display), None)
             if selected: display = spec['title'] + ': ' + selected['label']
-        message = await repo.add_message(conversation_id, user_key, "user", display, body.attachment_ids)
+        message = await repo.add_message(conversation_id, user_key, "user", display, body.attachment_ids, agent_mode=body.agent_mode)
+        from app.studio_flags import generation
+        record = await agent_store.create_run(conversation_id, user_key, message["id"], body.agent_mode,
+            {"text": body.content.strip(), "attachment_ids": body.attachment_ids, "manual_question_id": body.manual_question_id,
+             "initial_project_id": conversation.get("state", {}).get("current_project_id")})
+        await agent_store.update(record["id"], user_key, patch={"stop_generation": generation(user_key, conversation_id)})
     except KeyError:
         raise HTTPException(404, "conversation or attachment not found")
-    dispatch_message(conversation_id, user_key, message["id"], body.content.strip(), body.attachment_ids, body.manual_question_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    from app.agents.dispatcher import dispatch
+    await dispatch(record["id"], user_key, lite_dispatch=dispatch_message)
+    message["agent_run_id"] = record["id"]
     return message
 
 

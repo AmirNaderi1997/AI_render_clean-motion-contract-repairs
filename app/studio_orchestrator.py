@@ -251,7 +251,7 @@ def _opening_cut(text: str, limit: int = 420) -> str:
     return cut[:end + 1] if end > limit * 0.3 else cut.rsplit(" ", 1)[0] + "…"
 
 
-def _stream_response(cid: str, user: str, message_id, conversation: dict, attachments: list[dict]) -> bool:
+def _stream_response(cid: str, user: str, message_id, conversation: dict, attachments: list[dict], *, agent_mode: str | None = None) -> bool:
     """A real, bounded model response before expensive analysis; never a canned acknowledgement."""
     from brain.lm_gateway import configured, stream_chat
     if not configured(): return False
@@ -289,13 +289,13 @@ def _stream_response(cid: str, user: str, message_id, conversation: dict, attach
                 flushed=text;tick=time.monotonic()
         text = _opening_cut(text)
         if not text.strip(): raise ValueError('Initial response was empty')
-        saved=run(repo.add_message(cid,user,'assistant',text))
+        saved=run(repo.add_message(cid,user,'assistant',text, **({'agent_mode': agent_mode} if agent_mode else {})))
         _emit(cid,'assistant.response.completed',response_id=response_id,text=text,message_id=saved['id'])
         return True
     except Exception as exc:
         # Never simulate tokens or substitute a fixed model answer. The actual
         # operation may continue independently when conversational streaming fails.
-        saved=run(repo.add_message(cid,user,'assistant',text)) if text.strip() else None
+        saved=run(repo.add_message(cid,user,'assistant',text, **({'agent_mode': agent_mode} if agent_mode else {}))) if text.strip() else None
         _emit(cid,'assistant.response.failed',response_id=response_id,text=text,
               message_id=saved['id'] if saved else None,error='' if discarded else 'پاسخ اولیهٔ مدل کامل نشد؛ وضعیت واقعی پردازش را در مراحل ببینید.')
         log.warning('Initial assistant stream failed: %s',type(exc).__name__)
@@ -1845,6 +1845,9 @@ def confirm_action(action_id: str, user_key: str) -> dict:
         return run(repo.get_action(action_id,user_key))
     if action["kind"] != "generate_motion_video": raise ValueError("نوع عملیات پشتیبانی نمی‌شود")
     project = run(repo.get_project(action["project_id"], user_key))
+    script_report = (project.get('state', {}).get('creative_plan') or {}).get('script') or {}
+    if script_report and ((script_report.get('review') or {}).get('verdict') != 'ship' or not script_report.get('timing_ok', True)):
+        raise ValueError('این سناریو هنوز بازبینی کیفیت را پاس نکرده است؛ ابتدا سناریو را اصلاح کنید. تولید مدیا شروع نشد.')
     if project['engine']!='motion' or project['external_ref']!=action['payload']['job_id']:
         raise ValueError('Action does not match this project')
     job = jobstore.get(action["payload"]["job_id"])
@@ -2033,6 +2036,19 @@ async def sync_conversation(conversation_id: str, user_key: str) -> None:
         try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError: return
         await _sync_conversation_once(conversation_id, user_key)
+        from app.agents import store as agent_store
+        medium_runs = [r for r in await agent_store.runs(conversation_id, user_key)
+                       if r["agent_mode"] == "medium" and r["status"] in {"waiting_job", "running"}]
+        if medium_runs:
+            try:
+                from app.agents.medium.graph import resume_ready, recover_interrupted
+            except ImportError:
+                for record in medium_runs:
+                    await agent_store.update(record["id"], user_key, status="failed", patch={"error":
+                        "EditorGPT Medium در این نصب فعال نیست؛ وابستگی‌ها را نصب کنید یا برای پیام بعدی خودتان Lite را انتخاب کنید."})
+            else:
+                await recover_interrupted(conversation_id, user_key)
+                await resume_ready(conversation_id, user_key)
 
 
 async def _sync_conversation_once(conversation_id: str, user_key: str) -> None:

@@ -334,7 +334,18 @@ def get(job_id: str, db=None) -> Optional[Job]:
                 _jobs[job_id] = job
         return job
     with _lock:
-        return _jobs.get(job_id)
+        job = _jobs.get(job_id)
+        if job is None and (JOBS_ROOT / job_id).is_dir() and LOCAL_REGISTRY.is_file():
+            # A recovery/import can register a job while this API is running.
+            # Read only the exact persisted ID; never infer ownership from a folder.
+            try:
+                payload = json.loads(LOCAL_REGISTRY.read_text()).get(job_id)
+                if isinstance(payload, dict):
+                    job = _job_from_local_payload(job_id, payload)
+                    _jobs[job_id] = job
+            except (OSError, ValueError, TypeError):
+                pass
+        return job
 
 
 def list_jobs(db=None) -> list[Job]:

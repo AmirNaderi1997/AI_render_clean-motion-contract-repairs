@@ -320,3 +320,15 @@ def test_route_models_are_attempted_in_the_routes_own_order(monkeypatch):
     pairs = direct._stream_attempts(["custom:DeepSeek-V4-Flash#arvancloud-all-models", "custom:GLM-5.3-Flash#arvancloud-all-models"])
     assert [(p["id"], m) for p, m in pairs][:2] == [("arvan", "DeepSeek-V4-Flash"), ("arvan", "GLM-5.3-Flash")]
     assert ("sarovi", direct.PROVIDERS["sarovi"]["model"]) in [(p["id"], m) for p, m in pairs]        # then each provider's default
+def test_google_relay_uses_relay_auth_and_exact_endpoint(monkeypatch):
+    from brain import lm_direct as direct
+    monkeypatch.setattr(direct, 'key_for', lambda _: 'not-the-google-key')
+    monkeypatch.setattr(direct.settings, 'GEMINI_RELAY_SECRET', 'test-relay-secret')
+    p={'id':'gemini','format':'gemini','base_url':'https://rafiei-telegram-api-relay.vercel.app/api/gemini'}
+    _,url,headers,body=direct._prepare(p,[{'role':'user','content':'hello'}],model='gemini-3.5-flash',tokens=20,temperature=None,extra=None,stream=False)
+    assert url==p['base_url']
+    assert headers['x-relay-secret']=='test-relay-secret'
+    assert headers['x-gemini-model']=='gemini-3.5-flash'
+    assert 'x-goog-api-key' not in headers and 'Authorization' not in headers
+    assert body['contents']
+

@@ -6,6 +6,7 @@ import { Icon, IconName } from "./components/Icon";
 import { aiAdminRequest } from "./api";
 import { useAuth } from "./auth/AuthContext";
 import { isLocalDevelopment } from "./auth";
+import { AgentSettings } from "./studio/AgentMode";
 
 type Tool = { label: string; description: string; to: string; icon: IconName };
 const groups: { title: string; hint: string; tools: Tool[] }[] = [
@@ -51,6 +52,7 @@ export default function Settings() {
     </section> : null}
 
     <InstallationSettings/>
+    {authenticated ? <AgentSettings/> : null}
     <DeviceSettings/>
     {admin ? <section className="set-section" aria-labelledby="set-admin"><h2 id="set-admin">Administration</h2>
       <NavLink className="set-link" to="/settings/ai"><Icon name="settings" size={20}/><span><b>AI models &amp; logs</b><small>Routing, priorities and request history.</small></span><Icon name="chevron" size={16}/></NavLink></section> : null}

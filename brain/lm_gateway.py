@@ -189,13 +189,50 @@ def _wire(endpoint, data, timeout):
                 raise GatewayError(f"LM API HTTP {response.status_code}: {safe(response.text, 350)}",
                     response.status_code, response.status_code in {408, 429, 500, 502, 503, 504})
             return response.json(), dict(response.headers), response.status_code
-    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+    except httpx.TransportError as exc:
         raise GatewayError(f"LM API {type(exc).__name__}", 504, True) from exc
 
 
 def _audit(record):
     try: store.log(record)
     except Exception: log.exception("AI audit persistence failed request=%s", record["id"])
+
+
+def _wire_chat_stream(endpoint, data, timeout):
+    """Collect real SSE for structured callers; validation stays in complete()."""
+    if endpoint != "chat": raise GatewayError("Structured streaming requires chat", 422)
+    chunks = []; result = {}; completed = False
+    started = time.monotonic()
+    try:
+        with _client(timeout) as client:
+            with client.stream("POST", _url("chat/completions"), headers=headers(),
+                               json={**data, "stream": True}) as response:
+                hdr = dict(response.headers)
+                if not response.is_success:
+                    raise GatewayError(f"LM stream HTTP {response.status_code}", response.status_code,
+                                       response.status_code in {408, 429, 500, 502, 503, 504})
+                for line in response.iter_lines():
+                    if time.monotonic() - started > timeout: raise GatewayError("Stream deadline exceeded", 504, True)
+                    if not line.startswith("data:"): continue
+                    value = line[5:].strip()
+                    if value == "[DONE]": completed = True; break
+                    try: chunk = json.loads(value)
+                    except ValueError: raise GatewayError("Invalid SSE document", 502, True) from None
+                    if chunk.get("error"): raise GatewayError("LM stream reported an error", 502, True)
+                    if chunk.get("model"): result["model"] = chunk["model"]
+                    if chunk.get("usage"): result["usage"] = chunk["usage"]
+                    choices = chunk.get("choices") or []
+                    if choices:
+                        choice = choices[0]
+                        if choice.get("finish_reason"): completed = True; result["finish_reason"] = choice["finish_reason"]
+                        delta = choice.get("delta", {}).get("content")
+                        if isinstance(delta, str): chunks.append(delta)
+                if not completed: raise GatewayError("LM stream ended before completion", 502, True)
+                result["choices"] = [{"message": {"role": "assistant", "content": "".join(chunks)},
+                                      "finish_reason": result.get("finish_reason")}]
+                return result, hdr, response.status_code
+    except httpx.TransportError as exc:
+        raise GatewayError(f"LM API {type(exc).__name__}", 504, True) from exc
 
 
 def _record(route, endpoint, requested, started, attempts, response=None, hdr=None, error=None, request=None):
@@ -253,12 +290,13 @@ from app.studio_activity import observe_request
 
 
 @observe_request
-def complete(route, messages, *, required=None, tokens=None, extra=None, endpoint=None, model_override=None, probe=False, validate_response=None):
+def complete(route, messages, *, required=None, tokens=None, extra=None, endpoint=None, model_override=None, probe=False, validate_response=None, stream=False):
     cfg = defaults().get(route)
     if not cfg or not gateway_settings()["enabled"] or (not cfg["enabled"] and not probe):
         raise GatewayError("This AI route is disabled", 503)
     endpoint = endpoint or cfg["endpoint"]
     required = set(required or {endpoint})
+    if stream: required.add("streaming")
     if extra and extra.get("tools"): required.add("tools")
     if extra and extra.get("response_format"): required.add("structured")
     models = store.records("models")
@@ -285,7 +323,8 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
                 tick = time.monotonic()
                 try:
                     remaining = min(300, cfg["timeout"]*2) - (time.monotonic()-started)
-                    response, hdr, status = _wire(endpoint, body, max(1, min(cfg["timeout"], remaining)))
+                    wire = _wire_chat_stream if stream else _wire
+                    response, hdr, status = wire(endpoint, body, max(1, min(cfg["timeout"], remaining)))
                     if validate_response is not None:
                         try:
                             validate_response(adapters.text(endpoint, response))
@@ -365,7 +404,20 @@ def stream_chat(route, messages, model_override=None, probe=False, *, tokens=Non
             yield piece
     except lm_direct.DirectError:
         if text: raise
-        raise error                     # nothing could stream: report why the LM route could not
+        # Some upstreams accept chat but disconnect SSE before its first token.
+        # Ask the SAME configured route for a real bounded response; never fake
+        # incremental tokens or replay after any content has reached the user.
+        if probe: raise error
+        try:
+            response, _ = complete(route, messages, required={"chat"}, tokens=tokens,
+                                   model_override=model_override)
+            answer = adapters.text("chat", response)
+            if answer:
+                yield answer
+                return
+        except Exception:
+            pass
+        raise error
     record = _record(route, "chat", candidates[0] if candidates else "", started, [{"model": "direct:stream", "http_status": 200}],
                      {"output_text": "".join(text)}, {}, request=messages)
     record.update(routed_via="direct:stream")
@@ -413,7 +465,7 @@ def _lm_stream(route, messages, model_override=None, probe=False, *, tokens=None
                 result["output_text"] = "".join(chunks)
                 _audit(_record(route, "chat", candidates[0], started, attempts, result, hdr, request=body))
                 return
-            except (GatewayError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            except (GatewayError, httpx.TransportError) as exc:
                 last = exc; attempts.append({"model": mid, "http_status": getattr(exc, "status", 504), "error": safe(str(exc), 300)})
                 if emitted: raise
                 if not getattr(exc, "retryable", isinstance(exc, httpx.TransportError)): break

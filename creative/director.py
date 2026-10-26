@@ -106,13 +106,13 @@ def _write_script(chosen: Concept, brief: ContentBrief, critique: Critique, caps
                   budget_s: float, source: str, *, duration_s: float, reference: ReferenceProfile | None, depth: str) -> ScriptReport | None:
     """Videos without speech of their own get a real script: written, measured, independently criticised, bounded rewrites.
     Falls back to the old single-call expansion only when the writer itself is unavailable."""
-    try:
-        draft, report = scriptwriter.run(brief, chosen, caps, f"{source}\n\n{guide}", duration_s=duration_s, reference=reference,
-                                         depth=depth, used=used, started=started, budget_s=budget_s)
-    except CreativeUnavailable as exc:
-        log.warning("script engine unavailable, using single-call expansion: %s", exc)
-        _expand(chosen, brief, critique, caps, guide, used, started, budget_s, source)
-        return None
+    draft, report = scriptwriter.run(brief, chosen, caps, f"{source}\n\n{guide}", duration_s=duration_s, reference=reference,
+                                     depth=depth, used=used, started=started, budget_s=budget_s)
+    # Exhausting the rewrite/time budget is not approval. Never pass a rejected
+    # script to the executable storyboard or bypass review with an expansion.
+    if not report.review or report.review.verdict != "ship" or not report.timing_ok:
+        reasons = report.review.must_fix[:3] if report.review else []
+        raise CreativeUnavailable("سناریو هنوز معیارهای کیفیت را پاس نکرده؛ تولید شروع نشد. " + "؛ ".join(reasons))
     chosen.beats = scriptwriter.to_beats(draft, duration_s)
     chosen.visual_language = draft.visual_language or chosen.visual_language
     chosen.pacing = draft.pacing or chosen.pacing

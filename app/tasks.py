@@ -168,3 +168,11 @@ if CELERY_AVAILABLE:
         token = request_id_var.set(headers.get("request_id"))
         try: process_message(conversation_id, user_key, message_id, text, attachment_ids, manual_question_id)
         finally: request_id_var.reset(token)
+
+    @celery.task(bind=True, name="airender.studio_agent", acks_late=True)
+    def task_studio_agent(self, run_id: str, user_key: str) -> None:
+        from app.agents.dispatcher import execute_run
+        headers = getattr(self.request, "headers", None) or {}
+        token = request_id_var.set(headers.get("request_id"))
+        try: execute_run(run_id, user_key)
+        finally: request_id_var.reset(token)
