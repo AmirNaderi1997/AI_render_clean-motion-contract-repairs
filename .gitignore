@@ -65,3 +65,4 @@ assets/sfx/YTDown.com_YouTube_Parham-Potki-x-MMV-x-PanizPRZ-Jan-Fadaye_Media_9Xi
 /cache/
 deploy/**/.vercel/
 /.local-lan/
+vendor/

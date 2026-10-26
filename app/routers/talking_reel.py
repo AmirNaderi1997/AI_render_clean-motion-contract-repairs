@@ -1,6 +1,7 @@
 """Talking-head reel API for a job (see ``app.talking_reel``)."""
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +28,45 @@ class ReelEdit(BaseModel):
     storyboard: Optional[list[dict]] = None
     render_settings: Optional[dict] = None
     key_moments: Optional[list[dict]] = None
+
+
+class EffectPreview(BaseModel):
+    item: dict
+    t: float
+
+
+_preview_lock = threading.Lock()
+
+
+@router.get("/effects")
+def effects_catalog(request: Request, job_id: str):
+    """The effects that can be added (Persian names and options), whether this server can render them, and the ones this reel already has."""
+    job = _job(request, job_id)
+    from engine import face_effects as effects
+    settings = (store.load(job.dir).get("render_settings") or {})
+    return {"catalog": effects.CATALOG, "available": effects.available(), "plan": settings.get("effects") or [],
+            "error": store.load(job.dir).get("effects_error") or ""}
+
+
+@router.post("/effects/preview")
+def effects_preview(request: Request, job_id: str, body: EffectPreview):
+    """One frame of the video with one effect on it (the finished video when there is one, else the upload): check text, timing and position."""
+    job = _job(request, job_id)
+    from engine import face_effects as effects
+    state = store.load(job.dir)
+    output = job.dir / str(state.get("output") or "")
+    source = output if state.get("output") and output.is_file() else job.dir / "raw" / job.raw_name
+    if not _preview_lock.acquire(blocking=False):
+        raise HTTPException(429, "یک پیش‌نمایش دیگر در حال ساخت است؛ چند ثانیه بعد دوباره امتحان کنید.")
+    try:
+        png = job.dir / "talking_reel_work" / "effects" / "preview.png"
+        png.unlink(missing_ok=True)
+        effects.preview(source, body.item, body.t, png, work=job.dir / "talking_reel_work" / "effects")
+    except effects.EffectsError as exc:
+        raise HTTPException(422, str(exc))
+    finally:
+        _preview_lock.release()
+    return FileResponse(png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 def _job(request: Request, job_id: str):

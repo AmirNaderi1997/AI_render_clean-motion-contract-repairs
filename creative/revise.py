@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from . import llm
 from .schemas import CreativeUnavailable
 
-Op = Literal["rewrite_hook", "edit_caption", "remove_sentence", "remove_range", "set_render", "change_style", "replace_visual", "drop_visual", "set_cta", "clear_identity", "add_key_moment", "remove_key_moment", "unsupported"]
+Op = Literal["rewrite_hook", "edit_caption", "remove_sentence", "remove_range", "set_render", "change_style", "replace_visual", "drop_visual", "set_cta", "clear_identity", "add_key_moment", "remove_key_moment", "add_effect", "remove_effect", "unsupported"]
 VISUAL_TYPES = {"concept", "stat", "comparison", "steps", "ui_showcase", "media_collage", "chat", "map_route",
                 "spec_callout", "kinetic_type", "before_after"}
 STYLES = {"talking_1", "talking_2", "talking_3", "talking_4"}
@@ -35,6 +35,7 @@ class RevisionOp(BaseModel):
     highlight: list[str] = Field(default_factory=list)
     items: list[str] = Field(default_factory=list)
     visual_type: str = ""
+    fx: str = ""
     style: str = ""
     settings: dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
@@ -47,7 +48,7 @@ class RevisionOp(BaseModel):
         except (TypeError, ValueError):
             return None
 
-    @field_validator("text", "reason", "visual_type", "style", mode="before")
+    @field_validator("text", "reason", "visual_type", "style", "fx", mode="before")
     @classmethod
     def _text(cls, value):
         return " ".join(str(value or "").split())[:300]
@@ -102,6 +103,10 @@ Operations (use exactly these):
   (Talking 1: the moment turns black-and-white with its takeaway in white. Add one per moment the creator asks for; when they ask for N more
   moments without naming them, choose N strong, different sentences spread over the talk. Never colour them.)
 - {"op":"remove_key_moment","sentence":<index>}
+- {"op":"add_effect","fx":"<id>","start":<output seconds>,"end":<output seconds>,"text":"<optional label, Persian>","settings":{<optional numbers/colour of that effect>}}
+  (An effect that follows the speaker's face, laid over the finished video for 0.4-8 seconds. Use output_words / output_sentence_ranges to turn "when I say X" or
+  "in the first 3 seconds" into output seconds. Ids: {EFFECT_IDS}. {EFFECT_HELP})
+- {"op":"remove_effect","fx":"<id>"}   (removes every effect of that kind; leave fx empty to remove all effects)
 - {"op":"clear_identity"} (remove an incorrect/unverified speaker name and role; never invent a replacement identity)
 - {"op":"unsupported","reason":"<what was asked that cannot be done with these operations, in Persian>"}
 
@@ -112,10 +117,16 @@ guessing. Never invent facts or numbers the speaker did not say. A request that 
 an empty ops list and an answer in `summary`."""
 
 
+def _system() -> str:
+    from engine import face_effects as effects
+    help_text = " ".join(f'{item["id"]}={item["description"]}' for item in effects.CATALOG)
+    return SYSTEM.replace("{EFFECT_IDS}", ", ".join(item["id"] for item in effects.CATALOG)).replace("{EFFECT_HELP}", help_text)
+
+
 def interpret(request: str, context: dict) -> Revision:
     """Ask the revision route for operations; raises CreativeUnavailable if the model cannot answer."""
     user = f"Creator's request: {request}\n\nCurrent video:\n{llm.dumps(context)}"
-    return llm.ask(Revision, SYSTEM, user, route=llm.REVISION_ROUTE, tokens=3000, attempts=3)
+    return llm.ask(Revision, _system(), user, route=llm.REVISION_ROUTE, tokens=3000, attempts=3)
 
 
 @dataclass
@@ -168,6 +179,27 @@ def apply_to_talking(public_state: dict, ops: list[RevisionOp], sentence_count: 
                 touched_settings = True
                 out.applied.append(f'تصویر و صدای جملهٔ {op.sentence} از تدوین حذف می‌شود؛ زمان‌بندی زیرنویس دوباره محاسبه می‌شود.')
             else: out.unsupported.append('برش این جمله برای سبک فعلی تأیید نشده است.')
+            continue
+        if op.op in {"add_effect", "remove_effect"}:
+            from engine import face_effects as effects
+            current = [dict(item) for item in (settings.get("effects") or [])]
+            if op.op == "add_effect":
+                if op.start is None or op.end is None:
+                    out.unsupported.append("زمان شروع و پایان افکت مشخص نشد."); continue
+                item = {"fx": op.fx, "start": op.start, "end": op.end, **({"text": op.text} if op.text else {}), **(op.settings or {})}
+                try:
+                    settings["effects"] = effects.clean_plan(current + [item])
+                except effects.EffectsError as exc:
+                    out.unsupported.append(str(exc)); continue
+                title = effects.BY_ID[settings["effects"][-1]["fx"]]["title"]
+                out.applied.append(f"افکت «{title}» از ثانیهٔ {op.start:g} تا {op.end:g}")
+            else:
+                kept = [item for item in current if op.fx and item.get("fx") != op.fx]
+                if len(kept) == len(current):
+                    out.unsupported.append("افکتی برای برداشتن پیدا نشد."); continue
+                settings["effects"] = kept
+                out.applied.append("افکت‌ها برداشته شد" if not op.fx else f"افکت «{op.fx}» برداشته شد")
+            touched_settings = True
             continue
         if op.op in {"add_key_moment", "remove_key_moment"}:
             if style != "talking_1":

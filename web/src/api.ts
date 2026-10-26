@@ -395,8 +395,14 @@ export interface TalkingReelState {
   shots?: number;
 }
 
+export interface TalkingEffect { fx: string; start: number; end: number; text?: string; [option: string]: string | number | undefined }
+export interface EffectOption { key: string; label: string; type: "number" | "choice" | "color"; default?: number | string; min?: number; max?: number; step?: number; choices?: string[] }
+export interface EffectSpec { id: string; title: string; description: string; text?: { label: string; default: string }; options: EffectOption[] }
+export interface TalkingEffects { catalog: EffectSpec[]; available: boolean; plan: TalkingEffect[]; error: string }
+
 export interface TalkingRenderSettings {
   bottom_shade?: number;
+  effects?: TalkingEffect[];
   grade: { brightness: number; contrast: number; saturation: number; temperature: number; vignette: number };
   zoom: { enabled: boolean; amount: number; base_scale: number; close_scale: number };
   key_moments_enabled: boolean;
@@ -924,6 +930,17 @@ export const api = {
   },
   async deleteLocalize(id: string): Promise<void> {
     return j(await authFetch(`${BASE}/localize/${id}`, { method: "DELETE" }));
+  },
+  async getTalkingEffects(jobId: string): Promise<TalkingEffects> {
+    return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel/effects`));
+  },
+  async previewTalkingEffect(jobId: string, item: TalkingEffect, t: number): Promise<string> {
+    const response = await authFetch(`${BASE}/jobs/${jobId}/talking-reel/effects/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ item, t }) });
+    if (!response.ok) {
+      const message = await response.json().then(value => String(value?.detail || ""), () => "");
+      throw new Error(message || `${response.status} ${response.statusText}`);
+    }
+    return URL.createObjectURL(await response.blob());
   },
   async getTalkingReel(jobId: string): Promise<TalkingReelState> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel`));

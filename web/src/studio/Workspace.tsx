@@ -12,6 +12,7 @@ import { RenderProgress } from "./RenderProgress";
 import {MotionScenes} from './MotionScenes';
 import { LocalizeEdit } from "./LocalizeEdit";
 import { EditCard, EditSwitch } from "./EditCard";
+import { EffectsEditor } from "./EffectsEditor";
 import { PlanReview } from "./PlanReview";
 import { currentVersion, planPhase } from "./plan";
 import { TimelineView } from "./TimelineView";
@@ -155,6 +156,7 @@ function EditPane({ project, onSaved, superseding = false }: { project?: StudioP
       : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved} superseding={superseding} footerSlot={footerSlot}/>
       : <header className="ws-edit-intro" dir="rtl"><h2>ویرایش این ویدیو</h2><p>تغییر زیرنویس، ریتم، رنگ یا صدا را در چت بگویید. هر چه این نوع ویدیو پشتیبانی کند، همین‌جا کنترلش را می‌بینید.</p></header>}
     {shown === "timeline" ? null : <>
+    {project.engine === 'talking' && project.external_ref ? <EffectsEditor key={`fx-${project.external_ref}`} jobId={project.external_ref} onSaved={onSaved}/> : null}
     {project.engine === 'talking' && project.external_ref ? <KeyMoments key={`km-${project.external_ref}`} jobId={project.external_ref} onSaved={onSaved}/> : null}
     {project.engine === 'talking' && project.external_ref && !hasPlan(project) ? <TalkingShade key={project.external_ref} jobId={project.external_ref} onSaved={onSaved}/> : null}
     {project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}

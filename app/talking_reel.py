@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -37,7 +38,7 @@ DEFAULTS = {
         "title_color": "#F5B800",
         "outro_logo": {"enabled": True, "motion": "pop"},
         "disabled_moments": [],
-        "dropped_sentences": [], "bottom_shade": 0, "source_cuts": [],
+        "dropped_sentences": [], "bottom_shade": 0, "source_cuts": [], "effects": [],
     },
 }
 EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "music_chosen", "cta", "style", "captions", "storyboard", "render_settings",
@@ -241,6 +242,9 @@ def _clean_render_settings(value: object) -> dict:
     current['dropped_sentences'] = sorted({v for v in drops if type(v) is int and 0 <= v < 10000})[:500] if isinstance(drops, list) else []
     try: current['bottom_shade'] = max(0, min(60, int(value.get('bottom_shade', 0))))
     except (TypeError, ValueError): pass
+    from engine import face_effects as _effects
+    try: current['effects'] = _effects.clean_plan(value.get('effects'))
+    except _effects.EffectsError: current['effects'] = [dict(item) for item in (current.get('effects') or [])]
     cuts=value.get('source_cuts') or []
     current['source_cuts']=[]
     if isinstance(cuts,list):
@@ -666,6 +670,7 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
                  render_settings=settings,
                  logo_path=custom_logo(job_dir),
                  on_progress=progress, on_stage=render_stage)
+    _apply_effects(job_dir, out, settings)
     _review_creative_output(job_dir,out)
     state = load(job_dir)
     state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}",
@@ -675,6 +680,36 @@ def _run_talking_1(job_dir: Path, video: Path, *, regenerate: bool) -> None:
 
 MEDIA_DIR = "talking_media"            # the creator's own pictures for "صحبتی ۲"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _apply_effects(job_dir: Path, output: Path, settings: dict) -> None:
+    """The effects the person chose (orbit, spotlight, ...) are laid over the finished video. A failure keeps the plain video and says why."""
+    plan = (settings or {}).get("effects") or []
+    if not plan:
+        return
+    from engine import face_effects as effects
+    _stage(job_dir, "rendering effects", progress=90, message="در حال افزودن افکت‌ها روی ویدیو")
+    key = str(job_dir)
+    temporary = output.with_name(output.stem + "_fx.mp4")
+
+    def cancelled() -> bool:
+        with _lock:
+            event = _cancel_events.get(key)
+        return bool(event and event.is_set())
+
+    def progress(value: float, stage: str) -> None:
+        try: _stage(job_dir, "rendering effects", progress=90 + int(value * 8), message="در حال افزودن افکت‌ها روی ویدیو")
+        except TaskCanceled: raise
+        except Exception: pass
+    try:
+        effects.apply(output, temporary, plan, work=job_dir / "talking_reel_work" / "effects", on_progress=progress, should_cancel=cancelled)
+        os.replace(temporary, output)
+        state = load(job_dir); state.pop("effects_error", None); save(job_dir, state)
+    except effects.EffectsError as exc:
+        temporary.unlink(missing_ok=True)
+        _checkpoint(job_dir)
+        state = load(job_dir); state["effects_error"] = str(exc)[:300]; save(job_dir, state)
+        log.warning("effects were not applied for %s: %s", job_dir.name, exc)
 
 
 def _review_creative_output(job_dir: Path, output: Path, moments: list[float] | None = None) -> None:
@@ -1134,6 +1169,7 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
             # Keep the candidate and request a targeted, approved correction.
             raise ValueError('بازبینی موشن نیازمند اصلاح است؛ رندر تکراری خودکار انجام نشد: '+
                 '; '.join(review['problems']))
+    _apply_effects(job_dir, out, render_settings)
     _review_creative_output(job_dir,out,
         [(b.start+b.end)/2 for b in beats] if hyperframes else None)
     state = load(job_dir)
