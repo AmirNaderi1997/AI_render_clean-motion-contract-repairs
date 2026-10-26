@@ -161,7 +161,7 @@ def tool(record, state):
         event(record, "tool.started", tool=step["tool"], message=step["label"])
         try:
             result = tools.execute(record, step)
-        except tools.PreflightUnavailable:
+        except (tools.PreflightUnavailable, ValueError):          # rejected before anything was submitted (incl. pydantic validation): safe to retry
             ledger[key] = {"status": "failed", "tool": step["tool"], "safe_to_retry": True}
             run(store.update(record["id"], record["user_key"], patch={"operations": ledger}))
             raise
