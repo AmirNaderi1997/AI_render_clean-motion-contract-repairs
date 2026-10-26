@@ -1,5 +1,5 @@
 import React from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { EditCard, EditSwitch } from "./EditCard";
 import { api, PlanContent, PlanEdits, PlanVersion, StudioProject } from "../api";
 import { AuthenticatedMedia } from "../AuthenticatedMedia";
@@ -26,7 +26,7 @@ function Section({ title, children, hint, summary, open }: { title: string; chil
   return <EditCard title={title} hint={hint} summary={summary} open={open}>{children}</EditCard>;
 }
 
-export function PlanReview({ project, onChanged, superseding = false }: { project: StudioProject; onChanged: () => void | Promise<unknown>; superseding?: boolean }) {
+export function PlanReview({ project, onChanged, superseding = false, footerSlot = null }: { project: StudioProject; onChanged: () => void | Promise<unknown>; superseding?: boolean; footerSlot?: HTMLElement | null }) {
   const versions: PlanVersion[] = project.state?.plan?.versions || [];
   const latest = versions[versions.length - 1];
   const phase = planPhase(project);
@@ -70,6 +70,17 @@ export function PlanReview({ project, onChanged, superseding = false }: { projec
     void act("restore the plan", () => api.editStudioPlan(project.id, latest.id, edits));
   };
   const words = hook.split(/\s+/).filter(Boolean);
+
+  const actions = isLatest && phase !== "rendering" && !superseding ? <footer className="plan-actions">
+      {dirty ? <>
+        <button className="btn" disabled={locked} onClick={() => void save()}>{busy === "save the plan" ? "در حال ذخیره…" : "ذخیرهٔ تغییرات"}</button>
+        <button className="btn btn-secondary" disabled={locked} onClick={() => setDraft({})}>لغو</button>
+        <small>تغییرات یک نسخهٔ جدید از برنامه می‌سازند و دوباره تأیید شما لازم است.</small>
+      </> : phase === "awaiting" ? <>
+        <button className="btn" disabled={locked} onClick={() => void approve()}><Icon name="check" size={16}/>{busy === "approve the plan" ? "در حال شروع…" : "تأیید و شروع رندر"}</button>
+        <small>رندر فقط با همین نسخه از برنامه انجام می‌شود.</small>
+      </> : null}
+    </footer> : null;
 
   return <div className="plan" dir="rtl" aria-busy={Boolean(busy)}>
     {busy ? <div className="notice" role="status" aria-live="polite"><span className="act-dot" aria-hidden="true"/> {busy === "approve the plan" ? "در حال ارسال تأیید و شروع رندر…" : "در حال ذخیره و به‌روزرسانی برنامه…"}</div> : null}
@@ -204,15 +215,6 @@ export function PlanReview({ project, onChanged, superseding = false }: { projec
       </dl>
     </Section>
 
-    {isLatest && phase !== "rendering" && !superseding ? <footer className="plan-actions">
-      {dirty ? <>
-        <button className="btn" disabled={locked} onClick={() => void save()}>{busy === "save the plan" ? "در حال ذخیره…" : "ذخیرهٔ تغییرات"}</button>
-        <button className="btn btn-secondary" disabled={locked} onClick={() => setDraft({})}>لغو</button>
-        <small>تغییرات یک نسخهٔ جدید از برنامه می‌سازند و دوباره تأیید شما لازم است.</small>
-      </> : phase === "awaiting" ? <>
-        <button className="btn" disabled={locked} onClick={() => void approve()}><Icon name="check" size={16}/>{busy === "approve the plan" ? "در حال شروع…" : "تأیید و شروع رندر"}</button>
-        <small>رندر فقط با همین نسخه از برنامه انجام می‌شود.</small>
-      </> : null}
-    </footer> : null}
+    {actions && footerSlot ? createPortal(actions, footerSlot) : actions}
   </div>;
 }

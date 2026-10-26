@@ -528,3 +528,8 @@ button.act-row:hover { color: var(--text-2); }
   :root[data-keyboard-open] .studio[data-view="edit"] .plan-actions .btn { min-height: 32px; }
   :root[data-keyboard-open] .studio[data-view="edit"] .ws-edit-progress { display: none; }
 }
+
+/* The confirm bar is the last thing of the Edit pane and stays pinned to the bottom of the panel while the cards scroll behind it. */
+.ws-edit-footer { position: sticky; inset-block-end: calc(-1 * var(--space-4)); z-index: 4; margin-inline: calc(-1 * var(--space-4)); }
+.ws-edit-footer:empty { display: none; }
+.ws-edit-footer .plan-actions { position: static; margin-inline: 0; padding-inline: var(--space-4); }

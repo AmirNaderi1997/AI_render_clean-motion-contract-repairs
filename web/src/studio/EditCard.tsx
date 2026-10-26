@@ -6,10 +6,10 @@ import { Icon } from "../components/Icon";
  * behind it. Every engine's settings (talking plan, Localize, explainer scenes, Motion clips) use this, so the tab looks
  * and behaves the same whatever the video is.
  */
-export function EditCard({ title, summary, hint, open, children, tone }: {
-  title: string; summary?: React.ReactNode; hint?: React.ReactNode; open?: boolean; children: React.ReactNode; tone?: "warning";
+export function EditCard({ title, summary, hint, children, tone }: {
+  title: string; summary?: React.ReactNode; hint?: React.ReactNode; /** kept for callers; every card starts closed */ open?: boolean; children: React.ReactNode; tone?: "warning";
 }) {
-  return <details className="ec" dir="rtl" open={open} data-tone={tone}>
+  return <details className="ec" dir="rtl" data-tone={tone}>
     <summary>
       <span className="ec-text"><b>{title}</b>{summary ? <small className="bidi" dir="auto">{summary}</small> : null}</span>
       <Icon name="chevronDown" size={16} className="ec-chev"/>
