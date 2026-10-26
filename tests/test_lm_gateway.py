@@ -38,6 +38,24 @@ def test_fallback_and_audit(monkeypatch,catalog):
     assert store.logs()["total"]==1
 
 
+def test_a_model_missing_from_the_upstream_catalog_is_skipped_not_fatal(monkeypatch,catalog):
+    calls=[]
+    def wire(endpoint,body,timeout):
+        calls.append(body["model"])
+        if len(calls)==1: raise g.GatewayError("LM API HTTP 404: model_not_found: Model is not in the catalog",404,False)
+        return {"model":"Actual/Other","choices":[{"message":{"content":"ok"}}]},{},200
+    monkeypatch.setattr(g,"_wire",wire)
+    data,record=g.complete("editing_agent",[{"role":"user","content":"hello"}])
+    assert calls==["Exact/Case:1","Other/2"] and record["actual_model"]=="Actual/Other"
+    other=[]
+    def refuse(endpoint,body,timeout):
+        other.append(body["model"]); raise g.GatewayError("LM API HTTP 400: bad request",400,False)
+    monkeypatch.setattr(g,"_wire",refuse)
+    with pytest.raises(g.GatewayError):
+        g.complete("editing_agent",[{"role":"user","content":"hello"}])
+    assert other==["Exact/Case:1"]                                  # any other client error still stops the chain
+
+
 def test_invalid_json_skips_model_without_same_model_retry(monkeypatch,catalog):
     catalog.update(max_retries=2);store.save('routes',{'editing_agent':catalog})
     calls=[]

@@ -345,7 +345,8 @@ def complete(route, messages, *, required=None, tokens=None, extra=None, endpoin
                         # An ambiguous media failure may already have been billed.
                         # Do not submit another image automatically after timeout/5xx.
                         exc.retryable = False
-                    if not is_media and mid.startswith("google:") and exc.status == 404 and "model_not_found" in str(exc):
+                    # A model the upstream catalog does not (or no longer) list is skipped, not fatal: the next candidate and the direct fallbacks still run.
+                    if not is_media and exc.status == 404 and "model_not_found" in str(exc):
                         # Disabled Google model: skip, without quota preflight or retry.
                         exc.retryable = True
                     error = exc
