@@ -332,3 +332,19 @@ def test_google_relay_uses_relay_auth_and_exact_endpoint(monkeypatch):
     assert 'x-goog-api-key' not in headers and 'Authorization' not in headers
     assert body['contents']
 
+
+
+def test_structured_callers_get_json_mode_from_openai_direct(monkeypatch):
+    from brain import lm_direct as d
+    seen = {}
+    provider = {"id": "openai", "format": "openai", "model": "gpt-x", "enabled": True, "base_url": "https://api.openai.com/v1"}
+    monkeypatch.setattr(d, "usable", lambda google_first=False: [provider])
+    monkeypatch.setattr(d, "model_for", lambda p, c: "gpt-x")
+    def fake_call(p, messages, *, model, tokens, temperature, timeout, extra):
+        seen["extra"] = extra
+        return {"choices": [{"message": {"content": "{\"ok\": true}"}}]}
+    monkeypatch.setattr(d, "call", fake_call)
+    out = d.try_fallback([{"role": "user", "content": "json please"}], candidates=[], tokens=50, temperature=0, timeout=30, extra=None, attempts=[], validate=lambda text: __import__("json").loads(text))
+    assert out and seen["extra"] == {"response_format": {"type": "json_object"}}
+    d.try_fallback([{"role": "user", "content": "plain"}], candidates=[], tokens=50, temperature=0, timeout=30, extra=None, attempts=[], validate=None)
+    assert seen["extra"] is None

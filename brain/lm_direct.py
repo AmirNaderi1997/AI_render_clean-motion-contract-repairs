@@ -401,7 +401,8 @@ def try_fallback(messages: list[dict], *, candidates: list[str], tokens: int, te
         started = time.monotonic()
         try:
             provider_extra = extra
-            if validate is not None and provider['format']=='gemini':
+            # A structured caller wants JSON: Gemini and OpenAI are asked for JSON mode (OpenAI's plain answer was refused as "invalid structured output").
+            if validate is not None and (provider['format']=='gemini' or provider['id']=='openai') and not (extra or {}).get('response_format'):
                 provider_extra={**(extra or {}),'response_format':{'type':'json_object'}}
             response = call(provider, messages, model=model, tokens=tokens, temperature=temperature, timeout=min(timeout, 120), extra=provider_extra)
             if validate is not None:
