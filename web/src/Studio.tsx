@@ -20,7 +20,7 @@ import { ManualQuestion } from "./studio/ManualQuestion";
 import { Thread, LocalFileInfo } from "./studio/Thread";
 import { Workspace, WorkspaceTab, advancedEditorUrl } from "./studio/Workspace";
 import { currentVersion, planPhase } from "./studio/plan";
-import { PendingMessage, activeStep, buildTimeline, isProcessing, renderView, serverBusy, thinkingLabel } from "./studio/model";
+import { PendingMessage, TimelineItem, activeStep, buildTimeline, isProcessing, renderView, serverBusy, thinkingLabel } from "./studio/model";
 import { suggestions, templatePrompts } from "./templateData";
 
 type MobileView = "chat" | WorkspaceTab;
@@ -257,9 +257,21 @@ export default function Studio() {
   const busyOnServer = serverBusy(events, conversation?.busy);
   const processing = isProcessing({ sending, messages, events, project: current, now }) || motionActive || discoveryActive || projectRunning || busyOnServer === true;
   const items = React.useMemo(() => buildTimeline({ messages, events, projects, pending, processing, discoveryId: conversation?.state?.discovery?.analysis_id, motionId: conversation?.state?.motion?.motion_id }), [messages, events, projects, pending, processing, conversation?.state?.discovery?.analysis_id, conversation?.state?.motion?.motion_id]);
-  const step = activeStep(items);
   // A live render card is its own progress indicator; otherwise show what the assistant is doing.
   const renderLive = items.some(item => item.kind === "render" && ["queued", "rendering", "finalizing"].includes(renderView(projects.find(p => p.id === item.projectId)).phase));
+  // While the render card shows the real progress (the same block as the Preview and Edit tabs), the render steps of the activity log
+  // ("planning render 35%") would only repeat it, and they stay stuck at their last report: they are left out until the render ends.
+  const shown = React.useMemo<TimelineItem[]>(() => {
+    if (!renderLive) return items;
+    const kept: TimelineItem[] = [];
+    for (const item of items) {
+      if (item.kind !== "activity") { kept.push(item); continue; }
+      const steps = item.steps.filter(entry => !/render/i.test(`${entry.tool || ""} ${entry.stage || ""}`));
+      if (steps.length) kept.push({ ...item, steps });
+    }
+    return kept;
+  }, [items, renderLive]);
+  const step = activeStep(shown);
   const thinking = processing && !step && !renderLive ? thinkingLabel(events, messages) : undefined;
   const showConversation = Boolean(activeId) || Boolean(pending);
   const title = conversation?.title ? displayTitle(conversation.title, 60) : "New edit";
@@ -448,7 +460,7 @@ export default function Studio() {
         <div className="chat-inner">
           {current ? <React.Suspense fallback={null}><ProjectRender key={current.id} project={current} onChanged={()=>void refresh()}/></React.Suspense> : null}
           {!conversation && !pending ? <div className="thread-loading" role="status" aria-label="Loading conversation"><span className="skeleton"/><span className="skeleton"/><span className="skeleton"/></div> : null}
-          <Thread items={items} events={events} conversation={conversation} projects={projects} localFiles={localFiles} thinking={thinking} sourceUrl={sourceUrl} linkTitles={linkTitles} compactRender={layout === "desktop" && desktopOpen}
+          <Thread items={shown} events={events} conversation={conversation} projects={projects} localFiles={localFiles} thinking={thinking} sourceUrl={sourceUrl} linkTitles={linkTitles} compactRender={layout === "desktop" && desktopOpen}
             onOpenPreview={id => openWorkspace("preview", id)} onEditAgain={editAgain}
             retryHref={current?.status === "error" && !qualityBlocked ? advancedEditorUrl(current) || undefined : undefined}
             onChoice={choice => void send(choice)} onRetryMessage={retryMessage}/>
@@ -487,7 +499,6 @@ export default function Studio() {
       panelRef={workspaceRef}
       topbarEdit={layout === "mobile" && mobileView === "edit"}
       working={processing && !renderLive ? (step?.label || thinking || "در حال بررسی درخواست شما…") : null}
-      activity={step && step.status === "active" ? step : null}
       resizer={layout === "desktop" && wsVisible ? <Resizer panel={workspaceRef} edge="start" label="عرض پنل پیش‌نمایش" width={shownWorkspace}
         bounds={() => ({ min: WORKSPACE_BOUNDS.min, max: Math.min(WORKSPACE_BOUNDS.max, (studioRef.current?.clientWidth ?? 1400) - MIN_CHAT) })}
         onResize={setLiveWorkspace} onDragState={setResizingWorkspace} onCommit={value => { setWorkspaceWidth(value); setLiveWorkspace(null); }}/> : undefined}/>

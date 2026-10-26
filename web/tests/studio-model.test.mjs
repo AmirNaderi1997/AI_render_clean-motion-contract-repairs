@@ -195,3 +195,11 @@ test("a non-render failure is shown once, as a failed step, not as a render card
   assert.equal(items.filter(i => i.kind === "render").length, 0);
   assert.equal(items.find(i => i.kind === "activity").steps.at(-1).status, "failed");
 });
+
+test('a project that started rendering shows the render card even while its stage is still the preparation', () => {
+  const project = { id: 'p1', engine: 'talking', status: 'running', title: 't', updated_at: '2026-01-01T00:00:10Z', state: { render_started: true, last_observed: { stage: 'planning render', progress: 35 } } };
+  const items = buildTimeline({ messages: [], events: [], projects: [project], processing: true });
+  assert.ok(items.some(item => item.kind === 'render' && item.projectId === 'p1'));
+  const waiting = { ...project, state: { last_observed: { stage: 'planning render', progress: 35 } } };
+  assert.ok(!buildTimeline({ messages: [], events: [], projects: [waiting], processing: true }).some(item => item.kind === 'render'));
+});

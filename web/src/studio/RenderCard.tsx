@@ -5,7 +5,8 @@ import { Icon } from "../components/Icon";
 import { formatDuration } from "../format";
 import { Link } from "react-router-dom";
 import { friendlyFailure, renderView } from "./model";
-import { ProgressNotice, useProgressAge } from './ProgressNotice';
+import { RenderProgress } from './RenderProgress';
+import { useProgressAge } from './ProgressNotice';
 
 function useElapsed(startedAt: number, running: boolean) {
   const [now, setNow] = React.useState(() => Date.now());
@@ -55,11 +56,7 @@ export function RenderCard({ project, sourceUrl, startedAt, compact, onOpenPrevi
       </>}
     </div>}
 
-    {busy ? <div className="rc-progress">
-      <div className="meter" data-indeterminate={typeof shownPercent === "number" ? undefined : ""} style={{ ["--value" as string]: `${shownPercent ?? 0}%` }} role="progressbar" aria-label="Render progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={shownPercent}><span/></div>
-      <div className="rc-meta"><span>{view.stageLabel === title ? "" : view.stageLabel}</span>{typeof percent === "number" ? <span>{age >= 30 ? 'آخرین گزارش: ' : ''}{percent}%</span> : null}</div>
-      <ProgressNotice project={project}/>
-    </div> : null}
+    {busy ? <RenderProgress project={project} hideLabel={title}/> : null}
 
     {view.phase === "done" && output ? <div className="rc-actions">
       <button className="btn btn-sm" onClick={() => void api.downloadAuthenticated(output, `${project.title || "video"}.mp4`)}><Icon name="download" size={15}/>Download</button>

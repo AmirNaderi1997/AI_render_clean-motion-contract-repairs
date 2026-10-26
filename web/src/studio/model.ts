@@ -308,7 +308,9 @@ export function buildTimeline({ messages, events, projects, pending, processing,
     if (placedRender.has(project.id)) continue;
     const view = renderView(project);
     // A failure with no render stage is already shown as a failed step; don't relabel it "rendering".
-    if (view.phase === "idle" || view.phase === "queued" || view.phase === "failed") continue;
+    // A queued project that has started rendering (preparing the source, subtitles, ...) is a live render: the chat shows the same card as the tabs.
+    const started = view.phase === "queued" && project.status === "running" && Boolean(project.state?.render_started);
+    if (view.phase === "idle" || (view.phase === "queued" && !started) || view.phase === "failed") continue;
     items.push({ kind: "render", id: `r-${project.id}`, projectId: project.id, startedAt: parseTime(project.updated_at) });
   }
 
