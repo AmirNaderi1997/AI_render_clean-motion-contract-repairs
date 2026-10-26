@@ -52,10 +52,10 @@ export function AgentSettings() {
 export function AgentRunControls({runs, onChanged}: {runs: StudioAgentRun[]; onChanged: () => void}) {
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState("");
+  const [confirming, setConfirming] = React.useState<string | null>(null);
   const act = async (id: string, decision: "approve" | "retry" | "cancel") => {
     if (busy) return;
-    if (decision === "retry" && !confirm("ادامه از مراحل ذخیره‌شده انجام می‌شود. عملیات با نتیجهٔ نامشخص خودکار تکرار نمی‌شوند؛ ادامه ممکن است مصرف Gateway داشته باشد. ادامه می‌دهید؟")) return;
-    setBusy(id); setError("");
+    setConfirming(null); setBusy(id); setError("");
     try {await api.resumeAgentRun(id, decision); onChanged();}
     catch {setError("عملیات انجام نشد؛ گفتگو را تازه‌سازی و دوباره بررسی کنید.");}
     finally {setBusy(null);}
@@ -65,9 +65,11 @@ export function AgentRunControls({runs, onChanged}: {runs: StudioAgentRun[]; onC
       <h3>{record.status === "waiting_approval" ? "تأیید برنامهٔ EditorGPT Medium" : "اجرای Medium کامل نشد"}</h3>
       <p className="bidi" dir="auto">{record.status === "failed" ? record.error : record.plan?.summary}</p>
       {record.status === "waiting_approval" ? <ol>{record.plan?.steps.map((step, i) => <li key={i} dir="auto">{step.label}</li>)}</ol> : null}
+      {confirming === record.id ? <p className="notice" role="status" dir="rtl">از مراحل ذخیره‌شده ادامه می‌دهد. عملیات با نتیجهٔ نامشخص خودکار تکرار نمی‌شوند و ادامه ممکن است مصرف Gateway داشته باشد.</p> : null}
       <div className="rc-actions"><button className="btn btn-sm btn-primary" disabled={busy !== null}
-        onClick={() => void act(record.id, record.status === "failed" ? "retry" : "approve")}>
-        {busy === record.id ? "در حال ارسال…" : record.status === "failed" ? "ادامه از مرحلهٔ ذخیره‌شده" : "تأیید برنامه"}</button>
+        onClick={() => record.status === "failed" && confirming !== record.id ? setConfirming(record.id) : void act(record.id, record.status === "failed" ? "retry" : "approve")}>
+        {busy === record.id ? "در حال ارسال…" : record.status === "failed" ? (confirming === record.id ? "بله، ادامه بده" : "ادامه از مرحلهٔ ذخیره‌شده") : "تأیید برنامه"}</button>
+        {confirming === record.id ? <button className="btn btn-sm btn-ghost" disabled={busy !== null} onClick={() => setConfirming(null)}>انصراف</button> : null}
         <button className="btn btn-sm btn-secondary" disabled={busy !== null} onClick={() => void act(record.id, "cancel")}>لغو</button></div>
     </div>)}{error ? <p role="alert">{error}</p> : null}</>;
 }
