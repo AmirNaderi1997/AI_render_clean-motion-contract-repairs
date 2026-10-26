@@ -383,6 +383,7 @@ export interface TalkingReelState {
   captions?: { i: number; text: string }[];
   storyboard?: { i: number; title: string; visual_type: string; narrative_role?: string; motion_style?: string; why?: string }[];
   timeline?: { id: string; sentence: number; title: string; kind: "key_moment"; order: number }[];
+  key_moments?: { i: number; text: string }[];
   render_settings?: TalkingRenderSettings;
   visual_beats?: { title: string; visual_type: string; start: number; end: number; registry_refs?: string[] }[];
   catalog_reviewed?: number;
@@ -927,7 +928,7 @@ export const api = {
   async getTalkingReel(jobId: string): Promise<TalkingReelState> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel`));
   },
-  async editTalkingReel(jobId: string, body: Partial<Pick<TalkingReelState, "hook" | "hook2" | "hook_highlight" | "name" | "title" | "music" | "cta" | "style" | "captions" | "storyboard" | "render_settings">>): Promise<TalkingReelState> {
+  async editTalkingReel(jobId: string, body: Partial<Pick<TalkingReelState, "hook" | "hook2" | "hook_highlight" | "name" | "title" | "music" | "cta" | "style" | "captions" | "storyboard" | "render_settings" | "key_moments">>): Promise<TalkingReelState> {
     return j(await authFetch(`${BASE}/jobs/${jobId}/talking-reel`, {
       method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
     }));

@@ -1316,6 +1316,7 @@ def _revise_talking(conversation_id: str, user_key: str, project: dict, job, tex
         "storyboard": [{"i": b.get("i"), "title": b.get("title"), "visual_type": b.get("visual_type")} for b in public["storyboard"]],
         "render_settings": settings,
         "direction": ((state.get("creative_plan") or {}).get("chosen") or {}).get("angle"),
+        "key_moments": public.get("key_moments"),
         "quality_review": state.get('creative_review'),
         "last_failure": state.get('message'),
         "speaker_name": state.get('name'), "speaker_title": state.get('title'),
