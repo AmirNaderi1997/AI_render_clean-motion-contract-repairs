@@ -94,6 +94,7 @@ export const STAGE_LABELS: Record<string, string> = {
   "rendering source preparation": "تبدیل فرمت و آماده‌سازی ویدیو", "rendering captions": "آماده‌سازی زیرنویس و تیتر",
   "rendering outro": "ساخت صفحهٔ پایانی و لوگو", "rendering shot": "رندر بخش‌های تدوین",
   "rendering composition": "ترکیب تصویر و صدا و رمزگذاری خروجی", "rendering finalizing": "نهایی‌سازی فایل ویدیو",
+  "rendering effects": "افزودن افکت‌ها روی ویدیو",
   transcribing: "استخراج متن گفتار", "finding captions": "شناسایی زیرنویس روی تصویر",
   translating: "آماده‌سازی ترجمهٔ فارسی", "generating voice": "ساخت گویندگی",
   "choosing style": "انتخاب سبک تدوین", "editing text": "آماده‌سازی زیرنویس و هوک",
@@ -109,7 +110,7 @@ const RENDER_STAGE_LABELS: Record<string, string> = {
   "rendering source preparation": "تبدیل فرمت و آماده‌سازی ویدیو", "rendering captions": "آماده‌سازی زیرنویس و تیتر",
   "rendering outro": "ساخت صفحهٔ پایانی و لوگو", "rendering shot": "رندر بخش‌های تدوین",
   "rendering composition": "ترکیب تصویر و صدا و رمزگذاری خروجی", "rendering finalizing": "نهایی‌سازی فایل ویدیو",
-  rendering: "رندر ویدیو", "rendering rough cut": "رندر نسخهٔ اولیه",
+  "rendering effects": "افزودن افکت‌ها روی ویدیو", rendering: "رندر ویدیو", "rendering rough cut": "رندر نسخهٔ اولیه",
   "rendering motion graphics": "رندر موشن‌گرافیک", queued: "در صف رندر",
 };
 

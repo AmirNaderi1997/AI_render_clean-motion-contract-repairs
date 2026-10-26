@@ -533,3 +533,12 @@ button.act-row:hover { color: var(--text-2); }
 .ws-edit-footer { position: sticky; inset-block-end: calc(-1 * var(--space-4)); z-index: 4; margin-inline: calc(-1 * var(--space-4)); }
 .ws-edit-footer:empty { display: none; }
 .ws-edit-footer .plan-actions { position: static; margin-inline: 0; padding-inline: var(--space-4); }
+
+/* Effects editor (Edit tab) */
+.fx-list { list-style: none; padding: 0; margin: 0 0 10px; display: grid; gap: 6px; }
+.fx-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md, 10px); }
+.fx-list small { color: var(--text-2); }
+.fx-form { display: grid; gap: 10px; }
+.fx-times { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fx-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.fx-frame { width: min(100%, 260px); border-radius: var(--radius-md, 10px); border: 1px solid var(--border-subtle); justify-self: center; }
