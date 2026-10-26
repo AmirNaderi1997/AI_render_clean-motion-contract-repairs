@@ -487,6 +487,7 @@ export default function Studio() {
       panelRef={workspaceRef}
       topbarEdit={layout === "mobile" && mobileView === "edit"}
       working={processing && !renderLive ? (step?.label || thinking || "در حال بررسی درخواست شما…") : null}
+      activity={step && step.status === "active" ? step : null}
       resizer={layout === "desktop" && wsVisible ? <Resizer panel={workspaceRef} edge="start" label="عرض پنل پیش‌نمایش" width={shownWorkspace}
         bounds={() => ({ min: WORKSPACE_BOUNDS.min, max: Math.min(WORKSPACE_BOUNDS.max, (studioRef.current?.clientWidth ?? 1400) - MIN_CHAT) })}
         onResize={setLiveWorkspace} onDragState={setResizingWorkspace} onCommit={value => { setWorkspaceWidth(value); setLiveWorkspace(null); }}/> : undefined}/>
