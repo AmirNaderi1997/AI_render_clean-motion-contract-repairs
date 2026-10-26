@@ -515,3 +515,16 @@ button.act-row:hover { color: var(--text-2); }
 .local-export input, .local-export select { padding: 8px; min-height: 44px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; max-width: 100%; font-size: 16px; }
 .local-export input[type=number] { width: 80px; }
 .local-export fieldset { border: 1px solid var(--border); border-radius: 8px; }
+
+/* Key moments: the same rows as the other Edit settings; the takeaway field sits under the moment it belongs to. */
+.km-list { display: grid; gap: 2px; max-height: 340px; overflow: auto; margin-block: 4px 10px; }
+.km-row { display: grid; gap: 6px; padding-block: 2px; }
+.km-row[data-on] { background: var(--surface-2, rgba(255,255,255,.03)); border-radius: var(--radius-md, 10px); padding: 4px 8px 8px; }
+.km-row .ec-switch small, .km-row .ec-switch b { font-weight: 500; line-height: 1.7; }
+@media (max-width: 700px) {
+  .plan-actions { padding-block: 4px; }
+  .plan-actions .btn { min-height: 34px; padding: 4px 12px; font-size: 13px; }
+  :root[data-keyboard-open] .studio[data-view="edit"] .plan-actions { padding-block: 3px; }
+  :root[data-keyboard-open] .studio[data-view="edit"] .plan-actions .btn { min-height: 32px; }
+  :root[data-keyboard-open] .studio[data-view="edit"] .ws-edit-progress { display: none; }
+}

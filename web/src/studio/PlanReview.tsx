@@ -26,7 +26,7 @@ function Section({ title, children, hint, summary, open }: { title: string; chil
   return <EditCard title={title} hint={hint} summary={summary} open={open}>{children}</EditCard>;
 }
 
-export function PlanReview({ project, onChanged }: { project: StudioProject; onChanged: () => void | Promise<unknown> }) {
+export function PlanReview({ project, onChanged, superseding = false }: { project: StudioProject; onChanged: () => void | Promise<unknown>; superseding?: boolean }) {
   const versions: PlanVersion[] = project.state?.plan?.versions || [];
   const latest = versions[versions.length - 1];
   const phase = planPhase(project);
@@ -40,7 +40,7 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
 
   const shown = versions.find(item => item.id === viewing) || latest;
   const isLatest = shown.id === latest.id;
-  const locked = phase === "analyzing" || phase === "rendering" || Boolean(busy);
+  const locked = phase === "analyzing" || phase === "rendering" || Boolean(busy) || superseding;
   const editable = isLatest && !locked;
   const plan: PlanContent = shown.content;
   const value = <K extends keyof PlanEdits>(key: K, fallback: PlanEdits[K]) => (key in draft ? draft[key] : fallback) as NonNullable<PlanEdits[K]>;
@@ -204,7 +204,7 @@ export function PlanReview({ project, onChanged }: { project: StudioProject; onC
       </dl>
     </Section>
 
-    {isLatest && phase !== "rendering" ? <footer className="plan-actions">
+    {isLatest && phase !== "rendering" && !superseding ? <footer className="plan-actions">
       {dirty ? <>
         <button className="btn" disabled={locked} onClick={() => void save()}>{busy === "save the plan" ? "در حال ذخیره…" : "ذخیرهٔ تغییرات"}</button>
         <button className="btn btn-secondary" disabled={locked} onClick={() => setDraft({})}>لغو</button>
