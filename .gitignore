@@ -34,7 +34,8 @@ assets/effect_previews/
 # Clean distribution repository: keep runtime source only.
 /.claude/
 /.cursor/
-/tests/
+/tests/*
+!/tests/test_studio_agents.py
 /hermes/tests/
 *.test.ts
 *.test.tsx
@@ -66,3 +67,5 @@ assets/sfx/YTDown.com_YouTube_Parham-Potki-x-MMV-x-PanizPRZ-Jan-Fadaye_Media_9Xi
 deploy/**/.vercel/
 /.local-lan/
 vendor/
+# Owner-specific recovery snapshots must never enter source control.
+/recovery/

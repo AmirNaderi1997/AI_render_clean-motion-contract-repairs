@@ -17,9 +17,11 @@ export function Menu({ trigger, children, side = "bottom", align = "start", labe
   React.useLayoutEffect(() => {
     if (!open || !wrap.current) return;
     const rect = wrap.current.getBoundingClientRect();
-    const above = rect.top - 12, below = window.innerHeight - rect.bottom - 12;
+    const viewport = window.visualViewport;
+    const top = viewport?.offsetTop || 0;
+    const above = rect.top - top - 12, below = top + (viewport?.height || window.innerHeight) - rect.bottom - 12;
     const chosen = side === "top" ? (above >= 240 || above >= below ? "top" : "bottom") : (below >= 240 || below >= above ? "bottom" : "top");
-    setPlacement({ side: chosen, max: Math.max(160, (chosen === "top" ? above : below) - 8) });
+    setPlacement({ side: chosen, max: Math.max(64, (chosen === "top" ? above : below) - 8) });
   }, [open, side]);
   React.useEffect(() => { if (open) wrap.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus({ preventScroll: true }); }, [open]);
   const onKey = (event: React.KeyboardEvent) => {

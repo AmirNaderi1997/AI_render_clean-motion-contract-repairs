@@ -134,6 +134,12 @@ button.act-row:hover { color: var(--text-2); }
 .composer-input::placeholder { color: var(--text-3); }
 .composer-bar { display: flex; align-items: center; gap: 4px; margin-inline-start: -6px; }
 .composer-send { flex: none; }
+.composer-agent { display: inline-flex; align-items: center; gap: 5px; min-height: 40px; padding: 4px 7px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-2); font-size: 12px; white-space: nowrap; }
+.composer-agent:hover, .composer-agent[aria-expanded="true"] { background: var(--hover); color: var(--text); }
+.agent-option b { display: block; font-size: 13px; font-weight: 500; }
+.agent-option small { display: block; color: var(--text-3); font-size: 11px; margin-top: 2px; }
+.agent-tick { width: 14px; flex: none; }
+@media (max-width: 360px) { .composer-agent { padding-inline: 3px; font-size: 11px; } .composer-bar { gap: 1px; } }
 .composer-spinner { border-color: color-mix(in srgb, var(--on-ink) 30%, transparent); border-top-color: var(--on-ink); }
 .composer-error { padding: 8px 10px; font-size: 13px; align-items: center; }
 .attach-row { list-style: none; padding: 0; margin-inline-start: -4px; display: flex; gap: 8px; overflow-x: auto; padding-block: 2px; }

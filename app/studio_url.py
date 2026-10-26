@@ -59,7 +59,27 @@ _DIRECT_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_
 
 
 def _relay_configured() -> bool:
-    return bool(os.environ.get("SOCIAL_RELAY_URL") and len(os.environ.get("SOCIAL_RELAY_SECRET", "")) >= 32)
+    from app.page_relay import config
+    return bool(config()[0])
+
+
+def _relay_public_url(value: str) -> str:
+    """Validate syntax/literal addresses; relay independently checks DNS and redirects.
+
+    Never connect locally to an address rejected by _public_url. A local DNS
+    sinkhole must not prevent the authenticated relay resolving a public host.
+    """
+    p = urllib.parse.urlsplit(value.strip())
+    if p.scheme not in {'http','https'} or not p.hostname or p.username or p.password:
+        raise ValueError('Only public HTTP/HTTPS URLs are supported')
+    host=p.hostname.lower()
+    if host=='localhost' or host.endswith(('.localhost','.local','.internal')):
+        raise ValueError('Private host is not allowed')
+    try: address=ipaddress.ip_address(host)
+    except ValueError: address=None
+    if address is not None and not address.is_global:
+        raise ValueError('Private address is not allowed')
+    return urllib.parse.urlunsplit((p.scheme,p.netloc,p.path or '/',p.query,''))
 
 
 _STATIC_TTL_S = 7 * 24 * 3600
@@ -77,6 +97,8 @@ def _relay_fetch(url: str, *, max_bytes: int, accept: str, allow_http_error: boo
     The link back from the relay is slow (a 2 MB script takes half a minute), so scripts, styles and fonts are kept for a week:
     a site's bundle is named after its content, and only its first reading pays for it."""
     import httpx
+    from app.page_relay import config
+    relay_url, relay_secret = config()
     cached = _static_cache_path(url)
     try:
         if cached.is_file() and time.time() - cached.stat().st_mtime < _STATIC_TTL_S:
@@ -90,8 +112,8 @@ def _relay_fetch(url: str, *, max_bytes: int, accept: str, allow_http_error: boo
     for attempt in range(3):                                      # a name lookup or connection can fail once on a busy host
         try:
             with httpx.Client(timeout=httpx.Timeout(45, connect=10)) as client:
-                response = client.post(os.environ["SOCIAL_RELAY_URL"], json={"url": url, "mode": "page"},
-                                       headers={"x-relay-secret": os.environ["SOCIAL_RELAY_SECRET"], "x-relay-accept": accept})
+                response = client.post(relay_url, json={"url": url, "mode": "page"},
+                                       headers={"x-relay-secret": relay_secret, "x-relay-accept": accept})
             break
         except httpx.TransportError:
             if attempt == 2:
@@ -124,7 +146,8 @@ def _fetch(url: str, *, max_bytes: int, accept: str,
     if not _relay_configured():
         return _fetch_direct(url, max_bytes=max_bytes, accept=accept, headers=headers, timeout=timeout,
                              allow_http_error=allow_http_error, with_status=with_status)
-    host = urllib.parse.urlsplit(_public_url(url)).hostname or ""
+    url = _relay_public_url(url)
+    host = urllib.parse.urlsplit(url).hostname or ""
     if time.monotonic() < _DIRECT_FAILED.get(host, 0):          # this host just failed directly: do not wait for it again for every image and script
         return _relay_fetch(url, max_bytes=max_bytes, accept=accept, allow_http_error=allow_http_error, with_status=with_status)
     # A host this network half-reaches answers slowly rather than failing: give the direct attempt a hard wall-clock limit.
@@ -133,6 +156,11 @@ def _fetch(url: str, *, max_bytes: int, accept: str,
     try:
         return attempt.result(timeout=DIRECT_WAIT_S)
     except (urllib.error.URLError, OSError, http.client.HTTPException, TimeoutError, concurrent.futures.TimeoutError):
+        _DIRECT_FAILED[host] = time.monotonic() + 300
+        return _relay_fetch(url, max_bytes=max_bytes, accept=accept, allow_http_error=allow_http_error, with_status=with_status)
+    except ValueError as exc:
+        if str(exc) not in {'Private, loopback and reserved addresses are not allowed', 'The page hostname could not be resolved', 'The page returned HTTP 403'}:
+            raise
         _DIRECT_FAILED[host] = time.monotonic() + 300
         return _relay_fetch(url, max_bytes=max_bytes, accept=accept, allow_http_error=allow_http_error, with_status=with_status)
 
@@ -375,7 +403,10 @@ def inspect_page(url: str, output_dir: Path) -> dict:
         candidates.extend({"url": item, "alt": "structured product image", "role": "product"} for item in _walk_json_images(document))
     if spa_product:
         embedded = PageParser()
-        embedded.feed(str(spa_product.get("description_en") or spa_product.get("description") or ""))
+        # Locale descriptions can contain different media. Do not discard the
+        # Persian gallery merely because an English description also exists.
+        for field in ('description_fa', 'description_en', 'description'):
+            embedded.feed(str(spa_product.get(field) or ''))
         candidates.extend({**item, "role": "product"} for item in embedded.images)
     candidates.extend(item for item in parser.images if item.get("alt") != "social preview")
     if not candidates and not _structured_products(parser.structured):

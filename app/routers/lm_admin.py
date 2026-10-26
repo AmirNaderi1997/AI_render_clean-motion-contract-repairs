@@ -298,6 +298,7 @@ from brain import lm_direct  # noqa: E402
 
 
 class DirectProvider(Strict):
+    prefer_stream: bool | None = None
     id: str = Field(pattern="^[a-z]{3,12}$")
     enabled: bool = True
     base_url: str = Field(max_length=300)

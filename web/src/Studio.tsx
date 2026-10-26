@@ -5,7 +5,8 @@ import { verifyLocalBackend } from "./local/backend";
 const ProjectRender = React.lazy(() => import("./local/ProjectRender").then(m => ({default:m.ProjectRender})));
 import { saveAsset, listAssets, readAsset, removeAsset, saveDraft, loadDraft, mediaMetadata } from "./local/storage";
 import { NavLink, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, StudioConversation, StudioEvent } from "./api";
+import { api, AgentMode, StudioConversation, StudioEvent } from "./api";
+import { AgentRunControls } from "./studio/AgentMode";
 import { useAuth } from "./auth/AuthContext";
 import { Icon } from "./components/Icon";
 import { useStudioLayout } from "./components/hooks";
@@ -48,6 +49,21 @@ export default function Studio() {
   const [localFiles, setLocalFiles] = React.useState<LocalFileInfo[]>([]);
   const [listening, setListening] = React.useState(false);
   const [manualDraft, setManualDraft] = React.useState(false);
+  const [agentMode, setAgentMode] = React.useState<AgentMode>("lite");
+  const agentChoice = React.useRef<{conversation: string | null; mode: AgentMode} | null>(null);
+  const modeOwner = conversationId || "new";
+  React.useEffect(() => {
+    let live = true;
+    agentChoice.current = null;
+    if (conversationId) {
+      setAgentMode("lite");
+    } else if (authenticated) {
+      void api.agentPreferences().then(value => {
+        if (live && !agentChoice.current) setAgentMode(value.default_agent_mode);
+      }).catch(() => {if (live && !agentChoice.current) setAgentMode("lite");});
+    }
+    return () => {live = false;};
+  }, [modeOwner, authenticated]);
   const [modeSaving, setModeSaving] = React.useState(false);
   const [submittedQuestionId, setSubmittedQuestionId] = React.useState<string | null>(null);
   const [wsTab, setWsTab] = React.useState<WorkspaceTab>("preview");
@@ -77,6 +93,18 @@ export default function Studio() {
   // Conversation created only so attachments have somewhere to upload; we don't navigate until the user sends.
   const draftIdRef = React.useRef<string | null>(null);
   const activeId = conversationId || null;
+  React.useEffect(() => {
+    if (conversation?.id !== activeId || !activeId || agentChoice.current?.conversation === activeId) return;
+    setAgentMode(conversation.state.agent_mode === "medium" ? "medium" : "lite");
+  }, [conversation?.id, conversation?.state.agent_mode, activeId]);
+  const changeAgentMode = (next: AgentMode) => {
+    agentChoice.current = {conversation: activeId, mode: next};
+    setAgentMode(next);
+    // The request captures this value separately; switching never changes an active run.
+    const id = activeId || draftIdRef.current;
+    if (id) void api.updateStudioConversation(id, {agent_mode: next})
+      .catch(() => setError("انتخاب موتور ذخیره نشد؛ پیام بعدی همچنان با انتخاب فعلی ارسال می‌شود."));
+  };
   const localOwner = getUser()?.id || "guest";
   const localProject = activeId || "new";
   const draftKey = `${localOwner}:${localProject}`;
@@ -339,6 +367,7 @@ export default function Studio() {
   function removeFile(file: PendingFile) { removedFilesRef.current.add(file.key); setFiles(value => value.filter(item => item.key !== file.key)); URL.revokeObjectURL(file.url); if (file.localId) void removeAsset(file.localId, localOwner).catch(() => {}); }
 
   async function send(override?: string, resend?: { text: string; ids: string[] }) {
+    const submittedAgentMode = agentMode; // snapshot before uploads/navigation or an active-job mode switch
     if (!authenticated) { requireLogin(); return; }
     const source = resend?.text ?? override ?? text;
     const ids = resend?.ids ? [...resend.ids] : files.map(item => item.attachmentId!).filter(Boolean);
@@ -383,7 +412,7 @@ export default function Studio() {
     try {
       const id = await ensureConversation(finalText.slice(0, 70));
       await api.sendStudioMessage(id, finalText, ids, { execution_mode: conversation || !activeId ? (manual ? "manual" : "auto") : undefined, manual_question_id: manualQuestion?.id,
-        render_target: deviceRender ? "browser" : "server" });
+        render_target: deviceRender ? "browser" : "server", agent_mode: submittedAgentMode });
       void saveDraft(draftKey, "").catch(() => {});
       files.forEach(file => { removedFilesRef.current.add(file.key); if (file.localId) void removeAsset(file.localId, localOwner).catch(() => {}); });
       if (manualQuestion?.id && (finalText === 'approve' || (manualQuestion.key === 'logo_asset' && finalText === 'attached'))) setSubmittedQuestionId(manualQuestion.id);
@@ -431,6 +460,7 @@ export default function Studio() {
   const mobileTab = layout === "mobile" ? (mobileView === "chat" ? "chat" : wsTab) : null;
 
   const composer = (variant: "home" | "dock") => <Composer variant={variant} text={text} setText={setText} files={files} onRemoveFile={removeFile} onFiles={addFiles}
+    agentMode={agentMode} onAgentModeChange={changeAgentMode}
     manual={manual} onManualChange={modeSaving ? undefined : () => void toggleManual()}
     processing={processing} onStop={canStop ? stop : undefined} onSend={() => void send()} error={error} onDismissError={() => setError("")}
     hasSpeech={hasSpeech} listening={listening} onListen={startVoiceInput} textareaRef={textareaRef} autoFocus={variant === "home" && layout !== "mobile"}/>;
@@ -464,6 +494,7 @@ export default function Studio() {
             onOpenPreview={id => openWorkspace("preview", id)} onEditAgain={editAgain}
             retryHref={current?.status === "error" && !qualityBlocked ? advancedEditorUrl(current) || undefined : undefined}
             onChoice={choice => void send(choice)} onRetryMessage={retryMessage}/>
+          <AgentRunControls runs={conversation?.agent_runs || []} onChanged={() => void refresh()}/>
           {qualityBlocked && current ? <div className="rc-actions" aria-label="بازبینی خروجی">
             <button className="btn btn-secondary" disabled={resuming} onClick={() => void acceptOutput()}>تأیید خروجی</button>
             <button className="btn btn-secondary" disabled={resuming} onClick={() => void send('ایرادهای واقعی کنترل کیفیت همین خروجی را اصلاح کن؛ انتخاب‌های طراحی تأییدشده را حفظ کن و مدیای پولی جدید بدون تأیید تولید نکن.')}>درست کردن</button>
@@ -482,7 +513,9 @@ export default function Studio() {
               <button className="btn btn-secondary" onClick={() => openWorkspace("edit", current.id)}>بررسی و تغییر برنامه</button>
             </div>
           </section> : null}
-          {pendingAction ? <div className="action-card"><h3 dir="rtl">این سناریو تأیید شود؟</h3><p dir="rtl">با تأیید، تصویرها، نریشن و رندر نهایی طبق سناریوی بالا ساخته می‌شود.</p>{pendingAction.estimated_cost_usd != null ? <small className="muted-text" dir="rtl">برآورد ثبت‌شده: ${pendingAction.estimated_cost_usd.toFixed(4)}</small> : null}
+          {pendingAction ? <div className="action-card"><h3 dir="rtl">این سناریو تأیید شود؟</h3>
+            {Array.isArray(current?.state.storyboard?.scenes) ? <details open dir="rtl"><summary>سناریوی همین نسخه</summary>{current.state.storyboard.scenes.map((scene: {index?: number; duration_s?: number; narration_text?: string; text_overlay?: string; description?: string}, index: number) => <section key={index}><h4>صحنهٔ {index + 1} · {scene.duration_s} ثانیه</h4><p>نریشن: {scene.narration_text || 'بدون نریشن'}</p>{scene.text_overlay ? <p>متن روی تصویر: {scene.text_overlay}</p> : null}<p>تصویر: {scene.description}</p></section>)}</details> : null}
+            <p dir="rtl">با تأیید، تصویرها، نریشن و رندر نهایی طبق این سناریو ساخته می‌شود.</p>{pendingAction.estimated_cost_usd != null ? <small className="muted-text" dir="rtl">برآورد ثبت‌شده: ${pendingAction.estimated_cost_usd.toFixed(4)}</small> : null}
             <div className="action-buttons"><button className="btn" onClick={() => void api.confirmStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "approve the plan")))}>تأیید و ادامه</button><button className="btn btn-secondary" onClick={() => void api.cancelStudioAction(pendingAction.id).then(() => refresh()).catch(e => setError(friendlyError(e, "cancel the plan")))}>انصراف</button></div></div> : null}
         </div>
       </div>

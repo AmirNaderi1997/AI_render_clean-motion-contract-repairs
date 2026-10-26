@@ -191,7 +191,8 @@ class Repository:
                 actions = (await db.execute(select(StudioAction).where(StudioAction.conversation_id == conversation_id).order_by(StudioAction.created_at))).scalars()
                 value = _conversation(row)
                 value["messages"] = [{"id": item.id, "role": item.role, "content": item.content,
-                                      "attachments": item.attachments or [], "created_at": iso(item.created_at)} for item in messages]
+                                      "attachments": item.attachments or [], "agent_mode": item.agent_mode,
+                                      "created_at": iso(item.created_at)} for item in messages]
                 value["projects"] = [_project(item) for item in projects]
                 value["actions"] = [{"id": item.id, "project_id": item.project_id, "kind": item.kind,
                                      "status": item.status, "payload": item.payload or {},
@@ -223,22 +224,22 @@ class Repository:
             row.update(changes, updated_at=iso(now())); _write(data); return copy.deepcopy(row)
 
     async def add_message(self, conversation_id: str, user_key: str, role: str, content: str,
-                          attachments: list[str] | None = None) -> dict:
+                          attachments: list[str] | None = None, *, agent_mode: str = "lite") -> dict:
         await self.get_conversation(conversation_id, user_key)
         created = now(); attachments = attachments or []
         if DB_AVAILABLE:
             assert AsyncSessionLocal is not None
             async with AsyncSessionLocal() as db:
                 row = StudioMessage(conversation_id=conversation_id, role=role, content=content,
-                                    attachments=attachments, created_at=created)
+                                    attachments=attachments, created_at=created, agent_mode=agent_mode)
                 db.add(row)
                 conversation = await db.get(StudioConversation, conversation_id)
                 if conversation: conversation.updated_at = created
                 await db.commit(); await db.refresh(row)
-                return {"id": row.id, "role": role, "content": content, "attachments": attachments, "created_at": iso(created)}
+                return {"id": row.id, "role": role, "content": content, "attachments": attachments, "agent_mode": agent_mode, "created_at": iso(created)}
         with _lock:
             data = _read(); items = data["messages"].setdefault(conversation_id, [])
-            value = {"id": len(items) + 1, "role": role, "content": content, "attachments": attachments, "created_at": iso(created)}
+            value = {"id": len(items) + 1, "role": role, "content": content, "attachments": attachments, "agent_mode": agent_mode, "created_at": iso(created)}
             items.append(value); data["conversations"][conversation_id]["updated_at"] = iso(created); _write(data)
             return copy.deepcopy(value)
 

@@ -115,6 +115,16 @@ def test_beats_carry_the_visual_first_contract():
     assert longer.duration_weight >= shorter.duration_weight
 
 
+def test_rejected_script_never_reaches_executable_beats(monkeypatch):
+    from creative import director
+    from creative.schemas import ScriptReport, Critique
+    report = ScriptReport(stopped='cap', review=ScriptReview(verdict='rewrite', must_fix=['هوک ضعیف است']))
+    monkeypatch.setattr(director.scriptwriter, 'run', lambda *a, **k: (GOOD, report))
+    monkeypatch.setattr(director.scriptwriter, 'to_beats', lambda *a: pytest.fail('rejected draft must not become a storyboard'))
+    with pytest.raises(CreativeUnavailable, match='کیفیت'):
+        director._write_script(CONCEPT, BRIEF, Critique(chosen_id='A'), '', '', [], 0, 240, '', duration_s=30, reference=None, depth='fast')
+
+
 def test_dropped_connection_is_retried_not_fatal(monkeypatch):
     import httpx
     from brain import llm as brain_llm
