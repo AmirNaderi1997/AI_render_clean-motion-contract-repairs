@@ -212,3 +212,11 @@ test('a running render card is the last item and its clock starts at the latest 
   assert.equal(items[items.length - 1].kind, 'render');
   assert.equal(items[items.length - 1].startedAt, T0 + 100 * 1000);
 });
+
+test('the card of a finished render waiting for review is also the last item, after later messages', () => {
+  const finished = { id: 'p1', engine: 'talking', status: 'running', title: 't', updated_at: at(50), state: { candidate_output: '/x/v2.mp4', creative_review: { status: 'pending' }, last_observed: { stage: 'done' } } };
+  const messages = [msg(1, 'user', 0), msg(2, 'assistant', 60, 'پیام بعدی')];
+  const events = [ev(1, 'render.started', 1, { project_id: 'p1' })];
+  const items = buildTimeline({ messages, events, projects: [finished], processing: false });
+  assert.equal(items[items.length - 1].kind, 'render');
+});

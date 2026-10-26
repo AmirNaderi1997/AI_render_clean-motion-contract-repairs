@@ -340,19 +340,23 @@ export function buildTimeline({ messages, events, projects, pending, processing,
   const motion = filtered.filter(item => item.kind === "motion");
   if (motion.length) { const rest = filtered.filter(item => item.kind !== "motion"); filtered.length = 0; filtered.push(...rest, ...motion); }
 
-  // The same for a render that is running: its card belongs to the latest message, not to the place where its first event happened to land
-  // (a re-render started after other messages must not leave its progress above them). Its clock starts at the request that started this run.
-  const isLive = (item: TimelineItem) => item.kind === "render" && ["queued", "rendering", "finalizing"].includes(renderView(projects.find(project => project.id === item.projectId)).phase);
-  const live = filtered.filter(isLive);
-  if (live.length) {
-    const lastUserAt = Math.max(0, ...filtered.filter(item => item.kind === "message" && item.role === "user").map(item => (item as { createdAt: number }).createdAt || 0));
-    const rest = filtered.filter(item => !isLive(item));
-    const moved = live.map(item => {
-      const card = item as { kind: "render"; id: string; projectId: string; startedAt: number };
+  // The render card of the project being worked on (running, waiting for review, done or failed) belongs to the latest message: its first event
+  // may have landed above later messages (a re-render started after others), and the finished video must appear at the bottom, not where the
+  // first render once was. A running card's clock starts at the request that started this run.
+  const phaseOf = (item: TimelineItem) => renderView(projects.find(project => project.id === (item as { projectId: string }).projectId)).phase;
+  const cards = filtered.filter(item => item.kind === "render" && phaseOf(item) !== "idle");
+  if (cards.length) {
+    const updated = (item: TimelineItem) => parseTime(projects.find(project => project.id === (item as { projectId: string }).projectId)?.updated_at || "");
+    const latest = cards.reduce((best, item) => updated(item) >= updated(best) ? item : best);
+    const card = latest as { kind: "render"; id: string; projectId: string; startedAt: number };
+    let startedAt = card.startedAt;
+    if (["queued", "rendering", "finalizing"].includes(phaseOf(latest))) {
+      const lastUserAt = Math.max(0, ...filtered.filter(item => item.kind === "message" && item.role === "user").map(item => (item as { createdAt: number }).createdAt || 0));
       const started = Math.max(0, ...events.filter(event => event.type === "render.started" && String(event.data.project_id || "") === card.projectId).map(event => parseTime(event.created_at)));
-      return { ...card, startedAt: Math.max(card.startedAt, lastUserAt, started) } as TimelineItem;
-    });
-    filtered.length = 0; filtered.push(...rest, ...moved);
+      startedAt = Math.max(startedAt, lastUserAt, started);
+    }
+    const rest = filtered.filter(item => item !== latest);
+    filtered.length = 0; filtered.push(...rest, { ...card, startedAt } as TimelineItem);
   }
 
   if (pending) filtered.push({ kind: "message", id: pending.id, role: "user", content: pending.content, attachments: pending.attachments, createdAt: pending.createdAt, pending: !pending.failed, failed: pending.failed });
