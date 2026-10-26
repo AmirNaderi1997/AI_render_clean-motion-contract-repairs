@@ -41,7 +41,7 @@ DEFAULTS = {
     },
 }
 EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "music_chosen", "cta", "style", "captions", "storyboard", "render_settings",
-            "timeline_edits", "broll_edits"}
+            "timeline_edits", "broll_edits", "key_moments"}
 _lock = threading.Lock()
 _running: set[str] = set()
 _cancel_events: dict[str, threading.Event] = {}
@@ -123,8 +123,46 @@ def public(state: dict) -> dict:
         for index, text in sorted(captions.items(), key=lambda item: int(item[0]))
     ]
     result["storyboard"] = decisions.get("storyboard") or []
+    result["key_moments"] = key_moments_of(decisions)
     result["timeline"] = _timeline(decisions, str(state.get("style") or "talking_1"))
     return result
+
+
+def key_moments_of(decisions: dict) -> list[dict]:
+    """The black-and-white key moments of the plan: [{"i": sentence, "text": takeaway shown over it ("" when none)}], in sentence order."""
+    notes = {}
+    for item in decisions.get("notes") or []:
+        try:
+            notes[int(item.get("i"))] = str(item.get("text") or "").strip()
+        except (AttributeError, TypeError, ValueError):
+            continue
+    indexes = set(notes)
+    for value in decisions.get("bw") or []:
+        try:
+            indexes.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return [{"i": i, "text": notes.get(i, "")} for i in sorted(indexes)]
+
+
+def clean_key_moments(value, sentence_count: int) -> list[dict]:
+    """Shape-check the key moments a person chose: real sentences only, a short Persian takeaway (optional), at most 8."""
+    import re as _re
+    seen: dict[int, str] = {}
+    for item in value or []:
+        try:
+            index = int(item.get("i"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if not 0 <= index < sentence_count:
+            continue
+        text = " ".join(str(item.get("text") or "").split())
+        if text and (len(text.split()) > 5 or _re.search(r"[A-Za-z]", text)):
+            raise ValueError("متن لحظهٔ کلیدی باید حداکثر ۵ کلمهٔ فارسی باشد.")
+        seen[index] = text[:60]
+    if len(seen) > 8:
+        raise ValueError("حداکثر ۸ لحظهٔ کلیدی ممکن است.")
+    return [{"i": i, "text": seen[i]} for i in sorted(seen)]
 
 
 def _timeline(decisions: dict, style: str) -> list[dict]:
@@ -235,6 +273,14 @@ def update(job_dir: Path, changes: dict) -> dict:
             if key == "broll_edits":
                 from app import broll_edits
                 state[key] = broll_edits.clean(value)
+                continue
+            if key == "key_moments":
+                decisions_key = _decisions_key(str(state.get("style") or "talking_1"))
+                decisions = dict(state.get(decisions_key) or {})
+                moments = clean_key_moments(value, len(decisions.get("captions") or {}) + len(decisions.get("drop") or []) or 10**6)
+                decisions["bw"] = [m["i"] for m in moments]
+                decisions["notes"] = [{"i": m["i"], "text": m["text"]} for m in moments if m["text"]]
+                state[decisions_key] = decisions
                 continue
             if key in {"captions", "storyboard"}:
                 decisions_key = _decisions_key(str(state.get("style") or "talking_1"))

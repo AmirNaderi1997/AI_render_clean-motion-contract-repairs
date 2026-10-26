@@ -42,3 +42,28 @@ def test_key_moment_phrases_are_not_coloured():
     events = talking_1.emphasis_events([{"start": 1.0, "end": 4.0, "text": "این طبیعیه"}], None)
     assert events and not any("\\1c" in event for event in events)
     assert "\\1c" in talking_1.hook_line("چرا همش هوس شیرینی", ["شیرینی"])          # the pinned hook keeps its yellow word
+
+
+def test_key_moments_roundtrip_through_the_decisions(tmp_path):
+    from app import talking_reel as tr
+    decisions = {"captions": {str(i): f"جمله {i}" for i in range(10)}, "drop": [], "bw": [2], "notes": [{"i": 2, "text": "نکتهٔ اول"}]}
+    assert tr.key_moments_of(decisions) == [{"i": 2, "text": "نکتهٔ اول"}]
+    clean = tr.clean_key_moments([{"i": 5, "text": ""}, {"i": 2, "text": "نکتهٔ اول"}, {"i": 99, "text": "x"}, {"i": 5, "text": ""}], 10)
+    assert clean == [{"i": 2, "text": "نکتهٔ اول"}, {"i": 5, "text": ""}]
+    import pytest
+    with pytest.raises(ValueError):
+        tr.clean_key_moments([{"i": 1, "text": "english words here"}], 10)
+    with pytest.raises(ValueError):
+        tr.clean_key_moments([{"i": k, "text": ""} for k in range(9)], 10)
+
+
+def test_the_chat_can_add_and_remove_key_moments():
+    from creative import revise
+    ops = [revise.RevisionOp(op="add_key_moment", sentence=4, text="این طبیعیه"), revise.RevisionOp(op="add_key_moment", sentence=7),
+           revise.RevisionOp(op="remove_key_moment", sentence=2), revise.RevisionOp(op="add_key_moment", sentence=40, text="بیرون")]
+    state = {"style": "talking_1", "key_moments": [{"i": 2, "text": "قدیمی"}]}
+    change = revise.apply_to_talking(state, ops, 10)
+    assert change.changes["key_moments"] == [{"i": 4, "text": "این طبیعیه"}, {"i": 7, "text": ""}]
+    assert change.rerender and any("پیدا نشد" in item for item in change.unsupported)
+    other = revise.apply_to_talking({"style": "talking_2"}, ops[:1], 10)
+    assert "key_moments" not in other.changes and other.unsupported

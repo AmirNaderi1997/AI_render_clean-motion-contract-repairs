@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from . import llm
 from .schemas import CreativeUnavailable
 
-Op = Literal["rewrite_hook", "edit_caption", "remove_sentence", "remove_range", "set_render", "change_style", "replace_visual", "drop_visual", "set_cta", "clear_identity", "unsupported"]
+Op = Literal["rewrite_hook", "edit_caption", "remove_sentence", "remove_range", "set_render", "change_style", "replace_visual", "drop_visual", "set_cta", "clear_identity", "add_key_moment", "remove_key_moment", "unsupported"]
 VISUAL_TYPES = {"concept", "stat", "comparison", "steps", "ui_showcase", "media_collage", "chat", "map_route",
                 "spec_callout", "kinetic_type", "before_after"}
 STYLES = {"talking_1", "talking_2", "talking_3", "talking_4"}
@@ -98,6 +98,10 @@ Operations (use exactly these):
 - {"op":"replace_visual","sentence":<index>,"text":"<2-6 word Persian title>","visual_type":"<concept|stat|comparison|steps|ui_showcase|media_collage|chat|map_route|spec_callout|kinetic_type|before_after>","items":["<up to 4 facts the speaker says>"]}
 - {"op":"drop_visual","sentence":<index>}
 - {"op":"set_cta","text":"<call to action>"}
+- {"op":"add_key_moment","sentence":<index>,"text":"<2-4 Persian words: the takeaway shown big over that moment, or empty>"}
+  (Talking 1: the moment turns black-and-white with its takeaway in white. Add one per moment the creator asks for; when they ask for N more
+  moments without naming them, choose N strong, different sentences spread over the talk. Never colour them.)
+- {"op":"remove_key_moment","sentence":<index>}
 - {"op":"clear_identity"} (remove an incorrect/unverified speaker name and role; never invent a replacement identity)
 - {"op":"unsupported","reason":"<what was asked that cannot be done with these operations, in Persian>"}
 
@@ -141,6 +145,7 @@ def apply_to_talking(public_state: dict, ops: list[RevisionOp], sentence_count: 
     board = [dict(item) for item in (public_state.get("storyboard") or []) if isinstance(item, dict)]
     captions: list[dict] = []
     touched_settings = False
+    moments: dict[int, str] | None = None
 
     def known(i: int | None) -> bool:
         return i is not None and 0 <= i < sentence_count
@@ -163,6 +168,20 @@ def apply_to_talking(public_state: dict, ops: list[RevisionOp], sentence_count: 
                 touched_settings = True
                 out.applied.append(f'تصویر و صدای جملهٔ {op.sentence} از تدوین حذف می‌شود؛ زمان‌بندی زیرنویس دوباره محاسبه می‌شود.')
             else: out.unsupported.append('برش این جمله برای سبک فعلی تأیید نشده است.')
+            continue
+        if op.op in {"add_key_moment", "remove_key_moment"}:
+            if style != "talking_1":
+                out.unsupported.append("لحظه‌های کلیدی سیاه‌وسفید فقط در سبک ۱ هستند."); continue
+            if not known(op.sentence):
+                out.unsupported.append("جملهٔ لحظهٔ کلیدی پیدا نشد."); continue
+            moments = moments if moments is not None else {m["i"]: m.get("text", "") for m in (public_state.get("key_moments") or [])}
+            if op.op == "add_key_moment":
+                moments[op.sentence] = op.text if len(op.text.split()) <= 5 else " ".join(op.text.split()[:5])
+                out.applied.append(f"لحظهٔ کلیدی جملهٔ {op.sentence}" + (f": «{op.text}»" if op.text else ""))
+            else:
+                moments.pop(op.sentence, None)
+                out.applied.append(f"لحظهٔ کلیدی جملهٔ {op.sentence} برداشته شد")
+            out.changes["key_moments"] = [{"i": i, "text": t} for i, t in sorted(moments.items())]
             continue
         if op.op == 'clear_identity':
             out.changes.update(name='', title='')

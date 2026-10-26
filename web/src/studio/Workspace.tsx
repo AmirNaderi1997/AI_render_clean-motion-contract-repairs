@@ -5,6 +5,7 @@ import { AuthenticatedMedia } from "../AuthenticatedMedia";
 import { Icon } from "../components/Icon";
 import { useFullscreen } from "../components/useFullscreen";
 import { displayTitle } from "../format";
+import { friendlyError } from "../ui";
 import { renderView } from "./model";
 import {MotionScenes} from './MotionScenes';
 import { LocalizeEdit } from "./LocalizeEdit";
@@ -157,6 +158,7 @@ function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () =
       : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved}/>
       : <header className="ws-edit-intro" dir="rtl"><h2>ویرایش این ویدیو</h2><p>تغییر زیرنویس، ریتم، رنگ یا صدا را در چت بگویید. هر چه این نوع ویدیو پشتیبانی کند، همین‌جا کنترلش را می‌بینید.</p></header>}
     {shown === "timeline" ? null : <>
+    {project.engine === 'talking' && project.external_ref ? <KeyMoments key={`km-${project.external_ref}`} jobId={project.external_ref} onSaved={onSaved}/> : null}
     {project.engine === 'talking' && project.external_ref && !hasPlan(project) ? <TalkingShade key={project.external_ref} jobId={project.external_ref} onSaved={onSaved}/> : null}
     {project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}
     {project.external_ref && project.engine!=='localize' ? <MotionScenes jobId={project.external_ref} onSaved={onSaved}/> : null}
@@ -194,6 +196,36 @@ function usePanelFullscreen() {
     try { if (node.current?.requestFullscreen) { await node.current.requestFullscreen(); native.current = true; } } catch { /* the CSS layout is enough */ }
   }, [active]);
   return { node, active, toggle };
+}
+
+/** The black-and-white key moments of a Talking 1 reel: choose any sentence, give it an optional short takeaway, save; the next render uses them. */
+function KeyMoments({jobId, onSaved}: {jobId:string; onSaved:()=>void}) {
+  const [state,setState]=React.useState<Awaited<ReturnType<typeof api.getTalkingReel>> | null>(null);
+  const [chosen,setChosen]=React.useState<Record<number,string>>({});
+  const [saving,setSaving]=React.useState(false);
+  const [error,setError]=React.useState('');
+  const [saved,setSaved]=React.useState(false);
+  React.useEffect(()=>{let active=true; void api.getTalkingReel(jobId).then(s=>{if(!active)return;setState(s);setChosen(Object.fromEntries((s.key_moments||[]).map(m=>[m.i,m.text])));}).catch(()=>{if(active)setError('لحظه‌های کلیدی دریافت نشد.');}); return ()=>{active=false;};},[jobId]);
+  if (!state || String(state.style||'talking_1')!=='talking_1' || !(state.captions||[]).length) return error ? <p role="alert" dir="rtl">{error}</p> : null;
+  const busy=saving||['running','analyzing'].includes(state.status);
+  const toggle=(i:number)=>{setSaved(false);setChosen(c=>{const next={...c};if(i in next)delete next[i];else if(Object.keys(next).length<8)next[i]='';return next;});};
+  async function save(){
+    setSaving(true);setError('');
+    try{const next=await api.editTalkingReel(jobId,{key_moments:Object.entries(chosen).map(([i,text])=>({i:Number(i),text}))});setState(next);setSaved(true);onSaved();}
+    catch(e){setError(friendlyError(e,'save the key moments'));}finally{setSaving(false);}
+  }
+  return <section className="sb" dir="rtl">
+    <label>لحظه‌های کلیدی ({Object.keys(chosen).length} از حداکثر ۸)</label>
+    <p>جمله‌هایی که سیاه‌وسفید می‌شوند. برای هر کدام می‌توانید یک جملهٔ کوتاه (حداکثر ۵ کلمهٔ فارسی) بنویسید تا درشت و سفید نمایش داده شود. روی رندر بعدی اعمال می‌شود.</p>
+    <div style={{display:'grid',gap:6,maxHeight:320,overflow:'auto'}}>
+      {(state.captions||[]).map(c=>{const on=c.i in chosen; return <div key={c.i} style={{display:'grid',gap:4}}>
+        <label style={{display:'flex',gap:8,alignItems:'flex-start',cursor:'pointer'}}><input type="checkbox" checked={on} disabled={busy} onChange={()=>toggle(c.i)}/><span>{c.text}</span></label>
+        {on ? <input type="text" value={chosen[c.i]} disabled={busy} maxLength={60} placeholder="جملهٔ کوتاه روی تصویر (اختیاری)" onChange={e=>{setSaved(false);setChosen(m=>({...m,[c.i]:e.target.value}));}}/> : null}
+      </div>;})}
+    </div>
+    {error ? <p role="alert">{error}</p> : null}
+    <button className="btn btn-sm" disabled={busy} onClick={()=>void save()}>{saving?'در حال ذخیره…':saved?'ذخیره شد':'ذخیرهٔ لحظه‌های کلیدی'}</button>
+  </section>;
 }
 
 function TalkingShade({jobId, onSaved}: {jobId:string; onSaved:()=>void}) {
