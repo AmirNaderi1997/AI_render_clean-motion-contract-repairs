@@ -11,7 +11,7 @@ from .schemas import (Beat, Concept, ContentBrief, CreativePlan, CreativeUnavail
 log = logging.getLogger(__name__)
 
 # Keep the whole creative stage bounded: a slow model must not hold a job hostage.
-DEFAULT_BUDGET_S = 540
+DEFAULT_BUDGET_S = 900
 
 
 def enabled() -> bool:
@@ -110,7 +110,7 @@ def _write_script(chosen: Concept, brief: ContentBrief, critique: Critique, caps
                                      depth=depth, used=used, started=started, budget_s=budget_s)
     # Exhausting the rewrite/time budget is not approval. Never pass a rejected
     # script to the executable storyboard or bypass review with an expansion.
-    if not report.review or report.review.verdict != "ship" or not report.timing_ok:
+    if not scriptwriter.passes(report):
         reasons = report.review.must_fix[:3] if report.review else []
         raise CreativeUnavailable("سناریو هنوز معیارهای کیفیت را پاس نکرده؛ تولید شروع نشد. " + "؛ ".join(reasons))
     chosen.beats = scriptwriter.to_beats(draft, duration_s)

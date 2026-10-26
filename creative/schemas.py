@@ -330,6 +330,7 @@ class ScriptReport(_Model):
     review: ScriptReview | None = None
     history: list[dict] = Field(default_factory=list)      # per attempt: what the critic asked to change, and what changed
     deterministic: list[str] = Field(default_factory=list) # measured problems found in the final script (empty = none)
+    hard_problems: list[str] = Field(default_factory=list) # the measured problems that force a rewrite (length, scenes, missing subject...)
     stopped: str = ""                                       # why the loop ended: shipped | cap | unavailable | time
 
 

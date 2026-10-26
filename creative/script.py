@@ -25,7 +25,8 @@ from .schemas import (CRITERIA, STRUCTURES, Beat, Concept, ContentBrief, Creativ
 WRITER_ROUTE, CRITIC_ROUTE = "script_writer", "script_critic"
 log = logging.getLogger(__name__)
 
-DEPTH_REWRITES = {"fast": 1, "premium": 2}
+DEPTH_REWRITES = {"fast": 3, "premium": 5}
+PATIENCE = 2           # rounds without a better score after which the loop stops: more rewriting is not helping
 MAX_LINES = 8
 MIN_LINES = 3
 CLICHES = ("در دنیای امروز", "آیا می‌دانستید", "آیا میدونستید", "انقلاب", "با ما همراه باشید", "فراموش نکنید", "بی‌نظیر", "فوق‌العاده",
@@ -209,11 +210,17 @@ def write(brief, concept, reference, source, caps, duration_s, *, outro_s=0.0, u
                    route=WRITER_ROUTE, tokens=5500, attempts=4, used=used)
 
 
-def critique(draft: ScriptDraft, brief, concept, reference, measured, *, used=None) -> ScriptReview:
-    request = llm.dumps({"brief": brief.model_dump(exclude={"key_moments"}), "concept": concept.model_dump(exclude={"beats"}),
+CONVERGE = """This is a FOLLOW-UP review. `previous_must_fix` lists what you asked to change last time. Judge the new script on three things only:
+(1) is each previous must_fix really fixed, (2) the measured facts (timing, subject words, scene count), (3) any criterion that is now below 6.
+Do NOT raise new taste-based objections that you did not raise before: a script whose previous demands are met, whose measured facts
+are fine and whose criteria are all at least 6 (hook_strength and payoff_quality at least 7) is "ship". Keep scoring honestly."""
+
+
+def critique(draft: ScriptDraft, brief, concept, reference, measured, *, used=None, previous: ScriptReview | None = None) -> ScriptReview:
+    request = llm.dumps({**({"previous_must_fix": previous.must_fix[:8], "previous_summary": previous.summary} if previous else {}),"brief": brief.model_dump(exclude={"key_moments"}), "concept": concept.model_dump(exclude={"beats"}),
                          "script": [line.model_dump() for line in draft.lines], "ending": draft.ending, "structure": draft.structure,
                          "measured": measured, "reference": reference.model_dump(exclude={"shot_lengths_s"}) if reference and reference.usable else None})
-    raw = llm.ask(ScriptReview, CRITIC, request, route=CRITIC_ROUTE, tokens=4500, used=used)
+    raw = llm.ask(ScriptReview, CRITIC + ("\n\n" + CONVERGE if previous else ""), request, route=CRITIC_ROUTE, tokens=4500, used=used)
     return _verify(raw, draft, measured, bool(reference and reference.usable))
 
 
@@ -234,10 +241,12 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
     draft = write(brief, concept, reference, source, caps, duration_s, outro_s=outro_s, used=used)
     report = ScriptReport(structure=draft.structure)
     review: ScriptReview | None = None
+    previous_review: ScriptReview | None = None
+    best, stale = -1.0, 0
     for attempt in range(rewrites + 1):
         measured = measure(draft, duration_s, outro_s=outro_s, must_name=brief.must_name)
         try:
-            review = critique(draft, brief, concept, reference, measured, used=used)
+            review = critique(draft, brief, concept, reference, measured, used=used, previous=previous_review)
         except CreativeUnavailable as exc:
             log.warning("script critic unavailable: %s", exc)
             review = ScriptReview(verdict="rewrite", must_fix=measured["problems"] + ["بازبینی مستقل کیفیت انجام نشد؛ سناریو تأیید نشده است."],
@@ -247,9 +256,12 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
         report.history.append({"attempt": attempt + 1, "verdict": review.verdict, "must_fix": review.must_fix[:6], "change": review.change,
                                "speech_s": measured["total_speech_s"], "structure": draft.structure})
         out_of_time = time.monotonic() - started > budget_s
-        if review.verdict == "ship" or attempt == rewrites or out_of_time:
-            report.stopped = "shipped" if review.verdict == "ship" else "time" if out_of_time else "cap"
+        mean = sum(item.score for item in review.scores) / max(1, len(review.scores))
+        best, stale = (mean, 0) if mean > best + 0.05 else (best, stale + 1)
+        if review.verdict == "ship" or attempt == rewrites or out_of_time or stale >= PATIENCE:
+            report.stopped = "shipped" if review.verdict == "ship" else "time" if out_of_time else "stalled" if stale >= PATIENCE else "cap"
             break
+        previous_review = review
         try:
             candidate = rewrite(draft, review, brief, concept, reference, source, caps, duration_s, measured, outro_s=outro_s, used=used)
         except CreativeUnavailable as exc:
@@ -285,7 +297,7 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
     if tightened and review is not None and review.verdict != "ship" and time.monotonic() - started <= budget_s * 1.6:
         # The verdict was about the draft BEFORE it was tightened to fit: the draft that would ship must be judged itself.
         try:
-            second = critique(draft, brief, concept, reference, final, used=used)
+            second = critique(draft, brief, concept, reference, final, used=used, previous=previous_review or review)
         except CreativeUnavailable as exc:
             log.warning("final script review unavailable: %s", exc)
         else:
@@ -298,7 +310,22 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
     report.budget_seconds = final["budget_s"]
     report.timing_ok = final["total_speech_s"] <= final["budget_s"]
     report.deterministic = final["problems"] + final["notes"]
+    report.hard_problems = list(final["problems"])
     return draft, report
+
+
+def passes(report: ScriptReport) -> bool:
+    """May this script become a video? The critic's own "ship", or: the measured facts are clean, every criterion is at least 6 with checkable
+    evidence and the hook and the payoff at least 7. (The critic keeps finding new taste objections; the numbers are what is checkable.)"""
+    review = report.review
+    if review is None or not report.timing_ok or report.hard_problems:
+        return False
+    if review.verdict == "ship":
+        return True
+    by = {item.criterion: item for item in review.scores}
+    if len(by) < len(CRITERIA) or any(not item.verified and item.criterion != "reference_alignment" for item in by.values()):
+        return False
+    return all(item.score >= 6 for item in by.values()) and by["hook_strength"].score >= 7 and by["payoff_quality"].score >= 7
 
 
 def to_beats(draft: ScriptDraft, duration_s: float) -> list[Beat]:

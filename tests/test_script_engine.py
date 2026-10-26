@@ -64,6 +64,7 @@ def test_overlong_script_is_rewritten_even_if_the_critic_says_ship(monkeypatch):
 def test_the_tightened_script_is_reviewed_itself_not_judged_by_the_verdict_on_its_longer_version(monkeypatch):
     longer = draft(*["متن کاملاً متفاوت و بسیار طولانی شمارهٔ دو است که برای این ویدیوی کوتاه باز هم زیادی توضیح می‌دهد و ظرفیت را پر می‌کند، " * 2] * 6)
     bad = scores(4, verdict="rewrite", must_fix=["هوک ضعیف است"], change=["hook"])
+    monkeypatch.setattr(script, "DEPTH_REWRITES", {"fast": 1})
     fake = Fake([TOO_LONG, longer, GOOD], [bad, bad, scores()])
     result, report = run(fake, monkeypatch, depth="fast")
     assert result is GOOD and report.timing_ok
@@ -71,14 +72,47 @@ def test_the_tightened_script_is_reviewed_itself_not_judged_by_the_verdict_on_it
     assert report.review.verdict == "ship" and report.history[-1].get("after_tightening") is True
 
 
-def test_loop_is_bounded_by_depth(monkeypatch):
+def test_loop_is_bounded_by_depth_and_stops_when_it_stalls(monkeypatch):
     bad = scores(4, verdict="rewrite", must_fix=["هوک ضعیف است"], change=["hook"])
-    fake = Fake([GOOD] * 6, [bad] * 6)
+    fake = Fake([GOOD] * 8, [bad] * 8)
     _, report = run(fake, monkeypatch, depth="fast")
-    assert fake.calls["write"] <= 2 and report.attempts <= 2
-    fake = Fake([GOOD, draft("یک راه دیگر برای شروع.", "ماشین اجرا می‌کند و آدم تصمیم می‌گیرد.", "این تمام ماجراست."), GOOD], [bad] * 6)
+    assert fake.calls["write"] <= 1 + script.DEPTH_REWRITES["fast"] and report.stopped == "stalled"       # no better score for two rounds: stop
+    steps = [draft(f"یک راه دیگر برای شروع شمارهٔ {k}.", f"ماشین اجرا می‌کند و آدم تصمیم می‌گیرد؛ نسخهٔ {k}.", "این تمام ماجراست.") for k in range(8)]
+    better = [scores(4 + k * 0.5, verdict="rewrite", must_fix=[f"هوک {k}"], change=["hook"]) for k in range(8)]
+    fake = Fake([GOOD] + steps, better)
     _, report = run(fake, monkeypatch, depth="premium")
-    assert fake.calls["write"] <= 3 and fake.calls["review"] <= 3
+    assert fake.calls["write"] <= 1 + script.DEPTH_REWRITES["premium"] and report.stopped in {"cap", "shipped"}   # improving rounds keep going up to the cap
+
+
+def test_a_follow_up_review_gets_the_previous_demands_and_the_converging_rule(monkeypatch):
+    seen = []
+    bad = scores(5, verdict="rewrite", must_fix=["هوک باید قوی‌تر شود"], change=["hook"])
+    reviews = [bad, scores()]
+    drafts = [TOO_LONG, GOOD]
+
+    def fake(schema, system, user, **kw):
+        if schema is ScriptDraft:
+            return drafts.pop(0)
+        seen.append((system, user))
+        return reviews.pop(0)
+    monkeypatch.setattr(llm, "ask", fake)
+    script.run(BRIEF, CONCEPT, "caps", "src", duration_s=15, depth="fast")
+    assert "previous_must_fix" not in seen[0][1] and "FOLLOW-UP" not in seen[0][0]
+    assert "هوک باید قوی‌تر شود" in seen[1][1] and "FOLLOW-UP" in seen[1][0]
+
+
+def test_passes_accepts_clean_measured_facts_and_good_scores_even_when_the_critic_keeps_asking(monkeypatch):
+    from creative.schemas import ScriptReport
+    good = scores(7, verdict="rewrite", must_fix=["یک سلیقهٔ دیگر"])
+    report = ScriptReport(review=good, timing_ok=True, hard_problems=[])
+    assert script.passes(report)
+    assert not script.passes(ScriptReport(review=good, timing_ok=False))
+    assert not script.passes(ScriptReport(review=good, timing_ok=True, hard_problems=["موضوع ویدیو در گفتار نیامده"]))
+    assert not script.passes(ScriptReport(review=scores(5, verdict="rewrite"), timing_ok=True))                 # a criterion below 6
+    weak_hook = scores(7, verdict="rewrite")
+    next(item for item in weak_hook.scores if item.criterion == "hook_strength").score = 6.5
+    assert not script.passes(ScriptReport(review=weak_hook, timing_ok=True))                                   # hook and payoff must reach 7
+    assert script.passes(ScriptReport(review=scores(), timing_ok=True)) and not script.passes(ScriptReport(timing_ok=True))
 
 
 def test_evidence_must_be_in_the_script_or_the_score_is_capped(monkeypatch):
@@ -93,6 +127,7 @@ def test_evidence_must_be_in_the_script_or_the_score_is_capped(monkeypatch):
 def test_cosmetic_rewrite_is_rejected_unless_structure_change_was_requested(monkeypatch):
     synonyms = draft("ابزار برش می‌زند؛ چشم انتخاب می‌کند!", "ماشین سریع‌تر است، ولی سلیقه ندارد.", "تدوینگر خوب هنوز کارگردان لحظه‌هاست.")
     bad = scores(5, verdict="rewrite", must_fix=["هوک باید قوی‌تر شود"], change=[])
+    monkeypatch.setattr(script, "DEPTH_REWRITES", {"fast": 1})
     fake = Fake([GOOD, synonyms], [bad, bad])
     result, report = run(fake, monkeypatch)
     assert result is GOOD and report.history[0].get("rewrite_rejected")
@@ -162,6 +197,7 @@ def test_a_rewrite_that_only_fixes_a_measured_problem_is_accepted(monkeypatch):
 
 def test_unresolved_critic_objections_stay_in_the_report(monkeypatch):
     bad = scores(5, verdict="rewrite", must_fix=["پایان مبهم است"], change=["ending"])
+    monkeypatch.setattr(script, "DEPTH_REWRITES", {"fast": 1})
     result, report = run(Fake([GOOD, GOOD], [bad, bad]), monkeypatch)
     assert report.review.verdict == "rewrite" and "پایان مبهم است" in report.review.must_fix and report.stopped == "cap"
 
