@@ -203,3 +203,12 @@ test('a project that started rendering shows the render card even while its stag
   const waiting = { ...project, state: { last_observed: { stage: 'planning render', progress: 35 } } };
   assert.ok(!buildTimeline({ messages: [], events: [], projects: [waiting], processing: true }).some(item => item.kind === 'render'));
 });
+
+test('a running render card is the last item and its clock starts at the latest request', () => {
+  const running = { id: 'p1', engine: 'talking', status: 'running', title: 't', updated_at: at(1), state: { render_started: true, last_observed: { stage: 'rendering', progress: 74 } } };
+  const messages = [msg(1, 'user', 0), msg(2, 'assistant', 2), msg(3, 'user', 100), msg(4, 'assistant', 101, 'پذیرفته شد')];
+  const events = [ev(1, 'render.started', 1, { project_id: 'p1' }), ev(2, 'tool.progress', 2, { project_id: 'p1', stage: 'rendering', progress: 10 })];
+  const items = buildTimeline({ messages, events, projects: [running], processing: true });
+  assert.equal(items[items.length - 1].kind, 'render');
+  assert.equal(items[items.length - 1].startedAt, T0 + 100 * 1000);
+});
