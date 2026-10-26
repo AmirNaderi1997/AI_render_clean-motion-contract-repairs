@@ -145,6 +145,7 @@ export function hasTimeline(project?: StudioProject): boolean {
 
 function EditPane({ project, onSaved, superseding = false }: { project?: StudioProject; onSaved: () => void | Promise<unknown>; superseding?: boolean }) {
   const [view, setView] = React.useState<"main" | "timeline">("main");
+  const [footerSlot, setFooterSlot] = React.useState<HTMLElement | null>(null);
   if (!project) return <Empty icon="advanced" title="Nothing to edit yet" text="Once EditorGPT creates a project, the controls that apply to it appear here."/>;
   const advanced = advancedEditorUrl(project);
   const timeline = hasTimeline(project);
@@ -156,7 +157,7 @@ function EditPane({ project, onSaved, superseding = false }: { project?: StudioP
     </div> : null}
     {shown === "timeline" ? <TimelineView project={project} onChanged={onSaved} currentOutput={projectOutputUrl(project)}/> : null}
     {shown === "timeline" ? null : project.engine === "localize" && project.external_ref ? <LocalizeEdit key={project.external_ref} id={project.external_ref} onChanged={onSaved}/>
-      : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved} superseding={superseding}/>
+      : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved} superseding={superseding} footerSlot={footerSlot}/>
       : <header className="ws-edit-intro" dir="rtl"><h2>ویرایش این ویدیو</h2><p>تغییر زیرنویس، ریتم، رنگ یا صدا را در چت بگویید. هر چه این نوع ویدیو پشتیبانی کند، همین‌جا کنترلش را می‌بینید.</p></header>}
     {shown === "timeline" ? null : <>
     {project.engine === 'talking' && project.external_ref ? <KeyMoments key={`km-${project.external_ref}`} jobId={project.external_ref} onSaved={onSaved}/> : null}
@@ -167,6 +168,7 @@ function EditPane({ project, onSaved, superseding = false }: { project?: StudioP
     {shown === "timeline" ? null : advanced
       ? <NavLink className="adv-link" to={advanced}><Icon name="advanced" size={20}/><span><b>ویرایشگر پیشرفته</b><small>تایم‌لاین، صدا و تنظیمات دقیق‌تر</small></span><Icon name="chevron" size={18}/></NavLink>
       : <p className="ws-hint" dir="rtl">تغییر را در چت بگویید؛ نسخهٔ تازه‌ای ساخته می‌شود و نسخهٔ فعلی دست‌نخورده می‌ماند.</p>}
+    <div className="ws-edit-footer" ref={setFooterSlot}/>
   </div>;
 }
 
