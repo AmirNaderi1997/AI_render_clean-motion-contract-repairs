@@ -66,17 +66,21 @@ const StreamingVideo = React.forwardRef<any, Props>(({src, posterSrc, as, ...pro
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
   const poster = useAuthenticatedMediaUrl(posterSrc);
-  React.useEffect(() => { setReady(false); setError(''); }, [src]);
-  React.useEffect(() => { if (ready) void video.current?.play().catch(() => {}); }, [ready]);
-  const play = async () => {
+  const wantsPlay = React.useRef(false);
+  const prepare = async () => {
     if (inFlight.current) return;
     inFlight.current = true; setBusy(true); setError('');
     try { await api.prepareMediaPlayback(); setReady(true); }
     catch (e) { setError(friendlyError(e, 'play video')); }
     finally { inFlight.current = false; setBusy(false); }
   };
+  // The player is prepared as soon as it appears: the browser then fetches only the start of the file (the first frame and the length),
+  // and streams the rest by ranges when the person presses play.
+  React.useEffect(() => { wantsPlay.current = false; setReady(false); setError(''); if (src && !props['aria-hidden']) void prepare(); }, [src]);
+  React.useEffect(() => { if (ready && wantsPlay.current) void video.current?.play().catch(() => {}); }, [ready]);
+  const play = async () => { wantsPlay.current = true; if (ready) void video.current?.play().catch(() => {}); else await prepare(); };
   return <div className="streaming-preview">
-    <video {...props} aria-label={props['aria-label'] || 'Video preview'} preload="none" autoPlay={false} src={ready ? src : undefined} poster={poster}
+    <video {...props} aria-label={props['aria-label'] || 'Video preview'} preload="metadata" playsInline autoPlay={false} src={ready ? `${src}#t=0.1` : undefined} poster={poster}
       ref={node => { video.current=node; if(typeof ref==='function') ref(node); else if(ref) ref.current=node; }}
       onError={() => { setReady(false); setError('پخش ویدیو انجام نشد؛ برای تلاش دوباره روی پخش بزنید.'); }}/>
     {!ready && !props['aria-hidden'] ? <button type="button" className="btn btn-secondary streaming-play" disabled={busy} onClick={() => void play()}>{busy ? 'در حال اتصال…' : 'پخش ویدیو'}</button> : null}

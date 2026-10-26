@@ -449,6 +449,20 @@ export const api = {
   authenticatedObjectUrl,
   async downloadAuthenticated(url: string, filename: string, openInNewTab = false,
     onProgress?: (percent: number | null) => void): Promise<void> {
+    // A download starts the moment it is clicked: the browser fetches the file itself (its own download bar, any size, no waiting for the whole
+    // file to arrive in memory first). The read-only media cookie authenticates that request; only if it cannot be set does the old path run.
+    if (!openInNewTab && !onProgress && url.startsWith(BASE + "/")) {
+      try {
+        await api.prepareMediaPlayback();
+        const direct = document.createElement("a");
+        direct.href = url;
+        direct.download = filename;
+        document.body.appendChild(direct);
+        direct.click();
+        direct.remove();
+        return;
+      } catch { /* fall through to the authenticated fetch below */ }
+    }
     let objectUrl: string;
     if (onProgress) {
       const response = await authFetch(url);

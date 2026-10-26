@@ -647,6 +647,8 @@ WORD_SPACE = "\u00a0\u00a0"
 
 
 def _escape(text: str) -> str:
+    from engine.persian_text import join_lam_alef
+    text = join_lam_alef(text)
     text = text.replace("\\", "\\\\").replace("{", "(").replace("}", ")").replace("\n", " ")
     return re.sub(r"[ \u00a0]+", WORD_SPACE, text.strip())
 

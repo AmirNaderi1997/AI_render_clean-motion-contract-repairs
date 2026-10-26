@@ -379,6 +379,8 @@ def _colour(hex_colour: str) -> str:
 
 
 def _esc(text: str) -> str:
+    from engine.persian_text import join_lam_alef
+    text = join_lam_alef(text)
     return text.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
@@ -520,7 +522,7 @@ def _cut_windows(events: list[str], windows: list[tuple[float, float]]) -> list[
 
 
 def emphasis_events(notes: list[dict], fonts_dir: Optional[Path]) -> list[str]:
-    """The emphasis phrase word by word: big, centred, each word punching in; the last in yellow."""
+    """The emphasis phrase word by word: big, centred, each word punching in, all in white (colour is kept for the pinned hook)."""
     events = []
     base = int(H * 0.125)
     for note in notes:
@@ -534,7 +536,7 @@ def emphasis_events(notes: list[dict], fonts_dir: Optional[Path]) -> list[str]:
         step = min(0.42, (t1 - t0) * 0.55 / max(1, len(words)))
         for k, word in enumerate(words):
             y = H * 0.45 + (k - (len(words) - 1) / 2) * pitch
-            colour = f"\\1c{_colour(YELLOW)}" if k == len(words) - 1 and len(words) > 1 else ""
+            colour = ""
             start = t0 + 0.12 + k * step
             punch = "\\fscx135\\fscy135\\t(0,170,\\fscx96\\fscy96)\\t(170,260,\\fscx100\\fscy100)\\fad(60,180)"
             events.append(f"Dialogue: 7,{_ass_time(start)},{_ass_time(t1)},emph,,0,0,0,,"
@@ -998,11 +1000,13 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
             ay = min(max((shot.face[1] * sh - y) / ch, 0.2), 0.8)
             zoom = (f"zoompan=z='1+{PUSH_ZOOM * zoom_amount:.4f}*(1-cos(PI*min(on/{frames},1)))/2':"
                     f"x='iw*{ax:.3f}-iw/zoom*{ax:.3f}':y='ih*{ay:.3f}-ih/zoom*{ay:.3f}':"
-                    f"d=1:s={W}x{H}:fps={fps}")
+                    f"d=1:s={2 * W}x{2 * H}:fps={fps},scale={W}:{H}:flags=area")
             # Decimate the phone source to the delivery cadence *before*
             # zoompan.  zoompan emits ``d`` frames for every input frame; if a
             # 60fps input reaches d=1 at a 30fps output clock, picture duration
             # doubles while audio keeps real time.
+            # zoompan moves its window in whole pixels, which shakes the picture; on a 2x canvas the steps are half as big and the
+            # downscale averages them away.
             frame = f"fps={fps},{zoom}"
         else:
             frame = f"scale={W}:{H}:flags=lanczos,fps={fps}"
