@@ -411,22 +411,28 @@ Never invent a claim, price, metric or feature. Write concise Persian values."""
     }
 
 
-def _motion_prompt(user_text: str, page: dict | None, facts: dict | None, duration: int = 30, plan=None) -> str:
+def _motion_prompt(user_text: str, page: dict | None, facts: dict | None, duration: int = 30, plan=None, limit: int = 11_500) -> str:
+    """The storyboard tool accepts 12k characters: shrink the page excerpt first, then the request, never the verified facts."""
     from creative.source import article_text
-    source = ""
-    if page and facts:
-        source = "\n\nVerified landing-page evidence:\n" + json.dumps({
-            "url": page.get("url"), "facts": facts,
-            "visible_content": article_text(page, 8000).splitlines(),
-        }, ensure_ascii=False)
     direction = ("\n\n" + plan.director_notes + "\nBuild the scenes from this direction: the hook is scene 1, each beat becomes "
                  "one distinct scene, and no scene repeats another's composition.") if plan else ""
-    return (
-        f"Create a {duration}-second Persian narrated video for the user's requested genre. "
-        "Use only verified supplied facts, keep text overlays concise, include a strong hook and an appropriate resolution. "
-        "Only include a sales CTA for an actual sales brief; never turn a story or lesson into a product ad. "
-        f"User request: {user_text}{source}{direction}"
-    )
+    head = (f"Create a {duration}-second Persian narrated video for the user's requested genre. "
+            "Use only verified supplied facts, keep text overlays concise, include a strong hook and an appropriate resolution. "
+            "Only include a sales CTA for an actual sales brief; never turn a story or lesson into a product ad. ")
+
+    def build(excerpt: int, request: str) -> str:
+        source = ""
+        if page and facts:
+            lines = article_text(page, excerpt).splitlines() if excerpt else []
+            source = "\n\nVerified landing-page evidence:\n" + json.dumps({"url": page.get("url"), "facts": facts, "visible_content": lines}, ensure_ascii=False)
+        return f"{head}User request: {request}{source}{direction}"
+
+    for excerpt in (8000, 4000, 2000, 800, 0):
+        prompt = build(excerpt, user_text)
+        if len(prompt) <= limit:
+            return prompt
+    room = max(600, len(user_text) - (len(prompt) - limit))
+    return build(0, user_text[:room])[:limit]
 
 
 def _manual_reference_notes(cid, user, session):
