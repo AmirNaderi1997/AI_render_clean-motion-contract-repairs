@@ -154,7 +154,13 @@ def execute(record, step):
         except ValueError as exc:
             import creative
             if isinstance(exc.__cause__, creative.CreativeUnavailable):
-                raise PreflightUnavailable("برنامه تأیید شد، اما سرویس طراحی خلاقانه در مسیر creative_director پاسخ قابل‌استفاده نداد. تولید مدیا شروع نشد. تنظیمات مدل و فالبک این مسیر باید بررسی شود؛ پس از رفع اتصال می‌توانید همین مرحله را ادامه دهید.") from exc
+                reason = " ".join(str(exc.__cause__ or "").split())[:420]
+                if reason.startswith("سناریو هنوز معیارهای کیفیت را پاس نکرده"):
+                    # The writer answered, but its script was not approved by the independent reviewer: say what is wrong, not that the service is down.
+                    raise PreflightUnavailable("برنامه تأیید شد، اما سناریو از بازبینی کیفیت نگذشت و تولید مدیا شروع نشد، تا ویدیوی ضعیف یا ساختگی ساخته نشود. دلیل: "
+                                               + reason.removeprefix("سناریو هنوز معیارهای کیفیت را پاس نکرده؛ تولید شروع نشد.").strip()
+                                               + " می‌توانید «ادامه از مرحلهٔ ذخیره‌شده» را بزنید تا دوباره نوشته شود، یا درخواست را با جزئیات واقعی‌تر (نام، ویژگی‌ها، مخاطب) بفرستید.") from exc
+                raise PreflightUnavailable("برنامه تأیید شد، اما سرویس طراحی خلاقانه در مسیر creative_director پاسخ قابل‌استفاده نداد. تولید مدیا شروع نشد. تنظیمات مدل و فالبک این مسیر باید بررسی شود؛ پس از رفع اتصال می‌توانید همین مرحله را ادامه دهید. جزئیات: " + reason) from exc
             raise
         latest = run(repo.get_conversation(cid, user))
         return {"project_id": latest["state"].get("current_project_id"), "waiting": False,

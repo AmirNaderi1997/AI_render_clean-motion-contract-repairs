@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import logging
 import os
 import threading
@@ -264,6 +265,11 @@ def _prepare(provider: dict, messages: list[dict], *, model: str, tokens: int, t
         return key, f"{base}/models/{model}:generateContent", headers, native
     headers["Authorization"] = f"{PROVIDERS[provider['id']].get('auth', 'Bearer')} {key}"
     body = adapters.payload("chat", model, messages, tokens=tokens, temperature=temperature, extra=extra)
+    if provider["id"] == "openai" and re.match(r"(gpt-5|o[134])", model or ""):
+        # OpenAI's reasoning models take max_completion_tokens (thinking tokens count against it), no temperature, and a reasoning effort.
+        body = {k: v for k, v in body.items() if k not in ("max_tokens", "temperature")}
+        body["max_completion_tokens"] = max(int(tokens or 0) * 3, 2500)
+        body.setdefault("reasoning_effort", "low")
     if stream:
         body = {**body, "stream": True}
     return key, f"{base}/chat/completions", headers, body

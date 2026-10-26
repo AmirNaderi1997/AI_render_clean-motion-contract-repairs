@@ -348,3 +348,14 @@ def test_structured_callers_get_json_mode_from_openai_direct(monkeypatch):
     assert out and seen["extra"] == {"response_format": {"type": "json_object"}}
     d.try_fallback([{"role": "user", "content": "plain"}], candidates=[], tokens=50, temperature=0, timeout=30, extra=None, attempts=[], validate=None)
     assert seen["extra"] is None
+
+
+def test_openai_reasoning_models_get_their_own_parameters(monkeypatch):
+    from brain import lm_direct as d
+    provider = {"id": "openai", "format": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-5.4", "enabled": True}
+    monkeypatch.setattr(d, "key_for", lambda provider_id: "sk-test-not-real")
+    for model, reasoning in (("gpt-5.4", True), ("o3", True), ("gpt-4.1", False)):
+        _, _, _, body = d._prepare(provider, [{"role": "user", "content": "hi"}], model=model, tokens=800, temperature=0.3, extra=None, stream=False)
+        assert ("max_completion_tokens" in body) is reasoning and ("max_tokens" in body) is not reasoning
+        assert ("temperature" in body) is not reasoning
+        assert body.get("reasoning_effort") == ("low" if reasoning else None)
