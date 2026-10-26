@@ -168,7 +168,7 @@ function EditPane({ project, onSaved, superseding = false }: { project?: StudioP
     {shown === "timeline" ? null : advanced
       ? <NavLink className="adv-link" to={advanced}><Icon name="advanced" size={20}/><span><b>ویرایشگر پیشرفته</b><small>تایم‌لاین، صدا و تنظیمات دقیق‌تر</small></span><Icon name="chevron" size={18}/></NavLink>
       : <p className="ws-hint" dir="rtl">تغییر را در چت بگویید؛ نسخهٔ تازه‌ای ساخته می‌شود و نسخهٔ فعلی دست‌نخورده می‌ماند.</p>}
-    <div className="ws-edit-footer" ref={setFooterSlot}/>
+    <div className="ws-edit-footer" dir="rtl" ref={setFooterSlot}/>
   </div>;
 }
 
