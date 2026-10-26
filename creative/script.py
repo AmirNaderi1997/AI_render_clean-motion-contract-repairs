@@ -123,7 +123,16 @@ def measure(draft: ScriptDraft, duration_s: float, *, outro_s: float = 0.0, must
     elif total < limit * 0.45 and duration_s >= 12:
         problems.append(f"نریشن فقط حدود {total:.1f} ثانیه از {limit:.1f} ثانیهٔ ممکن را پر می‌کند؛ ویدیو خالی و کشدار می‌شود.")
     spoken = _plain(" ".join(narrations))
-    missing = [term for term in must_name if _plain(term) and _plain(term) not in spoken]
+    spoken_words = {_plain(word) for word in re.split(r"[\s،؛.!؟?:؛\-]+", " ".join(narrations)) if _plain(word)}
+
+    def heard(term: str) -> bool:
+        """The whole phrase, or (for a multi-word term) at least a third of its words: «یاقوت تراش کله‌قندی» is heard as «یاقوت»."""
+        if _plain(term) in spoken:
+            return True
+        words = [_plain(w) for w in re.split(r"[\s،؛.!؟?:\-]+", term) if len(_plain(w)) >= 3]
+        return len(words) >= 2 and sum(w in spoken or w in spoken_words for w in words) * 3 >= len(words)
+
+    missing = [term for term in must_name if _plain(term) and not heard(term)]
     if missing:
         problems.append("موضوع ویدیو در گفتار نیامده؛ این واژه‌ها باید شنیده شوند: " + "، ".join(f"«{t}»" for t in missing))
     opening = _plain(" ".join(narrations[:2]))
