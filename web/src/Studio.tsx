@@ -447,7 +447,7 @@ export default function Studio() {
           }}><Icon name="play" size={14}/>تلاش مجدد درخواست</button> : null}
           {styles.length > 0 && current?.status === "awaiting_input" ? <div className="action-card"><h3>Choose a style</h3><p>How should this video feel?</p><div className="style-options">{styles.map((style: any) => <button key={style.id || style.key} onClick={() => void send(`سبک ${style.id || style.key}`)}><b className="bidi" dir="auto">{style.label || style.title || style.name}</b><small className="bidi" dir="auto">{style.description || "Talking Reel style"}</small></button>)}</div></div> : null}
           {manualQuestion ? <ManualQuestion key={manualQuestion.id} question={manualQuestion} busy={processing || sending} onAnswer={value => void send(value)}/> : null}
-          {awaitingPlan && current ? <section className="action-card plan-gate" dir="rtl" aria-label="تأیید برنامهٔ تدوین">
+          {awaitingPlan && current && !processing ? <section className="action-card plan-gate" dir="rtl" aria-label="تأیید برنامهٔ تدوین">
             <h3>برنامهٔ تدوین آماده است · نسخهٔ {awaitingPlan.n}</h3>
             <p>سبک «{awaitingPlan.content.style.label}»{awaitingPlan.content.hook.text ? <> با هوک «{awaitingPlan.content.hook.text}»</> : null}. رندر فقط بعد از تأیید شما شروع می‌شود؛ هر تغییری را در تب Edit یا همین چت بگویید.</p>
             <div className="action-buttons">
@@ -471,6 +471,7 @@ export default function Studio() {
       sourceAttachment={sourceAttachment} onCancel={stop} onSaved={() => refresh()} showTabs={layout !== "mobile"} onCollapse={layout === "mobile" ? undefined : closeWorkspace}
       panelRef={workspaceRef}
       topbarEdit={layout === "mobile" && mobileView === "edit"}
+      working={processing && !renderLive ? (step?.label || thinking || "در حال بررسی درخواست شما…") : null}
       resizer={layout === "desktop" && wsVisible ? <Resizer panel={workspaceRef} edge="start" label="عرض پنل پیش‌نمایش" width={shownWorkspace}
         bounds={() => ({ min: WORKSPACE_BOUNDS.min, max: Math.min(WORKSPACE_BOUNDS.max, (studioRef.current?.clientWidth ?? 1400) - MIN_CHAT) })}
         onResize={setLiveWorkspace} onDragState={setResizingWorkspace} onCommit={value => { setWorkspaceWidth(value); setLiveWorkspace(null); }}/> : undefined}/>

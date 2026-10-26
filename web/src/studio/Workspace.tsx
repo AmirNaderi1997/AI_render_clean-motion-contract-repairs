@@ -7,9 +7,10 @@ import { useFullscreen } from "../components/useFullscreen";
 import { displayTitle } from "../format";
 import { friendlyError } from "../ui";
 import { renderView } from "./model";
+import { ThinkingRow } from "./Activity";
 import {MotionScenes} from './MotionScenes';
 import { LocalizeEdit } from "./LocalizeEdit";
-import { EditCard } from "./EditCard";
+import { EditCard, EditSwitch } from "./EditCard";
 import { PlanReview } from "./PlanReview";
 import { currentVersion, planPhase } from "./plan";
 import { TimelineView } from "./TimelineView";
@@ -142,7 +143,7 @@ export function hasTimeline(project?: StudioProject): boolean {
   return project.engine === "talking" ? hasPlan(project) && Boolean(currentVersion(project)) : Boolean(project.external_ref);
 }
 
-function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () => void | Promise<unknown> }) {
+function EditPane({ project, onSaved, superseding = false }: { project?: StudioProject; onSaved: () => void | Promise<unknown>; superseding?: boolean }) {
   const [view, setView] = React.useState<"main" | "timeline">("main");
   if (!project) return <Empty icon="advanced" title="Nothing to edit yet" text="Once EditorGPT creates a project, the controls that apply to it appear here."/>;
   const advanced = advancedEditorUrl(project);
@@ -155,7 +156,7 @@ function EditPane({ project, onSaved }: { project?: StudioProject; onSaved: () =
     </div> : null}
     {shown === "timeline" ? <TimelineView project={project} onChanged={onSaved} currentOutput={projectOutputUrl(project)}/> : null}
     {shown === "timeline" ? null : project.engine === "localize" && project.external_ref ? <LocalizeEdit key={project.external_ref} id={project.external_ref} onChanged={onSaved}/>
-      : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved}/>
+      : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved} superseding={superseding}/>
       : <header className="ws-edit-intro" dir="rtl"><h2>ویرایش این ویدیو</h2><p>تغییر زیرنویس، ریتم، رنگ یا صدا را در چت بگویید. هر چه این نوع ویدیو پشتیبانی کند، همین‌جا کنترلش را می‌بینید.</p></header>}
     {shown === "timeline" ? null : <>
     {project.engine === 'talking' && project.external_ref ? <KeyMoments key={`km-${project.external_ref}`} jobId={project.external_ref} onSaved={onSaved}/> : null}
@@ -198,7 +199,7 @@ function usePanelFullscreen() {
   return { node, active, toggle };
 }
 
-/** The black-and-white key moments of a Talking 1 reel: choose any sentence, give it an optional short takeaway, save; the next render uses them. */
+/** The black-and-white key moments of a Talking 1 reel, in the same card style as the other Edit settings. */
 function KeyMoments({jobId, onSaved}: {jobId:string; onSaved:()=>void}) {
   const [state,setState]=React.useState<Awaited<ReturnType<typeof api.getTalkingReel>> | null>(null);
   const [chosen,setChosen]=React.useState<Record<number,string>>({});
@@ -206,26 +207,26 @@ function KeyMoments({jobId, onSaved}: {jobId:string; onSaved:()=>void}) {
   const [error,setError]=React.useState('');
   const [saved,setSaved]=React.useState(false);
   React.useEffect(()=>{let active=true; void api.getTalkingReel(jobId).then(s=>{if(!active)return;setState(s);setChosen(Object.fromEntries((s.key_moments||[]).map(m=>[m.i,m.text])));}).catch(()=>{if(active)setError('لحظه‌های کلیدی دریافت نشد.');}); return ()=>{active=false;};},[jobId]);
-  if (!state || String(state.style||'talking_1')!=='talking_1' || !(state.captions||[]).length) return error ? <p role="alert" dir="rtl">{error}</p> : null;
+  if (!state || String(state.style||'talking_1')!=='talking_1' || !(state.captions||[]).length) return error ? <p className="notice" data-tone="error" role="alert" dir="rtl">{error}</p> : null;
   const busy=saving||['running','analyzing'].includes(state.status);
-  const toggle=(i:number)=>{setSaved(false);setChosen(c=>{const next={...c};if(i in next)delete next[i];else if(Object.keys(next).length<8)next[i]='';return next;});};
+  const count=Object.keys(chosen).length;
+  const toggle=(i:number,on:boolean)=>{setSaved(false);setChosen(c=>{const next={...c};if(!on)delete next[i];else if(Object.keys(next).length<8)next[i]=next[i]??'';return next;});};
   async function save(){
     setSaving(true);setError('');
     try{const next=await api.editTalkingReel(jobId,{key_moments:Object.entries(chosen).map(([i,text])=>({i:Number(i),text}))});setState(next);setSaved(true);onSaved();}
     catch(e){setError(friendlyError(e,'save the key moments'));}finally{setSaving(false);}
   }
-  return <section className="sb" dir="rtl">
-    <label>لحظه‌های کلیدی ({Object.keys(chosen).length} از حداکثر ۸)</label>
-    <p>جمله‌هایی که سیاه‌وسفید می‌شوند. برای هر کدام می‌توانید یک جملهٔ کوتاه (حداکثر ۵ کلمهٔ فارسی) بنویسید تا درشت و سفید نمایش داده شود. روی رندر بعدی اعمال می‌شود.</p>
-    <div style={{display:'grid',gap:6,maxHeight:320,overflow:'auto'}}>
-      {(state.captions||[]).map(c=>{const on=c.i in chosen; return <div key={c.i} style={{display:'grid',gap:4}}>
-        <label style={{display:'flex',gap:8,alignItems:'flex-start',cursor:'pointer'}}><input type="checkbox" checked={on} disabled={busy} onChange={()=>toggle(c.i)}/><span>{c.text}</span></label>
-        {on ? <input type="text" value={chosen[c.i]} disabled={busy} maxLength={60} placeholder="جملهٔ کوتاه روی تصویر (اختیاری)" onChange={e=>{setSaved(false);setChosen(m=>({...m,[c.i]:e.target.value}));}}/> : null}
+  return <EditCard title="لحظه‌های کلیدی" summary={count ? `${count} لحظهٔ سیاه‌وسفید از حداکثر ۸` : 'هیچ لحظه‌ای انتخاب نشده'} hint="جمله‌هایی که سیاه‌وسفید می‌شوند. برای هر کدام می‌توانید یک جملهٔ کوتاه (حداکثر ۵ کلمهٔ فارسی) بنویسید تا درشت و سفید نمایش داده شود. روی رندر بعدی اعمال می‌شود.">
+    <div className="km-list">
+      {(state.captions||[]).map(c=>{const on=c.i in chosen; return <div key={c.i} className="km-row" data-on={on || undefined}>
+        <EditSwitch label={c.text.length>70?`${c.text.slice(0,70)}…`:c.text} checked={on} disabled={busy || (!on && count>=8)} onChange={value=>toggle(c.i,value)}/>
+        {on ? <input className="input" type="text" dir="rtl" value={chosen[c.i]} disabled={busy} maxLength={60} placeholder="جملهٔ کوتاه روی تصویر (اختیاری)" aria-label="جملهٔ کوتاه روی تصویر"
+          onChange={e=>{setSaved(false);setChosen(m=>({...m,[c.i]:e.target.value}));}}/> : null}
       </div>;})}
     </div>
-    {error ? <p role="alert">{error}</p> : null}
+    {error ? <p className="notice" data-tone="error" role="alert">{error}</p> : null}
     <button className="btn btn-sm" disabled={busy} onClick={()=>void save()}>{saving?'در حال ذخیره…':saved?'ذخیره شد':'ذخیرهٔ لحظه‌های کلیدی'}</button>
-  </section>;
+  </EditCard>;
 }
 
 function TalkingShade({jobId, onSaved}: {jobId:string; onSaved:()=>void}) {
@@ -253,13 +254,15 @@ function TalkingShade({jobId, onSaved}: {jobId:string; onSaved:()=>void}) {
   </section>;
 }
 
-export function Workspace({ conversation, project, projects, onSelectProject, tab, onTab, sourceAttachment, onCancel, onSaved, onCollapse, showTabs, panelRef, resizer, topbarEdit = false }: {
+export function Workspace({ conversation, project, projects, onSelectProject, tab, onTab, sourceAttachment, onCancel, onSaved, onCollapse, showTabs, panelRef, resizer, topbarEdit = false, working = null }: {
   conversation: StudioConversation | null; project?: StudioProject; projects: StudioProject[]; onSelectProject: (id: string) => void;
   tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; sourceAttachment?: string; onCancel: () => void; onSaved: () => void | Promise<unknown>;
   onCollapse?: () => void; showTabs: boolean; panelRef?: React.Ref<HTMLElement>;
   /** Drag handle on the panel's inner edge (desktop only), rendered by the page that owns the layout. */
   resizer?: React.ReactNode;
   topbarEdit?: boolean;
+  /** What the assistant is doing right now (a new edit request being worked on), shown in the Edit tab like in the chat. */
+  working?: string | null;
 }) {
   const meta = statusMeta(project);
   const panel = usePanelFullscreen();
@@ -295,9 +298,10 @@ export function Workspace({ conversation, project, projects, onSelectProject, ta
       <div className="meter" data-indeterminate={typeof view.progress === "number" && progressAge < 30 ? undefined : ""} style={{ ["--value" as string]: `${view.progress ?? 0}%` }} role="progressbar" aria-label="پیشرفت رندر" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressAge < 30 ? view.progress : undefined}><span/></div>
       <ProgressNotice project={project}/>
     </div> : null}
+    {working && !rendering && tab === "edit" ? <div className="ws-edit-progress" role="status" dir="rtl"><ThinkingRow label={working}/></div> : null}
     <div className="ws-body">
       <div role="tabpanel" id="ws-panel-preview" aria-labelledby="ws-tab-preview" hidden={tab !== "preview"}><PreviewPane project={project} conversation={conversation} sourceAttachment={sourceAttachment} onCancel={onCancel}/></div>
-      <div role="tabpanel" id="ws-panel-edit" aria-labelledby="ws-tab-edit" hidden={tab !== "edit"}><EditPane project={project} onSaved={onSaved}/></div>
+      <div role="tabpanel" id="ws-panel-edit" aria-labelledby="ws-tab-edit" hidden={tab !== "edit"}><EditPane project={project} onSaved={onSaved} superseding={Boolean(working)}/></div>
     </div>
   </section>;
 }
