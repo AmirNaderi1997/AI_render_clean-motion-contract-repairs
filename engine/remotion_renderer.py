@@ -18,7 +18,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def render(config: dict, output: Path, *, job_dir: Path, on_progress=None) -> None:
     root = job_dir.resolve()
     config = json.loads(json.dumps(config))
-    _enrich(config, root)
+    # The cinematic look is heavier to rasterise: it is opt-in per installation (REMOTION_LOOK=cinematic) until a render on that machine is measured.
+    config["look"] = os.environ.get("REMOTION_LOOK", "classic")
+    if config["look"] == "cinematic":
+        _enrich(config, root)
     if not 1 <= len(config.get("scenes", [])) <= 30:
         raise ValueError("Motion scene count is outside render limits")
     if sum(scene.get("frames", 0) for scene in config["scenes"]) > 2700:
@@ -64,7 +67,7 @@ def render(config: dict, output: Path, *, job_dir: Path, on_progress=None) -> No
                 os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-    timer = threading.Timer(1800, stop)
+    timer = threading.Timer(float(os.environ.get("REMOTION_TIMEOUT_S", "5400")), stop)       # a shared 4-core server needs 20-35 minutes for a 35 s reel
     timer.daemon = True
     timer.start()
     tail = deque(maxlen=30)
@@ -134,6 +137,8 @@ def scene_config(storyboard, media: list[dict], narration: list[dict], job_dir: 
         voice = voices.get(scene.index)
         if scene.source_asset not in prepared:
             try:
+                if os.environ.get("REMOTION_LOOK", "classic") != "cinematic":
+                    raise RuntimeError("classic look keeps the original photos")
                 prepared[scene.source_asset] = prepare(job_dir / scene.source_asset, job_dir / "generated" / "cutouts")
             except Exception:               # the original picture is always a valid fallback
                 prepared[scene.source_asset] = {"asset": str(job_dir / scene.source_asset), "kind": "photo", "accent": None}
