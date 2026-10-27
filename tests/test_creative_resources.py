@@ -10,6 +10,24 @@ from creative.resources import providers, registry
 from app.routers.creative_resources import router
 
 
+def test_snapshot_fingerprints_are_actual_and_not_license_approval():
+    from creative.resources.provenance import snapshot_integrity
+    report = snapshot_integrity()
+    assert report["verified"] and len(report["files"]) == 6
+    assert not report["license_approved"] and not report["upstream_install_pinned"]
+
+
+def test_snapshot_tampering_or_missing_sources_is_visible(tmp_path, monkeypatch):
+    from creative.resources import provenance
+    monkeypatch.setattr(provenance, "ROOT", tmp_path)
+    monkeypatch.setattr(provenance, "SNAPSHOT", {"changed.json": "0" * 64, "missing.json": "1" * 64})
+    (tmp_path / "changed.json").write_text("changed")
+    report = provenance.snapshot_integrity()
+    assert not report["verified"]
+    assert report["files"][0]["actual_sha256"] is not None
+    assert report["files"][1]["actual_sha256"] is None
+
+
 def test_resource_selection_never_switches_engines_or_promotes_unknown_capabilities():
     from creative.resources.selection import ResourceRequirements, assess_resource
     requirements = ResourceRequirements(context="edit-plan", engine="mlt", kind="transition")

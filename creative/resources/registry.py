@@ -70,9 +70,11 @@ def search_resources(query: str = "", *, engine: str | None = None, provider: st
 
 
 def registry_summary() -> dict:
+    from .provenance import snapshot_integrity
     rows = list(_snapshot().values())
     encoded = json.dumps([row.model_dump(mode="json") for row in rows], sort_keys=True).encode()
     return {"schema_version": 1, "revision": hashlib.sha256(encoded).hexdigest()[:16], "total": len(rows),
+            "provenance": snapshot_integrity(),
             "providers": dict(Counter(row.provider for row in rows)),
             "availability": dict(Counter(row.availability for row in rows)),
             "notice": "Discovery does not install, execute, license-approve or modify any resource or project."}
