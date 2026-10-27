@@ -239,7 +239,7 @@ window.__timelines["{COMPOSITION_ID}"] = tl;
     return directory / "index.html"
 
 
-def _run_cli(project: Path, output: Path, *, timeout: int, on_progress=None, should_cancel=None) -> None:
+def _run_cli(project: Path, output: Path, *, timeout: int, on_progress=None, should_cancel=None, fmt: str = "mp4") -> None:
     """hyperframes render with live progress: the CLI prints "@hf-progress {...done,total...}" while it captures frames."""
     import os
     import re
@@ -252,7 +252,8 @@ def _run_cli(project: Path, output: Path, *, timeout: int, on_progress=None, sho
     from engine.hyperframes.standalone import ensure_browser
     ensure_browser()
     output.parent.mkdir(parents=True, exist_ok=True)
-    command = [*cli_command(), "render", ".", "--output", str(output.resolve()), "--quality", "standard", "--workers", "1", "--sdr"]
+    command = [*cli_command(), "render", ".", "--output", str(output.resolve()), "--quality", "standard", "--workers", "1", "--sdr",
+               *(["--format", fmt] if fmt != "mp4" else [])]
     process = subprocess.Popen(command, cwd=project, env={**os.environ, "NO_COLOR": "1"}, text=True, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, start_new_session=True)
     tail: deque[str] = deque(maxlen=60)

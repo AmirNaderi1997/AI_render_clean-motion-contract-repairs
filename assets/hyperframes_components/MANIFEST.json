@@ -1,0 +1,186 @@
+{
+ "source": "https://github.com/heygen-com/hyperframes/tree/main/registry/components",
+ "license": "Apache-2.0",
+ "files": {
+  "beat-timeline": {
+   "sha256": "19c6528e970766422978e26d5ac483bfe2c711b7fdcaf1f8a28805a4a53f584c",
+   "bytes": 12426
+  },
+  "chart-story": {
+   "sha256": "d65180b77637521ea98676c9af1d59395f1e70ce0d0d5e1f604d02bee2821310",
+   "bytes": 30464
+  },
+  "conic-progress-ring": {
+   "sha256": "a01beeb774006a3317d123983b85586adb3bc81b94e435e3f65116ba9dabb93a",
+   "bytes": 9034
+  },
+  "constellation-hub": {
+   "sha256": "6ebed16e6f7d2aff53507fc719639e4b9332b1882c4c4b8e3e8ff0b53011805e",
+   "bytes": 17591
+  },
+  "count-up": {
+   "sha256": "6b34b9873a243fedb060d23f4eb5cef1b61a5b169ec1ae064030b70b48beea66",
+   "bytes": 12389
+  },
+  "cta-lockup": {
+   "sha256": "126c3b7da9540230aeead700a154c36d5f205a33037083cc0cb7aaabe497ee65",
+   "bytes": 9225
+  },
+  "cta-close": {
+   "sha256": "1aff42f1ddfaebcd961b64987e59ed8a3bd1961b4d40d44d24e117093801c46f",
+   "bytes": 10565
+  },
+  "headline-slam": {
+   "sha256": "b16ac28b01bf7f352d6a3f267838253de85794cd9bedd8065b48d7675e9295cd",
+   "bytes": 8784
+  },
+  "kinetic-type-swap": {
+   "sha256": "e98407ad72306094c3f17f25043924c5214428ef290235db0409c44865e259ba",
+   "bytes": 16223
+  },
+  "line-swap": {
+   "sha256": "24fb7b6b8ed1455e2bcf22addfa80d02dbc1008473b4cef98e7346709aa80ad7",
+   "bytes": 13565
+  },
+  "marker-highlight": {
+   "sha256": "bedd128ffab3808b4624f9aa5bcd0e80c9022726fdad59191301259adb0512dc",
+   "bytes": 15209
+  },
+  "marker-checklist-card": {
+   "sha256": "c99d951e0f361447109f50b5301cbbd8bcfed621cd7a66d92d9c5a65ec1614f0",
+   "bytes": 11739
+  },
+  "match-cut": {
+   "sha256": "34ffaa62e703ccd331889f44ae09aef650844b8c1f77d5ae417bf65cddf5ec5d",
+   "bytes": 11127
+  },
+  "notification-stack": {
+   "sha256": "dfe78474314169e66fb3cb6fa26d3e09755873248a1ff72dc4b472edacbb2771",
+   "bytes": 16821
+  },
+  "native-notification-pop": {
+   "sha256": "d4e8b73da0360ddd34d622d0a37ae61920e77bae4fab74d445bebd829580be33",
+   "bytes": 18474
+  },
+  "notes-typing": {
+   "sha256": "d1e0ad020fb0fd17b9e5abdddb1c125c40806d4f2f31c08bb6fffcd8867d495a",
+   "bytes": 12111
+  },
+  "overwhelm-surround": {
+   "sha256": "e9ce5fdaf46f5639eede726f6c1426ff111a7235423a24b91c63b596a0513993",
+   "bytes": 15619
+  },
+  "radial-surround": {
+   "sha256": "a331e57781ee42b150615fac69c9e8368425d050d25ffe134cf01f27d91af224",
+   "bytes": 18629
+  },
+  "pan-stations": {
+   "sha256": "3d3b32584a7b969025e13a5586a6f7f66cadca311758ce6f735e523a170d6ed3",
+   "bytes": 13513
+  },
+  "per-word-rise": {
+   "sha256": "e093265396dba184e2b451eb8154d7bbf3d80a49edd33d3a84d6676702a190f7",
+   "bytes": 13419
+  },
+  "perspective-marquee": {
+   "sha256": "14d4544b748881f564ee3a2ffd55b1a630179b47b9d17bc3ee24667baf7c1698",
+   "bytes": 6164
+  },
+  "pull-back-reveal": {
+   "sha256": "c8fe75a2fd0b82212840378501098a0f13792add8fac82af02f492335a23549e",
+   "bytes": 12082
+  },
+  "push-in": {
+   "sha256": "e6b899e011c238430f86218d952360fb66ccd7d5c8d1c60e42251a302671f242",
+   "bytes": 6331
+  },
+  "social-proof-card": {
+   "sha256": "66bf596ea2fd55b6d36902e695d047e751aff80ce16f6e006b8a5ddd57713892",
+   "bytes": 9837
+  },
+  "split-tilt-cards": {
+   "sha256": "93a753ab8250a3ab9c47d12894ab7677b3007492529e426aba36b4cef8126e32",
+   "bytes": 23291
+  },
+  "comparison-split": {
+   "sha256": "2637b4dd260eb9ef272fad2f3b3921fe8f282cb498b8de112ec6faa76d5ef3b8",
+   "bytes": 16869
+  },
+  "before-after-wipe": {
+   "sha256": "c04e8bf1bfbcec71d0921a03a786cc09e660732428aa04bf79036a30b7755e09",
+   "bytes": 19440
+  },
+  "focus-rack": {
+   "sha256": "415d25ac225c7ce5908d0c9ef3ab144bd93b44d40fc0b65fcc853c7254d5573e",
+   "bytes": 11130
+  },
+  "state-chip-rail": {
+   "sha256": "a6f986a78fb892751bfd8811102eea7b135db325dc8c52bafb7d61f870d4f04f",
+   "bytes": 16283
+  },
+  "svg-mask-reveal": {
+   "sha256": "ee75c96ce061fd2de8819313edbd6a16a7810fff5148c138cf92b210a7467da1",
+   "bytes": 12075
+  },
+  "text-shimmer": {
+   "sha256": "a96775b95265720efc23311566d17d574768cd60383743fa2dd71c9fd3241153",
+   "bytes": 6858
+  },
+  "titlecard-calm": {
+   "sha256": "5d6833d8bf512352e67d39a7b1f4133fe1bd84a9d0c76f528c6f40eea9e950ae",
+   "bytes": 6577
+  },
+  "titlecard-lockup": {
+   "sha256": "6a5e54b3819357bd264337cf16240b6a4e65e1059c08ccd82554611a60cdb072",
+   "bytes": 13484
+  },
+  "typed-prompt": {
+   "sha256": "ea5562adebc554cd363b4b4bf5b91dcf7b1fc2c73c634cb727e8a7dc149f3723",
+   "bytes": 17024
+  },
+  "vox-annotate": {
+   "sha256": "33485ba8f255cae458180f00380e2d2ed01141b382cbc33a1105d7905612c333",
+   "bytes": 20029
+  },
+  "grid-card-assemble": {
+   "sha256": "8713fc92043a353732f4d9bd8832e0023a2019472d3a9cfffc566ff6fd194042",
+   "bytes": 21457
+  },
+  "toggle-flip": {
+   "sha256": "6955c7c0c468c6a5364a4d64d3c28bc6453f4cc8fc8988ca33e4df7ebe90f72b",
+   "bytes": 18184
+  },
+  "star-rating-fill": {
+   "sha256": "6d9c5ecd6fe80a7608db0118e20c29e5e9b64d3a4d9659977ed5402509aebc57",
+   "bytes": 11679
+  },
+  "tracing-beam": {
+   "sha256": "6700d9db125a62d6628e93fcd35bb0d9a4d68cf6cb7dd2f1d20a9f895ed98ff6",
+   "bytes": 14266
+  },
+  "avatar-cloud": {
+   "sha256": "f69c3d95ce928b43c40426f15368e00cfc4effc252948e9c046b29e08738980b",
+   "bytes": 18579
+  },
+  "multiplayer-cursors": {
+   "sha256": "9ffcd3b73e81cb297e04df810db8b862f75b4409a894b377a15fe468618a4ac9",
+   "bytes": 17465
+  },
+  "cursor-text-select": {
+   "sha256": "a80b90330f132f337d3c1a606b52dfae34468d170dc32162895822494039ce47",
+   "bytes": 16433
+  },
+  "drift-hold": {
+   "sha256": "0a9a4ce4c04a57e3ba04af61e6f23b119fafbc7ff2893fb032888a351c2eaac2",
+   "bytes": 7023
+  },
+  "staggered-fade-up": {
+   "sha256": "7953224e9c08cf90ad5bcfe256392916b48a293c85579a52ba67ae8fea9b9de1",
+   "bytes": 5589
+  },
+  "text-stagger": {
+   "sha256": "00b5f9203d219b8a451db70c10c0518013914cdf715714047367183bd3c69128",
+   "bytes": 5868
+  }
+ }
+}
