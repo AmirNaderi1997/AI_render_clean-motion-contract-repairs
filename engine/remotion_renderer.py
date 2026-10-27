@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def render(config: dict, output: Path, *, job_dir: Path, on_progress=None) -> None:
     root = job_dir.resolve()
     config = json.loads(json.dumps(config))
+    _enrich(config, root)
     if not 1 <= len(config.get("scenes", [])) <= 30:
         raise ValueError("Motion scene count is outside render limits")
     if sum(scene.get("frames", 0) for scene in config["scenes"]) > 2700:
@@ -84,21 +85,77 @@ def render(config: dict, output: Path, *, job_dir: Path, on_progress=None) -> No
         process.stdout.close()
 
 
+def _enrich(config: dict, root: Path) -> None:
+    """Scenes saved before the cinematic reel (no look, no caption text) get them now, from the job's own storyboard and photos."""
+    scenes = config.get("scenes", [])
+    if not scenes or all("kind" in scene for scene in scenes):
+        return
+    from engine.persian_text import join_lam_alef
+    from engine.remotion_prep import prepare
+    try:
+        board = json.loads((root / "storyboard.json").read_text()).get("scenes", [])
+    except (OSError, ValueError):
+        board = []
+    looks: dict[str, dict] = {}
+    for index, scene in enumerate(scenes):
+        if "kind" in scene or not scene.get("asset"):
+            continue
+        source = Path(scene["asset"])
+        source = source if source.is_absolute() else root / source
+        if not source.resolve().is_relative_to(root) or not source.is_file():
+            continue
+        key = str(source.resolve())
+        if key not in looks:
+            try:
+                looks[key] = prepare(source, root / "generated" / "cutouts")
+            except Exception:
+                looks[key] = {"asset": key, "kind": "photo", "accent": None}
+        look = looks[key]
+        scene.update(asset=look["asset"], kind=look["kind"], accent=look["accent"], supporting_assets=[look["asset"]])
+        if index < len(board):
+            scene["narration_text"] = join_lam_alef(board[index].get("narration_text") or "")
+            scene["title"] = join_lam_alef(board[index].get("text_overlay") or scene.get("title") or "")
+    product = next((l["accent"] for l in looks.values() if l["kind"] == "cutout" and l["accent"]), None) \
+        or next((l["accent"] for l in looks.values() if l["accent"]), None)
+    if product:
+        for scene in scenes:
+            scene["accent"] = product
+
+
 def scene_config(storyboard, media: list[dict], narration: list[dict], job_dir: Path, music: str | None) -> dict:
+    from engine.persian_text import join_lam_alef
+    from engine.remotion_prep import prepare
     voices = {item["scene_index"]: item for item in narration}
     sources = {item["scene_index"]: item for item in media}
+    prepared: dict[str, dict] = {}
     scenes = []
-    assets = list(dict.fromkeys(scene.source_asset for scene in storyboard.scenes))
     for scene in storyboard.scenes:
         source = sources[scene.index]
         voice = voices.get(scene.index)
-        scenes.append({"asset": scene.source_asset,
-                       "title": scene.text_overlay,
-                       "role":scene.narrative_role,"visual_type":scene.visual_type,"motion_style":scene.motion_style,
+        if scene.source_asset not in prepared:
+            try:
+                prepared[scene.source_asset] = prepare(job_dir / scene.source_asset, job_dir / "generated" / "cutouts")
+            except Exception:               # the original picture is always a valid fallback
+                prepared[scene.source_asset] = {"asset": str(job_dir / scene.source_asset), "kind": "photo", "accent": None}
+        look = prepared[scene.source_asset]
+        asset = Path(look["asset"])
+        try:
+            asset = asset.relative_to(job_dir)
+        except ValueError:
+            asset = Path(scene.source_asset)
+        scenes.append({"asset": str(asset), "kind": look["kind"], "accent": look["accent"],
+                       "title": join_lam_alef(scene.text_overlay or ""), "narration_text": join_lam_alef(scene.narration_text or ""),
+                       "role": scene.narrative_role, "visual_type": scene.visual_type, "motion_style": scene.motion_style,
                        "frames": max(1, round(source["duration_s"] * 30)),
                        "narration": str(Path(voice["file_path"]).relative_to(job_dir)) if voice else None})
         # Only use relevant assets explicitly selected by the storyboard.
         # No automatic gallery of unrelated product photos every third scene.
-        scenes[-1]["supporting_assets"] = [scene.source_asset]
-    directed=any(scene.narrative_role for scene in storyboard.scenes)
-    return {"scenes": scenes, "music": music,"version":2 if directed else 1}
+        scenes[-1]["supporting_assets"] = [str(asset)]
+    # One accent for the whole reel: the product's own colour (from a cut-out product photo if there is one), not a backdrop's.
+    product = next((look["accent"] for look in prepared.values() if look["kind"] == "cutout" and look["accent"]), None) \
+        or next((look["accent"] for look in prepared.values() if look["accent"]), None)
+    if product:
+        for scene in scenes:
+            scene["accent"] = product
+    directed = any(scene.narrative_role for scene in storyboard.scenes)
+    return {"scenes": scenes, "music": music, "version": 2 if directed else 1}
