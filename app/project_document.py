@@ -438,7 +438,7 @@ LOCALIZE_TRACKS = ("video", "titles", "captions", "voice", "audio", "music", "ou
 # -- Motion (generic Edit Plan engine) ----------------------------------------------------------
 
 MOTION_TRACKS = {"video": ("video", "صحنه‌ها"), "panel": ("broll", "B-roll"), "titles": ("title", "هوک و عنوان"),
-                 "captions": ("caption", "زیرنویس"), "graphics": ("motion", "گذارها"), "voice": ("audio", "نریشن"),
+                 "captions": ("caption", "زیرنویس"), "effects": ("effect", "افکت تصویر"), "graphics": ("motion", "ترنزیشن‌ها"), "voice": ("audio", "نریشن"),
                  "sfx": ("audio", "افکت صوتی"), "music": ("music", "موسیقی")}
 CAPTION_STYLE = {"normal": "معمولی", "emphasis": "تأکیدی", "cta": "دعوت به اقدام", "cover": "تیتر ابتدایی"}
 
@@ -495,6 +495,7 @@ def motion_document(job) -> dict:
         fps = plan.canvas.fps
         placed = plan.segment_frames()
         effects = {e.segment_id: e.type for e in plan.visual_effects}
+        from engine.effects_v4 import EFFECT_CATALOG_V4
         for index, (segment, (start, count)) in enumerate(zip(plan.segments, placed)):
             scene = scenes[index] if index < len(scenes) else {}
             tracks["video"].append(_element(
@@ -503,6 +504,13 @@ def motion_document(job) -> dict:
                 source={"kind": "upload", "label": Path(plan.source).name, "in": _r(segment.in_), "out": _r(segment.out)},
                 props={"effect": effects.get(segment.id), "zoom": [segment.zoom.from_, segment.zoom.to]}, via=["chat"],
                 note="جلوهٔ حرکتی و برش این صحنه را در چت عوض کنید."))
+            if segment.id in effects:
+                effect = effects[segment.id]
+                tracks["effects"].append(_element(
+                    f"effect:{segment.id}", "effect", start / fps, (start + count) / fps,
+                    EFFECT_CATALOG_V4.get(effect, {}).get("label", effect),
+                    props={"segment_id": segment.id, "resource_id": "editorgpt:" + effect},
+                    via=["plan"], note="این افکت روی کل قطعه اعمال می‌شود؛ در بخش افکت و ترنزیشنِ همین تب تغییرش دهید."))
         for transition in plan.transitions:
             if transition.duration_frames <= 0:
                 continue
@@ -511,7 +519,11 @@ def motion_document(job) -> dict:
                 f"transition:{transition.from_segment_id}:{transition.to_segment_id}", "transition",
                 placed[index][0] / fps, (placed[index][0] + transition.duration_frames) / fps,
                 {"crossfade": "محو", "directional": "کشویی", "zoom": "زوم"}.get(transition.type, transition.type),
-                props={"type": transition.type, "frames": transition.duration_frames}, via=["chat"]))
+                props={"type": transition.type, "frames": transition.duration_frames,
+                       "from_segment_id": transition.from_segment_id, "to_segment_id": transition.to_segment_id,
+                       "direction": transition.direction, "intensity": transition.intensity,
+                       "zoom_mode": transition.zoom_mode, "zoom_scale": transition.zoom_scale}, via=["plan"],
+                note="این ترنزیشن بین دو قطعه است؛ در بخش افکت و ترنزیشنِ همین تب تغییرش دهید."))
         duration = plan.output_duration
         for number, caption in enumerate(plan.captions):
             tracks["captions"].append(_element(

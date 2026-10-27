@@ -84,6 +84,22 @@ export interface EffectPreset {
   energy?: number; mood?: string; best_roles?: string[]; category?: string; hint_color?: string;
 }
 
+export interface CreativeResource {
+  id: string; name: string; description: string; type: string; category: string;
+  provider: string; engine: string; source_version: string | null;
+  availability: "catalog-only" | "existing-pipeline" | "unsupported";
+  integration_status: string; contexts: string[];
+  license: { verified: boolean; commercial_use_approved: boolean; type: string | null };
+  capabilities: Record<string, boolean | null>;
+  parameters: { name: string; value_type: string; default: unknown; editable: boolean }[];
+  preview_video: string | null; preview_poster: string | null;
+  recommended_for: string[]; avoid_when: string[]; limitations: string[];
+}
+
+export interface CreativeResourcePage {
+  schema_version: number; total: number; offset: number; limit: number; items: CreativeResource[];
+}
+
 export interface RafieiStyle {
   preferred_effects: string[]; avoid_effects: string[];
   caption_emphasis_color: string; caption_emphasis_alt_color: string;
@@ -684,6 +700,20 @@ export const api = {
   },
   async listEffects(signal?: AbortSignal): Promise<EffectPreset[]> {
     return j(await authFetch(`${BASE}/effects`, { signal }));
+  },
+  async planCreativeResources(id: string, signal?: AbortSignal): Promise<{ version: number | null; plan: any; effects: { id: string; name: string }[]; transitions?: { id: string; name: string }[] }> {
+    return j(await authFetch(`${BASE}/jobs/${encodeURIComponent(id)}/creative-resources`, { signal }));
+  },
+  async applyResourceOperations(id: string, operations: Record<string, unknown>[], baseVersion: number | null, basePlan: any): Promise<{ ok: boolean; plan: any; version: number }> {
+    return j(await authFetch(`${BASE}/jobs/${encodeURIComponent(id)}/operations`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operations, base_version: baseVersion, base_plan: basePlan, source: "user_ui" }),
+    }));
+  },
+  async searchCreativeResources(query: string, availability: string, offset = 0, signal?: AbortSignal): Promise<CreativeResourcePage> {
+    const params = new URLSearchParams({ q: query, offset: String(offset), limit: "12" });
+    if (availability) params.set("availability", availability);
+    return j(await authFetch(`${BASE}/creative-resources?${params}`, { signal }));
   },
   async listFonts(signal?: AbortSignal): Promise<string[]> {
     const data = await j<{ fonts: string[] }>(await authFetch(`${BASE}/fonts`, { signal }));

@@ -505,6 +505,7 @@ def apply_plan_operations(
     source: str = "user_ui",
     dry_run: bool = False,
     base_version: Optional[int] = None,
+    base_plan: Optional[dict] = None,
 ) -> dict:
     """Apply a batch of EditOperations to the job's plan.
 
@@ -517,6 +518,8 @@ def apply_plan_operations(
 
     _guard_plan_edit(job)
     current = load_plan(job)
+    if base_plan is not None and base_plan != current:
+        raise PlanVersionConflict("The saved plan changed; reload before applying a creative resource")
     latest = plan_versions.latest_version(job)
     current_version = latest["version"] if latest else None
     if base_version is not None and current_version is not None and base_version != current_version:
