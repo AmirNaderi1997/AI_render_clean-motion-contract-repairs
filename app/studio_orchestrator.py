@@ -2198,7 +2198,8 @@ async def _sync_conversation_once(conversation_id: str, user_key: str) -> None:
                 await repo.emit(conversation_id, event_type, {"project_id": project["id"], "engine": engine,
                     "status": raw_status, "stage": stage, "progress": progress,
                     "message": failure_message or _status_message(engine, raw_status, stage), "output_url": output})
-                if output:
+                if output and project["state"].get("announced_output") != output:       # once per finished video, however often the status is re-observed
+                    await repo.update_project(project["id"], user_key, state={**state, "announced_output": output})
                     await repo.add_message(conversation_id, user_key, "assistant",
                         "ویدیو آماده شد. می‌توانید آن را پخش یا دانلود کنید و اصلاح بعدی را همین‌جا بگویید.")
         except Exception as exc:
