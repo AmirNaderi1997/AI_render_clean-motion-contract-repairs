@@ -10,6 +10,19 @@ from creative.resources import providers, registry
 from app.routers.creative_resources import router
 
 
+def test_resource_selection_never_switches_engines_or_promotes_unknown_capabilities():
+    from creative.resources.selection import ResourceRequirements, assess_resource
+    requirements = ResourceRequirements(context="edit-plan", engine="mlt", kind="transition")
+    assert assess_resource("editorgpt-transition:crossfade", requirements)["eligible"]
+    assert not assess_resource("hyperframes:data-chart", requirements)["eligible"]
+    assert assess_resource("missing:resource", requirements)["reasons"] == ["unknown-resource"]
+    strict = requirements.model_copy(update={"require_rtl": True, "require_alpha": True,
+                                              "require_commercial_approval": True})
+    result = assess_resource("editorgpt-transition:crossfade", strict)
+    assert not result["eligible"]
+    assert set(result["reasons"]) == {"unverified-supports_rtl", "unverified-transparent", "commercial-license-not-approved"}
+
+
 def test_snapshot_indexes_existing_sources_without_claiming_execution():
     from engine.hyperframes.catalog import load_catalog
     from engine.effects_v4 import EFFECT_CATALOG_V4

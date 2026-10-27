@@ -35,7 +35,9 @@ def resolve_edit_plan_resource(resource_id: str, kind: str) -> str:
         row = get_resource(resource_id)
     except KeyError:
         raise ValueError("Unknown creative resource") from None
-    if (row["availability"] != "existing-pipeline" or row["integration_status"] != "native"
+    from .selection import ResourceRequirements, assess_resource
+    assessment = assess_resource(resource_id, ResourceRequirements(context="edit-plan", engine="mlt", kind=kind))
+    if (not assessment["eligible"]
             or "edit-plan" not in row["contexts"] or row["engine"] != "mlt"
             or row["provider"] != "editorgpt-existing" or row["type"] != kind or not row["legacy_id"]):
         raise ValueError("This resource has no supported EditPlan adapter; no installation or render was started")
