@@ -21,6 +21,8 @@ log = logging.getLogger(__name__)
 
 MOTION_ROUTE = "creative_motion"
 
+PANEL_MAX_Y = 856          # the lowest y a top-panel scene may use; talking_5 lowers it so the speaker's head can rise into the rest
+
 PALETTES = {
     "shadow-cut": {"bg": "#0B0D0C", "surface": "#161A18", "ink": "#F2F0E8", "accent": "#C8FF3D", "accent2": "#FF5A36", "muted": "#8C938E"},
     "velvet": {"bg": "#0F2A24", "surface": "#173A32", "ink": "#F4EBD8", "accent": "#D9A441", "accent2": "#E8E1CF", "muted": "#9DB3AA"},
@@ -188,7 +190,7 @@ def build_prompt(spec: SceneSpec, design: DesignSystem) -> str:
                    'Return speaker="full"; never move or hide the speaker. Fill this panel with an opaque '
                    'design-system background. Explain ALL supplied sentences as a coherent evolving visual, '
                    'with meaningful intermediate states throughout D, not a 2-second entrance then empty space. '
-                   'Keep every label within x=32..1048, y=24..856. Headlines 64–100px; body 38px+. '
+                   f'Keep every label within x=32..1048, y=24..{PANEL_MAX_Y}. Headlines 64–100px; body 38px+. '
                    'Do not use emoji or unsupported symbol glyphs; draw icons with inline SVG.')
     return prompt
 

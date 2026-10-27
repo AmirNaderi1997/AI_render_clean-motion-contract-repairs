@@ -43,12 +43,34 @@ ReelPlan = base.ReelPlan
 
 # ── planning ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+def cold_open_choice(decisions: dict, sentences: list[dict], key_moments: list[dict], settings: dict) -> dict | None:
+    """The teaser line shown before the video starts (the "first key moment"), switched on and off and re-chosen from the edit panel.
+
+    Never the opening line itself unless the creator picked it: it would be heard twice back to back. Default: the strongest line that is
+    NOT at the start (the director's pick when it is late enough, else the first key moment that is)."""
+    if not settings.get("first_key_moment_enabled", True) or not sentences:
+        return None
+    manual = settings.get("first_key_moment_sentence")
+    if manual is not None and 0 <= int(manual) < len(sentences):
+        pick = int(manual)
+    else:
+        def late(i) -> bool:
+            return i is not None and 0 <= int(i) < len(sentences) and int(i) >= 1 and float(sentences[int(i)]["start"]) >= MIN_TEASER_START
+        director = (decisions.get("cold_open") or {}).get("i")
+        pick = int(director) if late(director) else next((int(m["i"]) for m in key_moments if late(m.get("i"))), None)
+    if pick is None:
+        return None
+    return {"i": pick, "text": str(sentences[pick]["text"])}
+
+
 def plan_reel(transcript: dict, decisions: dict, faces: list, duration: float, pack: StylePack | None = None,
-              beats: list[dict] | None = None, key_moments: list[dict] | None = None, creative_plan: dict | None = None) -> ReelPlan:
+              beats: list[dict] | None = None, key_moments: list[dict] | None = None, creative_plan: dict | None = None,
+              settings: dict | None = None) -> ReelPlan:
     """The talking_2 cut with a layout per shot (full / split) and the script the overlay page needs on plan.script."""
     pack = pack or REFERENCE_AI_NEWS
-    plan = base.plan_reel(transcript, {**decisions, "broll": [], "chips": []}, faces, duration, pictures={}, continuous_split=False)
     sentences = transcript["sentences"]
+    cold = cold_open_choice(decisions, sentences, key_moments or [], settings or {})
+    plan = base.plan_reel(transcript, {**decisions, "broll": [], "chips": [], "cold_open": cold}, faces, duration, pictures={}, continuous_split=False)
     by_sentence = {int(b["sentence"]): b for b in (beats or []) if b.get("sentence") is not None}
     ratio = pack.rhythm.split_ratio
     # Which shots get a panel: the shots that sit inside a beat's sentence, spread so about `ratio` of the reel is split.
@@ -72,6 +94,28 @@ def plan_reel(transcript: dict, decisions: dict, faces: list, duration: float, p
         shot.split = id(shot) in split_ids and not any(shot.src_in < b and shot.src_out > a for a, b in windows)
         shot.close = (not shot.split) and (shot.out_start // 1 % 2 == 1)
 
+    # A panel scene lives at most MAX_PANEL seconds: after that the speaker has the frame again (the reference never holds one image for long).
+    held, last_slot = 0.0, None
+    for shot in plan.shots:
+        if shot.split and shot.slot == last_slot:
+            held += shot.length
+            if held > MAX_PANEL:
+                shot.split = False
+        elif shot.split:
+            held, last_slot = shot.length, shot.slot
+        else:
+            held, last_slot = 0.0, None
+    run: list = []
+    for shot in plan.shots + [None]:
+        if shot is not None and shot.split:
+            run.append(shot)
+            continue
+        if run:
+            xs = sorted(r.face[0] for r in run)
+            ys = sorted(r.face[1] for r in run)
+            for r in run:
+                r.face = (xs[len(xs) // 2], ys[len(ys) // 2])
+        run = []
     plan.script = _script(plan, transcript, decisions, by_sentence, key_moments or [], pack)
     plan.pack = pack
     plan.sentences = sentences
@@ -145,7 +189,11 @@ def _script(plan: ReelPlan, transcript: dict, decisions: dict, by_sentence: dict
         a = out_time(float(sentences[int(i)]["start"]))
         if a is None:
             continue
-        slams.append({"text": base.persian_digits(str(m.get("text") or "")), "start": round(a, 3), "end": round(a + 2.0, 3)})
+        if decisions.get("hook") and pack.hook.mode != "none":      # the hook owns the opening seconds: a slam waits for it
+            a = max(a, min(pack.hook.seconds, plan.duration) + 0.25)
+        if a + 1.0 > plan.duration:
+            continue
+        slams.append({"text": base.persian_digits(str(m.get("text") or "")), "start": round(a, 3), "end": round(min(a + 2.0, plan.duration), 3)})
     hook = None
     if decisions.get("hook") and pack.hook.mode != "none":
         hook = {"text": base.persian_digits(str(decisions["hook"])), "highlight": " ".join(decisions.get("hook_highlight") or []),
@@ -155,9 +203,11 @@ def _script(plan: ReelPlan, transcript: dict, decisions: dict, by_sentence: dict
 
 # ── rendering ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-EXTRA = 300                           # how far above the card the speaker's head may rise (px)
+MIN_TEASER_START = 5.0                # a teaser must come from at least this far into the talk
+MAX_PANEL = 3.8                       # seconds one panel scene may stay up
+EXTRA = 170                           # how far above the card the speaker's head may rise (px)
 TALL_H = CARD_H + EXTRA
-FACE_FRAC = (EXTRA + 70) / TALL_H     # where the face centre sits in the tall window: just under the card's top edge
+FACE_FRAC = (EXTRA + 40) / TALL_H     # where the face centre sits in the tall window: just under the card's top edge
 
 
 def _crop(shot: Shot, src_w: int, src_h: int, pack: StylePack, split: bool) -> tuple[int, int, int, int]:
@@ -204,7 +254,8 @@ def _mattes(video: Path, plan: ReelPlan, pack: StylePack, work_dir: Path, src_w:
         if not shot.split:
             continue
         x, y, w, h = _crop(shot, src_w, src_h, pack, True)
-        jobs.append({"src": str(video), "start": shot.src_in, "end": shot.src_out, "crop": [x, y, w, h], "size": [W // 2, TALL_H // 2],
+        jobs.append({"src": str(video), "start": shot.src_in, "end": shot.src_out, "crop": [x, y, w, h], "size": [W // 2, (TALL_H // 4) * 2],              # even sizes: the matte is an H.264 video
+                     
                      "fps": fps, "out": str(work_dir / "mattes" / f"m{i}.mp4")})
         index.append(i)
     if not jobs:
@@ -238,7 +289,7 @@ def _graph(plan: ReelPlan, pack: StylePack, src_w: int, src_h: int, fps: int, ma
             parts.append(f"color=c=black@0.0:s={W}x{H}:r={fps}:d={d:.3f},format=yuva420p[e{i}]")
             parts.append(f"[e{i}][card{i}]overlay=0:{CARD_Y}:format=auto,format=yuva420p[s{i}]")
             if i in matte_input:
-                parts.append(f"[{matte_input[i]}:v]format=gray,scale={W}:{TALL_H}:flags=bilinear,gblur=sigma=1.2,format=gray[mm{i}]")
+                parts.append(f"[{matte_input[i]}:v]format=gray,scale={W}:{TALL_H}:flags=bilinear,eq=contrast=1.35:brightness=-0.12,erosion,gblur=sigma=0.9,format=gray[mm{i}]")
                 parts.append(f"[tb{i}][mm{i}]alphamerge[person{i}]")
                 parts.append(f"color=c=black@0.0:s={W}x{H}:r={fps}:d={d:.3f},format=yuva420p[f{i}]")
                 parts.append(f"[f{i}][person{i}]overlay=0:{CARD_Y - EXTRA}:format=auto,format=yuva420p[p{i}]")
@@ -293,7 +344,9 @@ def render_composite(video: Path, plan: ReelPlan, panel: Optional[Path], text: O
     if music and music.is_file():
         inputs += ["-i", str(music_bed(music, plan.duration + 1.0, work_dir))]
         parts.append(f"[{nxt}:a]volume={MUSIC_DB}dB,atrim=0:{plan.duration:.3f}[bed]")
-        parts.append(f"[ca][bed]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=300[ducked];[ca][ducked]amix=inputs=2:duration=first:normalize=0,{loud}")
+        parts.append("[ca]asplit=2[vox1][vox2]")
+        parts.append("[bed][vox1]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=300[bedduck]")
+        parts.append(f"[vox2][bedduck]amix=inputs=2:duration=first:normalize=0,{loud}")
     else:
         parts.append(f"[ca]{loud}")
     cmd = ["ffmpeg", "-hide_banner", "-y", *inputs, "-filter_complex", ";".join(parts), "-map", "[vout]", "-map", "[aout]",
@@ -341,12 +394,21 @@ def author_panels(plan: ReelPlan, work_dir: Path) -> int:
                                 narrative_role=str(b.get("role") or "evidence"), why=str(b.get("visual") or ""), spoken=spoken))
     if not beats:
         return 0
-    creative_motion.compose(beats, creative_motion.plan_from_public(plan.creative_plan), plan.sentences, cache=work_dir / "authored_scenes.json")
+    creative_motion.PANEL_MAX_Y = CARD_Y - EXTRA - 20          # below this the speaker's head rises into the panel
+    for attempt in range(3):                              # a provider hiccup must not cost a scene: compose reuses what is cached and retries the rest
+        creative_motion.compose(beats, creative_motion.plan_from_public(plan.creative_plan), plan.sentences, cache=work_dir / "authored_scenes_v2.json")
+        if all(b.custom for b in beats):
+            break
     done = 0
     for seg, beat in zip(segs, beats):
         if beat.custom:
             seg["beat"]["custom"] = beat.custom
             done += 1
+        else:                                            # never show a weak or empty panel: the speaker keeps the whole frame
+            seg["layout"], seg["beat"] = "full", None
+            for shot in plan.shots:
+                if seg["start"] - 1e-3 <= shot.out_start < seg["end"] - 1e-3:
+                    shot.split = False
     return done
 
 

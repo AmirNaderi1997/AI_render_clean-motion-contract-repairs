@@ -41,3 +41,14 @@ def test_vendored_components_match_their_manifest():
     for name, meta in manifest["files"].items():
         data = (panel_library.LIBRARY_DIR / f"{name}.html").read_bytes()
         assert hashlib.sha256(data).hexdigest() == meta["sha256"], name
+
+
+def test_the_teaser_is_never_the_opening_line_and_follows_the_edit_switches():
+    from engine.talking_styles import talking_5 as t5
+    sentences = [{"start": 0.5, "end": 4.0, "text": "اول"}, {"start": 5.6, "end": 11.0, "text": "دوم"}, {"start": 37.9, "end": 43.0, "text": "آخر"}]
+    moments = [{"i": 0}, {"i": 2}]
+    director = {"cold_open": {"i": 0, "text": "اول"}}
+    assert t5.cold_open_choice(director, sentences, moments, {})["i"] == 2          # not sentence 0: it would be heard twice
+    assert t5.cold_open_choice(director, sentences, moments, {"first_key_moment_enabled": False}) is None
+    assert t5.cold_open_choice(director, sentences, moments, {"first_key_moment_sentence": 1})["i"] == 1     # the creator's own pick wins
+    assert t5.cold_open_choice({"cold_open": {"i": 1}}, sentences, [], {})["i"] == 1                        # a late enough director pick is kept
