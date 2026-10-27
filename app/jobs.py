@@ -1217,7 +1217,21 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
             from engine.remotion_renderer import render as render_motion
             job.render.message = "rendering motion scenes"
             _write_status(job)
-            render_motion(motion_config, out_path, job_dir=job.dir, on_progress=report)
+            import logging
+            import os
+            logger = logging.getLogger(__name__)
+            rendered = False
+            if os.environ.get("REEL_ENGINE", "hyperframes") == "hyperframes":
+                # The HyperFrames engine renders the cinematic reel; Remotion stays as the fallback when it cannot run.
+                try:
+                    from engine.hyperframes import product_reel
+                    from engine.remotion_renderer import prepare_reel_config
+                    product_reel.render(prepare_reel_config(motion_config, job.dir), out_path, job_dir=job.dir, on_progress=report)
+                    rendered = True
+                except Exception as exc:
+                    logger.warning("HyperFrames reel failed (%s); falling back to Remotion", str(exc)[:300])
+            if not rendered:
+                render_motion(motion_config, out_path, job_dir=job.dir, on_progress=report)
         else:
             run_render(
                 mlt, out_path, preview=preview, style_name=plan.style,

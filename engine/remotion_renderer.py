@@ -125,6 +125,29 @@ def _enrich(config: dict, root: Path) -> None:
             scene["accent"] = product
 
 
+def prepare_reel_config(config: dict, job_dir: Path) -> dict:
+    """The scene config with everything the HyperFrames reel needs: a look per scene, caption text, absolute owned paths. Never trusts a path outside the job."""
+    root = job_dir.resolve()
+    config = json.loads(json.dumps(config))
+    _enrich(config, root)
+    for scene in config.get("scenes", []):
+        for field in ("asset", "narration"):
+            if not scene.get(field):
+                continue
+            path = Path(scene[field])
+            path = (path if path.is_absolute() else root / path).resolve()
+            if not path.is_relative_to(root) or not path.is_file():
+                raise ValueError(f"Invalid owned scene {field}")
+            scene[field] = str(path)
+    if config.get("music"):
+        music = Path(config["music"])
+        music = (music if music.is_absolute() else root / music).resolve()
+        if not (music.is_relative_to(root) or music.is_relative_to((ROOT / "assets/music").resolve())) or not music.is_file():
+            raise ValueError("Music must belong to the job or approved library")
+        config["music"] = str(music)
+    return config
+
+
 def scene_config(storyboard, media: list[dict], narration: list[dict], job_dir: Path, music: str | None) -> dict:
     from engine.persian_text import join_lam_alef
     from engine.remotion_prep import prepare
