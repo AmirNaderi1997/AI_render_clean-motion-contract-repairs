@@ -81,9 +81,6 @@ def plan_reel(transcript: dict, decisions: dict, faces: list, duration: float, p
         if ratio > 0 and k in by_sentence and shot.out_start >= plan.cold_open + 0.01:
             candidates.append(shot)
     chosen = candidates
-    if candidates and ratio < 1:
-        limit = max(1, round(ratio * len(plan.shots)))
-        chosen = candidates[:limit] if len(candidates) > limit else candidates
     split_ids = {id(s) for s in chosen}
     # a key-moment slam owns the whole frame: no panel under it
     windows = []
@@ -94,17 +91,26 @@ def plan_reel(transcript: dict, decisions: dict, faces: list, duration: float, p
         shot.split = id(shot) in split_ids and not any(shot.src_in < b and shot.src_out > a for a, b in windows)
         shot.close = (not shot.split) and (shot.out_start // 1 % 2 == 1)
 
-    # A panel scene lives at most MAX_PANEL seconds: after that the speaker has the frame again (the reference never holds one image for long).
-    held, last_slot = 0.0, None
+    # A panel scene lives at most MAX_PANEL seconds; a long beat comes back as several panels with the speaker between them
+    # (the reference never holds one image for long, and never leaves a long stretch without something new).
+    held, gap, in_gap, last_slot = 0.0, 0.0, False, None
+    min_gap = min(4.0, max(1.2, MAX_PANEL * (1 - ratio) / max(ratio, 0.1)))      # the less of the reel is panel, the longer the speaker between panels
     for shot in plan.shots:
-        if shot.split and shot.slot == last_slot:
-            held += shot.length
-            if held > MAX_PANEL:
-                shot.split = False
-        elif shot.split:
-            held, last_slot = shot.length, shot.slot
+        if not shot.split:
+            held, gap, in_gap, last_slot = 0.0, 0.0, False, None
+            continue
+        if shot.slot != last_slot:                         # a new beat is a new panel
+            held, gap, in_gap, last_slot = 0.0, 0.0, False, shot.slot
+        if in_gap and gap < min_gap:
+            shot.split = False
+            gap += shot.length
+            continue
+        in_gap = False
+        if held > 0 and held + shot.length > MAX_PANEL * 1.25:
+            shot.split = False
+            held, gap, in_gap = 0.0, shot.length, True
         else:
-            held, last_slot = 0.0, None
+            held += shot.length
     run: list = []
     for shot in plan.shots + [None]:
         if shot is not None and shot.split:
@@ -180,6 +186,9 @@ def _script(plan: ReelPlan, transcript: dict, decisions: dict, by_sentence: dict
             segments.append(cur)
     for s in segments:
         s.pop("key", None)
+        if s.get("beat"):                                 # what is said while THIS panel is up: a long beat gets a different scene per panel
+            said = " ".join(w["w"] for w in words if s["start"] - 0.05 <= w["start"] < s["end"])
+            s["beat"] = {**s["beat"], "spoken": said, "part": sum(1 for t in segments[:segments.index(s)] if t.get("beat") and t["beat"].get("sentence") == s["beat"].get("sentence"))}
     sentences = transcript["sentences"]
     slams = []
     for m in moments:
@@ -204,6 +213,7 @@ def _script(plan: ReelPlan, transcript: dict, decisions: dict, by_sentence: dict
 # ── rendering ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 MIN_TEASER_START = 5.0                # a teaser must come from at least this far into the talk
+MIN_GAP = 1.8                         # seconds of speaker between two panels of one long beat
 MAX_PANEL = 3.8                       # seconds one panel scene may stay up
 EXTRA = 170                           # how far above the card the speaker's head may rise (px)
 TALL_H = CARD_H + EXTRA
@@ -388,7 +398,7 @@ def author_panels(plan: ReelPlan, work_dir: Path) -> int:
         sentence = int(b.get("sentence") if b.get("sentence") is not None else 0)
         bid = f"beat-{sentence}-{n}"
         b["bid"] = bid
-        spoken = plan.sentences[sentence]["text"] if 0 <= sentence < len(plan.sentences) else ""
+        spoken = b.get("spoken") or (plan.sentences[sentence]["text"] if 0 <= sentence < len(plan.sentences) else "")
         beats.append(VisualBeat(id=bid, start=float(seg["start"]), end=float(seg["end"]), title=(str(b.get("title") or "") or "…")[:80],
                                 items=[str(i)[:35] for i in (b.get("items") or [])][:4], layout="top_panel",
                                 narrative_role=str(b.get("role") or "evidence"), why=str(b.get("visual") or ""), spoken=spoken))
