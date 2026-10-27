@@ -18,6 +18,11 @@ license approval, RTL certification, or a measured performance result.
   builder revalidates IDs and preserves semantic visual types instead of
   rotating repeated steps into unrelated charts. Other styles are unchanged.
   External catalog execution and product recipe ports remain separate gates.
+- Native HyperFrames QC separates style advisories from measured defects and
+  unavailable inspection. Real FFmpeg fixture tests confirm intentional static
+  black scenes pass, truncated output fails, and inspection timeouts do not
+  become fictional visual defects. Automatic semantic template rotation is
+  disabled. This is not full audio/visual certification or model QA replacement.
 
 ## Remaining acceptance gates (not completed)
 

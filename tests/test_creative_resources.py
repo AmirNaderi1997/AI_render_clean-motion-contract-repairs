@@ -10,6 +10,42 @@ from creative.resources import providers, registry
 from app.routers.creative_resources import router
 
 
+def test_real_native_qc_allows_intentional_static_black_and_detects_truncation(tmp_path):
+    import subprocess
+    import shutil
+    from engine.hyperframes.quality import review_render, improve_beats
+    from engine.hyperframes.schema import VisualBeat
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("Native media tools unavailable")
+    video = tmp_path / "intentional-black.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=c=black:s=64x96:r=30:d=4", "-c:v", "libx264", str(video)],
+                   check=True, capture_output=True, timeout=30)
+    beats = [VisualBeat(id="first", start=0, end=1.5, title="شروع", visual_type="steps"),
+             VisualBeat(id="last", start=1.5, end=3.5, title="پایان", visual_type="steps")]
+    report = review_render(video, beats, tmp_path)
+    assert report["passed"] and report["status"] == "passed"
+    assert report["samples"] == 2 and report["warnings"]
+    assert report["media"]["width"] == 64
+    before = [b.model_dump() for b in beats]
+    assert [b.model_dump() for b in improve_beats(beats)] == before
+    beats[-1].end = 5
+    report = review_render(video, beats, tmp_path)
+    assert report["status"] == "failed"
+    assert "output ends before an approved visual beat" in report["problems"]
+
+
+def test_qc_unavailable_is_not_reported_as_visual_defect(tmp_path, monkeypatch):
+    import subprocess
+    from engine.hyperframes import quality
+    def timed_out(*args, **kwargs):
+        raise subprocess.TimeoutExpired("inspection", 30)
+    monkeypatch.setattr(quality.subprocess, "run", timed_out)
+    report = quality.review_render(tmp_path / "video.mp4", [], tmp_path)
+    assert report["status"] == "unavailable" and not report["passed"]
+    assert not report["problems"] and report["unavailable"]
+
+
 def test_source_grounded_resource_planning_and_compiler_binding():
     from creative.resources.planning import plan_talking_resources, resolve_talking_recipe
     from creative.schemas import Beat, Concept, ContentBrief, Critique, CreativePlan

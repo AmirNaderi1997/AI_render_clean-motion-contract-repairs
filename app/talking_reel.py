@@ -1130,6 +1130,8 @@ def _run_split(job_dir: Path, video: Path, style: str, *, regenerate: bool) -> N
         review = review_render(out, beats, job_dir / "talking_reel_work")
         _stage(job_dir, "reviewing motion graphics", progress=99, visual_qc=review)
         if not review["passed"]:
+            if review.get('status') == 'unavailable':
+                raise ValueError('ویدیو رندر شده، اما بررسی فنی کامل نشد؛ این وضعیت به معنی ایراد تصویر نیست. خروجی را در پیش‌نمایش بررسی کنید.')
             # A hard-coded rotation of templates is not a creative repair.
             # Keep the candidate and request a targeted, approved correction.
             raise ValueError('بازبینی موشن نیازمند اصلاح است؛ رندر تکراری خودکار انجام نشد: '+
