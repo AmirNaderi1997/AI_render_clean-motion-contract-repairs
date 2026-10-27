@@ -169,6 +169,32 @@ class SetEffectRange(_Op):
         return plan
 
 
+class SetResourceEffect(_Op):
+    """Use the shared registry without changing the legacy renderer's plan shape."""
+    op: Literal["set_resource_effect"] = "set_resource_effect"
+    segment_id: str
+    resource_id: str = Field(max_length=160)
+
+    def apply(self, plan, ctx):
+        from creative.resources.registry import resolve_edit_plan_resource
+        try:
+            effect = resolve_edit_plan_resource(self.resource_id, "effect")
+        except ValueError as exc:
+            raise OperationError(str(exc)) from exc
+        return SetEffect(segment_id=self.segment_id, effect=effect).apply(plan, ctx)
+
+
+class RemoveEffect(_Op):
+    op: Literal["remove_effect"] = "remove_effect"
+    segment_id: str
+
+    def apply(self, plan, ctx):
+        _segment(plan, self.segment_id)
+        _guard(ctx, _effect_for(plan, self.segment_id), f"effect on segment {self.segment_id}")
+        plan["visual_effects"] = [e for e in plan.get("visual_effects", []) if e["segment_id"] != self.segment_id]
+        return plan
+
+
 class SetCaptionText(_Op):
     op: Literal["set_caption_text"] = "set_caption_text"
     index: int = Field(ge=0)
@@ -248,6 +274,34 @@ class SetTransition(_Op):
         if existing is None:
             transitions.append(item)
         return plan
+
+
+class ResourceTransitionSettings(BaseModel):
+    model_config = {"extra": "forbid"}
+    duration_frames: int = Field(default=6, ge=0, le=30, strict=True)
+    direction: Literal["left", "right", "up", "down"] = "left"
+    intensity: float = Field(default=1.0, ge=0.5, le=1.0, allow_inf_nan=False)
+    zoom_mode: Literal["zoom_in", "zoom_out"] = "zoom_in"
+    zoom_scale: float = Field(default=1.15, ge=1.02, le=1.5, allow_inf_nan=False)
+
+
+class SetResourceTransition(_Op):
+    op: Literal["set_resource_transition"] = "set_resource_transition"
+    resource_id: str = Field(max_length=160)
+    from_segment_id: str
+    to_segment_id: str
+    settings: ResourceTransitionSettings = Field(default_factory=ResourceTransitionSettings)
+
+    def apply(self, plan, ctx):
+        from creative.resources.registry import resolve_edit_plan_resource
+        try:
+            kind = resolve_edit_plan_resource(self.resource_id, "transition")
+        except ValueError as exc:
+            raise OperationError(str(exc)) from exc
+        if kind != "hard_cut" and self.settings.duration_frames < 2:
+            raise OperationError("Rendered transitions require at least two frames")
+        return SetTransition(from_segment_id=self.from_segment_id, to_segment_id=self.to_segment_id,
+                             type=kind, **self.settings.model_dump()).apply(plan, ctx)
 
 
 class SetMusicVolume(_Op):
@@ -432,7 +486,8 @@ class Unlock(_LockOp):
 
 
 EditOperation = Annotated[
-    Union[SetEffect, SetEffectRange, SetCaptionText, MoveCaptions, SetHighlight, SetTransition,
+    Union[SetEffect, SetEffectRange, SetResourceEffect, RemoveEffect, SetResourceTransition,
+          SetCaptionText, MoveCaptions, SetHighlight, SetTransition,
           SetMusicVolume, AddDuck, RemoveBroll, RemoveRange, TrimSegment, Lock, Unlock],
     Field(discriminator="op"),
 ]

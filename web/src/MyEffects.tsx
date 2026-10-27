@@ -1,5 +1,5 @@
 import React from "react";
-import { api, type EffectPreset, type LearnedStyleProfile, type PlanStyleSelection, type RafieiStyle, type StyleLibraryData } from "./api";
+import { api, type CreativeResourcePage, type EffectPreset, type LearnedStyleProfile, type PlanStyleSelection, type RafieiStyle, type StyleLibraryData } from "./api";
 import { LoadingState, friendlyError } from "./ui";
 
 const ENERGY_COLORS: Record<number, string> = {
@@ -29,6 +29,28 @@ export default function MyEffects() {
   const [newRule, setNewRule] = React.useState("");
   const [loading, setLoading] = React.useState(true);
   const [pendingActions, setPendingActions] = React.useState(0);
+  const [catalogOpen, setCatalogOpen] = React.useState(false);
+  const [resourceQuery, setResourceQuery] = React.useState("");
+  const [resourceFilter, setResourceFilter] = React.useState("");
+  const [resourceOffset, setResourceOffset] = React.useState(0);
+  const [resources, setResources] = React.useState<CreativeResourcePage | null>(null);
+  const [resourceLoading, setResourceLoading] = React.useState(false);
+  const [resourceError, setResourceError] = React.useState("");
+  const [resourceRetry, setResourceRetry] = React.useState(0);
+  const [previewResource, setPreviewResource] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!catalogOpen) { setPreviewResource(null); return; }
+    const controller = new AbortController();
+    setResourceLoading(true); setResourceError(""); setResources(null); setPreviewResource(null);
+    const timer = window.setTimeout(() => {
+      api.searchCreativeResources(resourceQuery, resourceFilter, resourceOffset, controller.signal)
+        .then(data => { if (!controller.signal.aborted) setResources(data); })
+        .catch(error => { if (!controller.signal.aborted) setResourceError(friendlyError(error, "load creative resources")); })
+        .finally(() => { if (!controller.signal.aborted) setResourceLoading(false); });
+    }, 250);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [catalogOpen, resourceQuery, resourceFilter, resourceOffset, resourceRetry]);
   async function track<T>(action: () => Promise<T>): Promise<T> {
     setPendingActions(count => count + 1);
     try { return await action(); }
@@ -232,6 +254,57 @@ export default function MyEffects() {
   return (
     <div>
       <h1>My Effects</h1>
+      <details open={catalogOpen} onToggle={event => setCatalogOpen(event.currentTarget.open)} style={{ marginBottom: 24 }}>
+        <summary>کتابخانهٔ منابع خلاقیت</summary>
+        {catalogOpen && <section dir="rtl" aria-label="کتابخانهٔ منابع خلاقیت">
+          <p className="muted">کاتالوگ مشترک موشن و افکت. «صرفاً کاتالوگ» هنوز به رندر متصل نیست؛ این بخش پروژه یا تنظیمات شما را تغییر نمی‌دهد.</p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            <label style={{ flex: "1 1 200px" }}>جست‌وجو
+              <input type="search" maxLength={300} value={resourceQuery}
+                placeholder="مثلاً kinetic typography یا zoom"
+                onChange={event => { setResourceQuery(event.target.value); setResourceOffset(0); }} />
+            </label>
+            <label>وضعیت اتصال
+              <select value={resourceFilter} onChange={event => { setResourceFilter(event.target.value); setResourceOffset(0); }}>
+                <option value="">همه</option><option value="existing-pipeline">متصل به مسیر موجود</option>
+                <option value="catalog-only">صرفاً کاتالوگ</option><option value="unsupported">پشتیبانی‌نشده</option>
+              </select>
+            </label>
+          </div>
+          {resourceLoading && <p role="status">در حال خواندن کاتالوگ…</p>}
+          {resourceError && <p role="alert">{resourceError} <button type="button" onClick={() => setResourceRetry(n => n + 1)}>تلاش مجدد</button></p>}
+          {resources && <>
+            <p className="muted">{resources.total} منبع · پیش‌نمایش‌ها متعلق به منبع اصلی‌اند و تأیید خروجی فارسی نیستند.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))", gap: 12 }}>
+              {resources.items.map(resource => <article key={resource.id} className="card" style={{ padding: 12, minWidth: 0 }}>
+                <h3>{resource.name}</h3>
+                <p className="muted">{resource.engine} · {resource.availability === "existing-pipeline" ? "متصل به مسیر موجود" : resource.availability === "unsupported" ? "پشتیبانی‌نشده" : "صرفاً کاتالوگ"}</p>
+                <p>{resource.description}</p>
+                {resource.contexts.length > 0 && <p>مسیر استفاده: {resource.contexts.join(" · ")}</p>}
+                {resource.preview_video && <>
+                  <button type="button" className="secondary" onClick={() => setPreviewResource(current => current === resource.id ? null : resource.id)}>
+                    {previewResource === resource.id ? "بستن پیش‌نمایش" : "نمایش نمونهٔ منبع (دریافت از CDN)"}
+                  </button>
+                  {previewResource === resource.id && <video controls playsInline preload="none" src={resource.preview_video}
+                    aria-label={`پیش‌نمایش ${resource.name}`} style={{ width: "100%", maxHeight: 280 }} />}
+                </>}
+                <details><summary>مشخصات و محدودیت‌ها</summary>
+                  <p dir="ltr" style={{ overflowWrap: "anywhere" }}>{resource.id}</p>
+                  <p>مجوز تجاری: {resource.license.commercial_use_approved ? "تأییدشده" : "نیازمند بررسی"}</p>
+                  <p>فارسی: {resource.capabilities.supports_rtl === null ? "هنوز آزموده نشده" : resource.capabilities.supports_rtl ? "پشتیبانی‌شده" : "پشتیبانی‌نشده"}</p>
+                  {resource.parameters.length > 0 && <p>پارامترهای شناسایی‌شده (فعلاً فقط خواندنی): {resource.parameters.map(p => p.name).join("، ")}</p>}
+                  {resource.limitations.map(line => <p key={line}>{line}</p>)}
+                </details>
+              </article>)}
+            </div>
+            {resources.total === 0 && <p>منبعی پیدا نشد. نام‌های کاتالوگ HyperFrames عمدتاً انگلیسی‌اند.</p>}
+            <nav aria-label="صفحه‌بندی منابع" style={{ display: "flex", gap: 12, marginTop: 12 }}>
+              <button type="button" className="secondary" disabled={resourceLoading || resourceOffset === 0} onClick={() => setResourceOffset(n => Math.max(0, n - 12))}>قبلی</button>
+              <button type="button" className="secondary" disabled={resourceLoading || resourceOffset + 12 >= resources.total} onClick={() => setResourceOffset(n => n + 12)}>بعدی</button>
+            </nav>
+          </>}
+        </section>}
+      </details>
       {pendingActions > 0 && <p className="muted" role="status">Saving your effects…</p>}
       {error && <div className="errors" role="alert" style={{ marginBottom: 16 }}>{error}</div>}
 

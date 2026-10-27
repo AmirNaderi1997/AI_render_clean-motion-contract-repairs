@@ -54,7 +54,8 @@ SCHEMAS = {"inspect_media": Asset, "inspect_url": URL, "analyze_talking_reel": T
            "localize_video": Localize, "create_storyboard": Storyboard, "modify_project": Modify,
            "render_approved_plan": Render, "check_render_status": Project}
 SCHEMAS["inspect_project"] = Project
-READ_ONLY = {"inspect_media", "inspect_url", "check_render_status", "inspect_project"}
+SCHEMAS["search_creative_resources"] = studio_tools.ResourceSearchInput
+READ_ONLY = {"inspect_media", "inspect_url", "check_render_status", "inspect_project", "search_creative_resources"}
 
 
 def catalog():
@@ -97,6 +98,8 @@ def validate(record, step):
 def execute(record, step):
     from app import studio_orchestrator as shared
     name = step["tool"]; args = validate(record, step)
+    if name == "search_creative_resources":
+        return studio_tools.execute(name, args.model_dump())
     cid, user = record["conversation_id"], record["user_key"]
     if isinstance(args, Asset):
         asset = run(repo.get_attachments([args.attachment_id], cid, user))[0]

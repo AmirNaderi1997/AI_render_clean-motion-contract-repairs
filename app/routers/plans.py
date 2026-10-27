@@ -33,6 +33,8 @@ class OperationsBody(BaseModel):
     dry_run: bool = False
     # Reject the batch if the plan moved past this version (optimistic locking).
     base_version: Optional[int] = None
+    # Optional exact baseline for registry clients, including unversioned plans.
+    base_plan: Optional[dict] = None
     # Who is editing: user edits may change locked items, chat edits may not.
     source: Literal["user_ui", "chat"] = "user_ui"
 
@@ -44,7 +46,8 @@ def post_operations(job_id: str, body: OperationsBody, request: Request):
     job = get_job_for_request(request, job_id)
     try:
         return jobstore.apply_plan_operations(job, body.operations, source=body.source,
-                                              dry_run=body.dry_run, base_version=body.base_version)
+                                              dry_run=body.dry_run, base_version=body.base_version,
+                                              base_plan=body.base_plan)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValidationError as exc:
@@ -63,6 +66,36 @@ def get_plan_versions(job_id: str, request: Request):
     job = get_job_for_request(request, job_id)
     versions = plan_versions.list_versions(job)
     return {"current": versions[-1]["version"] if versions else None, "versions": versions}
+
+
+@router.get("/{job_id}/creative-resources", dependencies=[Depends(require_job_access)])
+def get_resource_context(job_id: str, request: Request):
+    """Owned saved-plan context. Never mutate/normalize plans just to list instances."""
+    from app import plan_versions
+    from creative.resources.registry import search_resources
+    from creative.resources.instances import edit_plan_instances
+    job = get_job_for_request(request, job_id)
+    try:
+        plan = jobstore.load_plan(job)
+    except FileNotFoundError:
+        raise HTTPException(404, "Save an EditPlan first") from None
+    latest = plan_versions.latest_version(job)
+    # Bounded local source index; names only, no imported executable code.
+    effects = []
+    offset = 0
+    while True:
+        page = search_resources(provider="editorgpt-existing", kind="effect",
+                                availability="existing-pipeline", limit=100, offset=offset)
+        effects.extend({"id": r["id"], "name": r["name"]} for r in page["items"])
+        offset += len(page["items"])
+        if offset >= page["total"] or not page["items"]:
+            break
+    transitions = search_resources(provider="editorgpt-existing", kind="transition",
+                                   availability="existing-pipeline", limit=100)["items"]
+    return JSONResponse({"version": latest["version"] if latest else None, "plan": plan, "effects": effects,
+                         "transitions": [{"id": r["id"], "name": r["name"]} for r in transitions],
+                         "instances": edit_plan_instances(plan)},
+                        headers={"Cache-Control": "no-store"})
 
 
 @router.post("/{job_id}/plan/undo", dependencies=[Depends(require_job_access)])

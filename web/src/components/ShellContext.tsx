@@ -1,6 +1,7 @@
 import React from "react";
+import type { ProjectStatus } from "./ProjectStatusDot";
 
-export type TopbarAction = { active: boolean; onClick: () => void };
+export type TopbarAction = { active: boolean; onClick: () => void; status?: ProjectStatus };
 type ShellValue = { openNav: () => void; setTitle: (title: string) => void; setAction: (action: TopbarAction | null) => void };
 export const ShellContext = React.createContext<ShellValue>({ openNav: () => undefined, setTitle: () => undefined, setAction: () => undefined });
 

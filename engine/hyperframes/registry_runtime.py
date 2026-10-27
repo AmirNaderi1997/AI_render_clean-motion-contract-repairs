@@ -10,6 +10,10 @@ from .cli import cli_command
 
 VERSION = "0.8.161"
 
+# Discovery may advertise only these context-specific registry adapters as
+# connected. Keep this shared with the registry; catalog membership is not execution.
+SUPPORTED_REGISTRY_ADAPTERS = frozenset({"caption-kinetic-slam", "paper-collage-reveal"})
+
 
 def _install(project_dir: Path, name: str) -> bool:
     result = subprocess.run(

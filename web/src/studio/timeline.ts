@@ -3,7 +3,7 @@ import type { DocElement, MusicMix, PictureOp, PictureSource, ProjectDocument, T
 
 export const TYPE_LABEL: Record<string, string> = {
   clip: "برش تصویر", picture: "تصویر بالا", title: "عنوان", caption: "زیرنویس", card: "کارت متنی", chips: "فهرست",
-  moment: "لحظهٔ کلیدی", flash: "فلش نور", motion: "صحنهٔ موشن", audio: "صدا", music: "موسیقی", cta: "دعوت به اقدام", logo: "لوگو",
+  moment: "لحظهٔ کلیدی", flash: "فلش نور", motion: "صحنهٔ موشن", audio: "صدا", music: "موسیقی", cta: "دعوت به اقدام", logo: "لوگو", effect: "افکت تصویر", transition: "ترنزیشن",
 };
 export const VIA_LABEL: Record<string, string> = { plan: "برنامه (تب Edit)", chat: "چت", timeline: "همین‌جا روی تایم‌لاین", advanced: "ویرایشگر پیشرفته" };
 

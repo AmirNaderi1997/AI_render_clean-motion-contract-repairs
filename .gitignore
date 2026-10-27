@@ -36,6 +36,8 @@ assets/effect_previews/
 /.cursor/
 /tests/*
 !/tests/test_studio_agents.py
+!/tests/test_creative_resources.py
+!/tests/test_resource_operations.py
 /hermes/tests/
 *.test.ts
 *.test.tsx

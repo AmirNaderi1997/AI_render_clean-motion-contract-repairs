@@ -185,6 +185,8 @@ app.include_router(render.router)
 app.include_router(music.router)
 app.include_router(music.legacy_router)
 app.include_router(effects.router)
+from app.routers.creative_resources import router as creative_resources_router
+app.include_router(creative_resources_router)
 app.include_router(style.router)
 app.include_router(style.legacy_router)
 app.include_router(content.router)

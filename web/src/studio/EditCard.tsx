@@ -1,16 +1,28 @@
 import React from "react";
-import { Icon } from "../components/Icon";
+import { Icon, type IconName } from "../components/Icon";
+
+function sectionIcon(title: string): IconName {
+  if (/افکت|ترنزیشن/.test(title)) return "wand";
+  if (/صدا|موسیقی/.test(title)) return "music";
+  if (/متن|زیرنویس|فونت/.test(title)) return "captions";
+  if (/برند|هویت|لوگو/.test(title)) return "user";
+  if (/موشن/.test(title)) return "motion";
+  if (/صحنه|لحظه/.test(title)) return "film";
+  if (/تصویر|ظاهر|رنگ|کادر/.test(title)) return "image";
+  return "advanced";
+}
 
 /**
  * One group of settings in the Edit tab: a card with a title, a one-line summary of what is set now, and the controls
  * behind it. Every engine's settings (talking plan, Localize, explainer scenes, Motion clips) use this, so the tab looks
  * and behaves the same whatever the video is.
  */
-export function EditCard({ title, summary, hint, children, tone }: {
-  title: string; summary?: React.ReactNode; hint?: React.ReactNode; /** kept for callers; every card starts closed */ open?: boolean; children: React.ReactNode; tone?: "warning";
+export function EditCard({ title, summary, hint, children, tone, icon, onToggle }: {
+  title: string; summary?: React.ReactNode; hint?: React.ReactNode; /** kept for callers; every card starts closed */ open?: boolean; children: React.ReactNode; tone?: "warning"; icon?: IconName; onToggle?: (open: boolean) => void;
 }) {
-  return <details className="ec" dir="rtl" data-tone={tone}>
+  return <details className="ec" dir="rtl" data-tone={tone} onToggle={event => onToggle?.(event.currentTarget.open)}>
     <summary>
+      <Icon name={icon || sectionIcon(title)} size={20} className="ec-icon"/>
       <span className="ec-text"><b>{title}</b>{summary ? <small className="bidi" dir="auto">{summary}</small> : null}</span>
       <Icon name="chevronDown" size={16} className="ec-chev"/>
     </summary>
