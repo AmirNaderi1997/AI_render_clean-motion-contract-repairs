@@ -145,13 +145,16 @@ def _pages(words: list[dict], per_page: int) -> list[list[dict]]:
     return pages
 
 
-def _captions(words: list[dict], pack: StylePack, layout_at, blocked: list[tuple[float, float]] | None = None) -> tuple[str, list[str]]:
+def _captions(words: list[dict], pack: StylePack, layout_at, blocked: list[tuple[float, float]] | None = None,
+              teaser: list[float] | None = None) -> tuple[str, list[str]]:
     html, js = [], []
     cap = pack.caption
     blocked = blocked or []
     words = [w for w in words if not any(a <= float(w["start"]) < b for a, b in blocked)]
-    pages = _pages(words, cap.per_page)
+    lead = [w for w in words if teaser and float(w["start"]) < teaser[1]]            # the teaser is the hook: one big word at a time
+    pages = _pages(lead, 1) + _pages(words[len(lead):], cap.per_page)
     for p, page in enumerate(pages):
+        big = p < len(_pages(lead, 1))
         t0 = float(page[0]["start"])
         t1 = float(page[-1]["end"]) + 0.12
         if p + 1 < len(pages):
@@ -160,18 +163,22 @@ def _captions(words: list[dict], pack: StylePack, layout_at, blocked: list[tuple
         split = layout == "split"
         size = cap.size_split if split else cap.size_full
         y = int(H * cap.y_full)
+        if big:
+            size, y = int(cap.size_full * 1.55), int(H * 0.44)
         base_c = "#ffffff"
         hl_c = pack.palette.highlight
         split = False
         spans = "".join(f'<span class="cw" id="c{p}w{q}">{escape(str(w["w"]))}</span>' for q, w in enumerate(page))
-        cls = "cpage" + (" boxed" if cap.box and not split else "") + (" onpanel" if split else "")
+        cls = "cpage" + (" boxed" if cap.box and not split and not big else "") + (" onpanel" if split else "") + (" teaser" if big else "")
         html.append(f'<div id="c{p}" class="{cls}" style="top:{y}px;font-size:{size}px;color:{base_c}">{spans}</div>')
         js.append(f'tl.set("#c{p}",{{opacity:1}},{_f(t0)});')
         js.append(f'tl.set("#c{p}",{{opacity:0}},{_f(t1)});')
         for q, w in enumerate(page):
             at = float(w["start"])
             nxt = float(page[q + 1]["start"]) if q + 1 < len(page) else t1
-            if cap.mode == "slam":
+            if big:
+                js.append(f'tl.fromTo("#c{p}w{q}",{{opacity:0,scale:1.45}},{{opacity:1,scale:1.0,duration:.18,ease:"power4.out"}},{_f(at)});')
+            elif cap.mode == "slam":
                 js.append(f'tl.fromTo("#c{p}w{q}",{{opacity:0,scale:1.5,color:"{base_c}"}},{{opacity:1,scale:1.0,color:"{hl_c}",duration:.16,ease:"power4.out"}},{_f(at)});')
             else:
                 js.append(f'tl.fromTo("#c{p}w{q}",{{opacity:0.3,scale:{.82 if cap.pop else 1},color:"{base_c}"}},{{opacity:1,scale:1,color:"{hl_c}",duration:.14,ease:"back.out(2)"}},{_f(at)});')
@@ -304,7 +311,7 @@ def build_project(directory: Path, pack: StylePack, script: dict, part: str = "a
             n += 1
     if part in ("all", "text"):
         blocked = [(float(m["start"]), float(m["end"])) for m in (script.get("moments") or []) if float(m["end"]) - float(m["start"]) >= 0.5]
-        h, j = _captions(script.get("words") or [], pack, layout_at, blocked)
+        h, j = _captions(script.get("words") or [], pack, layout_at, blocked, script.get("teaser"))
         html.append(h)
         js.extend(j)
         h, j = _hook(script.get("hook"), pack)

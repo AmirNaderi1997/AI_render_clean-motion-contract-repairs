@@ -111,7 +111,18 @@ def plan_reel(transcript: dict, decisions: dict, faces: list, duration: float, p
             held, gap, in_gap = 0.0, shot.length, True
         else:
             held += shot.length
+    # a panel shorter than MIN_PANEL has no time to play its motion: the speaker keeps those shots
     run: list = []
+    for shot in plan.shots + [None]:
+        if shot is not None and shot.split:
+            run.append(shot)
+            continue
+        if run and sum(r.length for r in run) < MIN_PANEL:
+            for r in run:
+                r.split = False
+                r.close = r.out_start // 1 % 2 == 1
+        run = []
+    run = []
     for shot in plan.shots + [None]:
         if shot is not None and shot.split:
             run.append(shot)
@@ -198,56 +209,90 @@ def _script(plan: ReelPlan, transcript: dict, decisions: dict, by_sentence: dict
         a = out_time(float(sentences[int(i)]["start"]))
         if a is None:
             continue
-        if decisions.get("hook") and pack.hook.mode != "none":      # the hook owns the opening seconds: a slam waits for it
-            a = max(a, min(pack.hook.seconds, plan.duration) + 0.25)
+        if plan.cold_open > 0:                                         # the teaser owns the opening seconds: a slam waits for it
+            a = max(a, plan.cold_open + 0.25)
         if a + 1.0 > plan.duration:
             continue
         slams.append({"text": base.persian_digits(str(m.get("text") or "")), "start": round(a, 3), "end": round(min(a + 2.0, plan.duration), 3)})
-    hook = None
-    if decisions.get("hook") and pack.hook.mode != "none":
-        hook = {"text": base.persian_digits(str(decisions["hook"])), "highlight": " ".join(decisions.get("hook_highlight") or []),
-                "start": 0.0, "end": min(pack.hook.seconds, plan.duration)}
-    return {"duration": round(plan.duration, 3), "segments": segments, "words": words, "hook": hook, "moments": slams}
+    hook = None                                           # captions run from the first word, so there is no static title on top of them
+    teaser = [0.0, round(plan.cold_open, 3)] if plan.cold_open > 0 else None
+    return {"duration": round(plan.duration, 3), "segments": segments, "words": words, "hook": hook, "teaser": teaser, "moments": slams}
 
 
 # ── rendering ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 MIN_TEASER_START = 5.0                # a teaser must come from at least this far into the talk
 MIN_GAP = 1.8                         # seconds of speaker between two panels of one long beat
+MIN_PANEL = 2.2                       # a panel stays up at least this long
 MAX_PANEL = 3.8                       # seconds one panel scene may stay up
 EXTRA = 170                           # how far above the card the speaker's head may rise (px)
 TALL_H = CARD_H + EXTRA
 FACE_FRAC = (EXTRA + 40) / TALL_H     # where the face centre sits in the tall window: just under the card's top edge
 
 
-def _crop(shot: Shot, src_w: int, src_h: int, pack: StylePack, split: bool) -> tuple[int, int, int, int]:
-    """(x, y, w, h) of the source window for this shot: the face stays inside, close shots punch in. Split shots use the tall window
-    (card + the head room above it) so the head can rise over the panel."""
-    zoom = pack.rhythm.close_zoom if shot.close else 1.0
+TRANSITION = 0.3                      # seconds the card takes to open to full frame (or close to a card)
+FACE_SCREEN = CARD_Y + 40             # where the face centre sits on screen, in BOTH layouts: the card is only a mask over the same picture
+
+
+def _placement(plan: ReelPlan, src_w: int, src_h: int) -> tuple[float, float, float, float]:
+    """(scale, x0, y0, window height) of the one picture every shot uses: a single scale and face position for the whole reel, so
+    switching between full frame and card never moves or rescales the speaker (only a mask opens or closes)."""
+    faces = sorted(s.face[0] for s in plan.shots), sorted(s.face[1] for s in plan.shots)
+    cx, cy = faces[0][len(faces[0]) // 2], faces[1][len(faces[1]) // 2]
+    s_min = H / src_h
+    scale = min(max(FACE_SCREEN / max(cy * src_h, 1.0), s_min), s_min * 1.5)
+    h = H / scale
+    w = min(float(src_w), h * (W / H))
+    h = w * (H / W)
+    scale = W / w
+    x0 = min(max(0.0, cx * src_w - w / 2), src_w - w)
+    y0 = min(max(0.0, cy * src_h - FACE_SCREEN / scale), src_h - h)
+    return scale, x0, y0, h
+
+
+def _crop(plan: ReelPlan, shot: Shot, src_w: int, src_h: int, pack: StylePack, split: bool) -> tuple[int, int, int, int]:
+    """(x, y, w, h) of the source window. Full: the shared picture (a close shot punches in on the face, keeping it where it was).
+    Split: the lower part of the same picture, from the head room above the card to the bottom (the head may rise over the panel)."""
+    scale, x0, y0, h = _placement(plan, src_w, src_h)
+    w = W / scale
     if split:
-        zoom *= 1.12
-        h = min(src_h, src_h / zoom)
-        w = min(src_w, h * (W / TALL_H))
-        h = w * (TALL_H / W)
+        top = (CARD_Y - EXTRA) / scale
+        x, y, w2, h2 = x0, y0 + top, w, h - top
+    elif shot.close:
+        z = pack.rhythm.close_zoom
+        w2, h2 = w / z, h / z
+        fx, fy = (shot.face[0] * src_w - x0) / w, (shot.face[1] * src_h - y0) / h
+        x = min(max(0.0, shot.face[0] * src_w - fx * w2), src_w - w2)
+        y = min(max(0.0, shot.face[1] * src_h - fy * h2), src_h - h2)
     else:
-        h = src_h / zoom
-        w = h * (9 / 16)
-    cx, cy = shot.face
-    x = min(max(0.0, cx * src_w - w / 2), src_w - w)
-    y = min(max(0.0, cy * src_h - h * (FACE_FRAC if split else 0.38)), src_h - h)
-    return int(x) // 2 * 2, int(y) // 2 * 2, int(w) // 2 * 2, int(h) // 2 * 2
+        x, y, w2, h2 = x0, y0, w, h
+    return int(x) // 2 * 2, int(y) // 2 * 2, int(w2) // 2 * 2, int(h2) // 2 * 2
 
 
 def _round_mask(path: Path) -> Path:
+    """The open card as a full-frame mask: white from CARD_Y down, rounded at the top corners."""
     import cv2
     import numpy as np
-    mask = np.zeros((CARD_H, W), np.uint8)
-    cv2.rectangle(mask, (0, CARD_RADIUS), (W, CARD_H), 255, -1)
-    cv2.rectangle(mask, (CARD_RADIUS, 0), (W - CARD_RADIUS, CARD_RADIUS), 255, -1)
-    cv2.circle(mask, (CARD_RADIUS, CARD_RADIUS), CARD_RADIUS, 255, -1)
-    cv2.circle(mask, (W - CARD_RADIUS, CARD_RADIUS), CARD_RADIUS, 255, -1)
+    mask = np.zeros((H, W), np.uint8)
+    cv2.rectangle(mask, (0, CARD_Y + CARD_RADIUS), (W, H), 255, -1)
+    cv2.rectangle(mask, (CARD_RADIUS, CARD_Y), (W - CARD_RADIUS, CARD_Y + CARD_RADIUS), 255, -1)
+    cv2.circle(mask, (CARD_RADIUS, CARD_Y + CARD_RADIUS), CARD_RADIUS, 255, -1)
+    cv2.circle(mask, (W - CARD_RADIUS, CARD_Y + CARD_RADIUS), CARD_RADIUS, 255, -1)
     cv2.imwrite(str(path), mask)
     return path
+
+
+def _ramp(opening: bool, fps: int) -> str:
+    """Filter source for the card's mask while it opens to full frame (opening) or closes back to a card: eased top edge and corner radius.
+    Drawn at a quarter of the size (cheap) and scaled up."""
+    q = 4
+    span = TRANSITION - 1.0 / fps
+    k = "ld(0)" if not opening else "(1-ld(0))"                    # opening: the top edge rises (fraction of the card still covered shrinks)
+    expr = (f"st(0,clip(T/{span:.4f},0,1));st(0,ld(0)*ld(0)*(3-2*ld(0)));st(1,{k}*{CARD_Y / q});st(2,{k}*{CARD_RADIUS / q});"
+            f"if(gte(Y,ld(1)),if(lt(Y,ld(1)+ld(2)),if(lt(X,ld(2)),lte(hypot(X-ld(2),Y-ld(1)-ld(2)),ld(2)),"
+            f"if(gt(X,{W // q}-ld(2)),lte(hypot(X-{W // q}+ld(2),Y-ld(1)-ld(2)),ld(2)),1)),1),0)*255")
+    return (f"color=c=white:s={W // q}x{H // q}:r={fps}:d={TRANSITION:.3f},format=gray,geq=lum='{expr}',"
+            f"scale={W}:{H}:flags=bilinear,format=gray,setsar=1")
 
 
 def _hex(color: str) -> str:
@@ -263,7 +308,7 @@ def _mattes(video: Path, plan: ReelPlan, pack: StylePack, work_dir: Path, src_w:
     for i, shot in enumerate(plan.shots):
         if not shot.split:
             continue
-        x, y, w, h = _crop(shot, src_w, src_h, pack, True)
+        x, y, w, h = _crop(plan, shot, src_w, src_h, pack, True)
         jobs.append({"src": str(video), "start": shot.src_in, "end": shot.src_out, "crop": [x, y, w, h], "size": [W // 2, (TALL_H // 4) * 2],              # even sizes: the matte is an H.264 video
                      
                      "fps": fps, "out": str(work_dir / "mattes" / f"m{i}.mp4")})
@@ -290,14 +335,25 @@ def _graph(plan: ReelPlan, pack: StylePack, src_w: int, src_h: int, fps: int, ma
     for i, shot in enumerate(plan.shots):
         a, b = shot.src_in, shot.src_out
         d = b - a
-        x, y, w, h = _crop(shot, src_w, src_h, pack, shot.split)
+        x, y, w, h = _crop(plan, shot, src_w, src_h, pack, shot.split)
         if shot.split:
-            parts.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS,crop={w}:{h}:{x}:{y},scale={W}:{TALL_H}:flags=lanczos,{grade},format=yuva420p,split[ta{i}][tb{i}]")
-            parts.append(f"[ta{i}]crop={W}:{CARD_H}:0:{EXTRA}[cc{i}]")
-            parts.append(f"[1:v]trim=duration={d:.3f},setpts=PTS-STARTPTS,format=gray[mk{i}]")
-            parts.append(f"[cc{i}][mk{i}]alphamerge[card{i}]")
-            parts.append(f"color=c=black@0.0:s={W}x{H}:r={fps}:d={d:.3f},format=yuva420p[e{i}]")
-            parts.append(f"[e{i}][card{i}]overlay=0:{CARD_Y}:format=auto,format=yuva420p[s{i}]")
+            sx, sy, sw, sh = _crop(plan, shot, src_w, src_h, pack, False)
+            enter = i > 0 and not plan.shots[i - 1].split and d > 3 * TRANSITION
+            leave = i + 1 < len(plan.shots) and not plan.shots[i + 1].split and d > 3 * TRANSITION
+            steady = d - TRANSITION * (int(enter) + int(leave))
+            pieces = []
+            if enter:
+                parts.append(f"{_ramp(False, fps)}[ri{i}]")
+                pieces.append(f"[ri{i}]")
+            parts.append(f"[1:v]trim=duration={steady:.3f},setpts=PTS-STARTPTS,format=gray,fps={fps},setsar=1[rs{i}]")
+            pieces.append(f"[rs{i}]")
+            if leave:
+                parts.append(f"{_ramp(True, fps)}[ro{i}]")
+                pieces.append(f"[ro{i}]")
+            parts.append(f"{''.join(pieces)}concat=n={len(pieces)}:v=1:a=0,format=gray[mk{i}]")
+            parts.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS,crop={sw}:{sh}:{sx}:{sy},scale={W}:{H}:flags=lanczos,{grade},format=yuv420p,split[pic{i}][tb0{i}]")
+            parts.append(f"[pic{i}][mk{i}]alphamerge,format=yuva420p[s{i}]")
+            parts.append(f"[tb0{i}]crop={W}:{TALL_H}:0:{CARD_Y - EXTRA},format=yuv420p[tb{i}]")
             if i in matte_input:
                 parts.append(f"[{matte_input[i]}:v]format=gray,scale={W}:{TALL_H}:flags=bilinear,eq=contrast=1.35:brightness=-0.12,erosion,gblur=sigma=0.9,format=gray[mm{i}]")
                 parts.append(f"[tb{i}][mm{i}]alphamerge[person{i}]")
@@ -309,6 +365,10 @@ def _graph(plan: ReelPlan, pack: StylePack, src_w: int, src_h: int, fps: int, ma
         else:
             parts.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS,crop={w}:{h}:{x}:{y},scale={W}:{H}:flags=lanczos,{grade},format=yuva420p[s{i}]")
             parts.append(f"color=c=black@0.0:s={W}x{H}:r={fps}:d={d:.3f},format=yuva420p[p{i}]")
+        n_frames = max(1, int(round(d * fps)))
+        for lab in ("s", "p"):                              # every piece of both layers has exactly the same number of frames: no drift between them
+            parts[:] = [(part[:part.rindex("[")] + f"[{lab}r{i}]") if part.endswith(f"[{lab}{i}]") and "color=c=black@0.0" not in part[:0] and part.rindex("[") > 0 and f"[{lab}{i}]" == part[part.rindex("["):] else part for part in parts]
+            parts.append(f"[{lab}r{i}]tpad=stop_mode=clone:stop_duration=1,trim=end_frame={n_frames},setpts=N/{fps}/TB[{lab}{i}]")
         parts.append(f"[0:a]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[a{i}]")
         slayer.append(f"[s{i}]")
         player.append(f"[p{i}]")

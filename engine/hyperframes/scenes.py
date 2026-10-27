@@ -32,7 +32,7 @@ SPEAKER_TWEENS = {
 _FORBIDDEN_TAGS = {"script", "style", "link", "iframe", "object", "embed", "form", "input", "button", "video", "audio", "canvas", "base", "meta", "br", "img"}
 _FORBIDDEN_JS = (r"\bMath\.random\b", r"\bDate\b", r"\bsetTimeout\b", r"\bsetInterval\b", r"\brequestAnimationFrame\b", r"\bfetch\b",
                  r"\bXMLHttpRequest\b", r"\bimport\b", r"\beval\b", r"\bFunction\s*\(", r"\bdocument\.write\b", r"\bwindow\b", r"\blocalStorage\b",
-                 r"\brepeat\s*:\s*-1\b", r"\bgsap\.(to|from|fromTo|set|timeline)\b", r"\bperformance\b", r"\bnew\s+Worker\b")
+                 r"\brepeat\s*:\s*-?[1-9]",r"\byoyo\b", r"\bgsap\.(to|from|fromTo|set|timeline)\b", r"\bperformance\b", r"\bnew\s+Worker\b")
 _FORBIDDEN_CSS = (r"@import", r"@keyframes", r"\banimation\s*:", r"\banimation-", r"\btransition\s*:", r"\btransition-", r"position\s*:\s*fixed",
                   r"url\(\s*['\"]?(?!#)", r"expression\(", r"behavior\s*:")
 

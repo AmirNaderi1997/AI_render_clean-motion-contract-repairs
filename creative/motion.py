@@ -191,7 +191,17 @@ def build_prompt(spec: SceneSpec, design: DesignSystem) -> str:
                    'design-system background. Explain ALL supplied sentences as a coherent evolving visual, '
                    'with meaningful intermediate states throughout D, not a 2-second entrance then empty space. '
                    f'Keep every label within x=32..1048, y=24..{PANEL_MAX_Y}. Headlines 64–100px; body 38px+. '
-                   'Do not use emoji or unsupported symbol glyphs; draw icons with inline SVG.')
+                   'Do not use emoji or unsupported symbol glyphs; draw icons with inline SVG.\n'
+                   'PANEL QUALITY RULES (the viewer judged earlier panels harshly):\n'
+                   '- Show what the speaker MEANS, not the nouns they happen to say: read the whole spoken text, decide the idea (a contrast, a list of '
+                   'options, a number, a process, a warning) and draw THAT. If the speaker contrasts two things, the panel is a clear two-sided contrast '
+                   'with the same two things named; never fill the panel with loosely related objects.\n'
+                   '- Calm motion. Every element enters ONCE and then stays still, except at most one slow ambient move. No blinking, flashing, pulsing, '
+                   'shaking, looping or yoyo tweens, no repeat; never more than two things moving at the same moment.\n'
+                   '- The first element must be on screen within 0.15s and the whole idea readable by 1.2s; hold the finished frame to the end.\n'
+                   '- Several cards: one shared grid. Equal margins inside x=32..1048, equal gaps (24-32px), equal widths per row, aligned edges and '
+                   'baselines, rows sized to fill the panel height; nothing overlaps or sits half-outside; a lone card is centred or spans the row.\n'
+                   '- No decorative giant letters, ghost words, stray glyphs, bullets or emoji; every shape on screen carries meaning or text from SPOKEN.')
     return prompt
 
 
