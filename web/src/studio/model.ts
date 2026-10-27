@@ -202,6 +202,9 @@ export function buildTimeline({ messages, events, projects, pending, processing,
   const placedRender = new Set<string>();
   let block: { id: string; steps: Map<string, ActivityStep> } | null = null;
   const projectIds = new Set(projects.map(project => project.id));
+  const lastFailure = new Map<string, number>();
+  for (const event of events) if (event.type === "tool.failed" && event.data.project_id) lastFailure.set(String(event.data.project_id), event.seq);
+  const lastRenderDone = Math.max(0, ...events.filter(event => event.type === "render.completed").map(event => event.seq));
   let lastUserIndex = -1;
 
   const flush = () => {
@@ -273,6 +276,14 @@ export function buildTimeline({ messages, events, projects, pending, processing,
         items.push({ kind: "render", id: `r-${projectId}`, projectId, startedAt: entry.t });
       }
       continue;
+    }
+    // A failure of a project that is no longer failed (it was retried and finished, or is running again), or that a later failure replaced,
+    // is history: a wall of red cards for something that already worked helps nobody.
+    if (event.type === "tool.failed" && event.seq < lastRenderDone) continue;     // the video exists now: earlier stops are history
+    if (event.type === "tool.failed" && projectId) {
+      const owner = projects.find(p => p.id === projectId);
+      if (owner && owner.status !== "error") continue;
+      if (lastFailure.get(projectId) !== event.seq) continue;
     }
     const key = stepKey(event);
     if (!key) continue;

@@ -1262,7 +1262,7 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
             target_lufs=float(render_cfg.get("loudness_lufs", -14)) if loudnorm and not motion_config else None,
         )
 
-        from creative.review import required as creative_review_required, review_export, enforce
+        from creative.review import required as creative_review_required, review_export
         creative_direction=(data.get('generation_meta') or {}).get('creative_plan')
         creative_v2=creative_review_required(creative_direction)
         if creative_v2:
@@ -1293,7 +1293,9 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
                     report['summary']=((report.get('summary') or '')+' '+fit['summary']).strip()
             job.render.technical_qc['creative_review']=report
             _write_status(job)
-            enforce(report)
+            # A video that exists is shown to the user with the reviewer's notes, never discarded: the notes are the starting point for the next edit.
+            if report.get('status')!='passed':
+                job.render.message=(report.get('summary') or '')[:600]
 
         if motion_config and not creative_v2:
             from brain.qc_pipeline import run_qc
