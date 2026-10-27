@@ -342,6 +342,7 @@ class CreativePlan(_Model):
     chosen: Concept
     style: str | None = None
     director_notes: str = ""                    # compact guidance the engines receive
+    resource_choices: list[dict] = Field(default_factory=list)
     script: ScriptReport | None = None
     reference: ReferenceProfile | None = None
     models: list[str] = Field(default_factory=list)
@@ -359,6 +360,7 @@ class CreativePlan(_Model):
                               "visual_language": c.visual_language, "pacing": c.pacing, "why_it_works": c.why_it_works}
                              for c in self.concepts if c.id != self.chosen.id],
             "verdict": self.critique.verdict, "director_notes": self.director_notes,
+            "resource_choices": self.resource_choices,
             "critique":self.critique.model_dump(),
             "script": self.script.model_dump() if self.script else None,
             "reference": self.reference.model_dump() if self.reference else None,

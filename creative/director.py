@@ -180,6 +180,8 @@ def direct_talk(sentences: list[dict], request: str = "", *, style: str | None =
     plan = _direct("talk", prompts.UNDERSTAND_TALK, source, capabilities.talk_capabilities(style), budget_s=budget_s)
     if style in capabilities.TALKING_STYLES:
         plan.style = style  # the creator's explicit choice always wins over the director's
+    from .resources.planning import plan_talking_resources
+    plan.resource_choices = plan_talking_resources(plan.chosen.beats, sentences, plan.style)
     return plan
 
 

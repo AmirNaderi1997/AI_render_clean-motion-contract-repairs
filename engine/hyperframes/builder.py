@@ -115,12 +115,15 @@ def build_visual_beats(plan, decisions: dict, transcript: dict | None = None) ->
             visual_type = "concept"
         if visual_type == "before_after" and (" یا " in title or set(values) & {"محصول فیزیکی", "محصول دیجیتال"}):
             visual_type = "comparison"
-        if beats and visual_type == beats[-1].visual_type:
-            visual_type = fallback_types[n % len(fallback_types)]
+        # Variety must not turn real steps into invented statistics or a
+        # comparison. Preserve the approved semantic type.
         recipe = select_recipe(
             role=str(item.get("narrative_role") or "evidence"), title=title,
             items=values, used=used_recipes, talking=True,
         )
+        if item.get("resource_id"):
+            from creative.resources.planning import resolve_talking_recipe
+            recipe = resolve_talking_recipe(item["resource_id"], visual_type)
         used_recipes[recipe.id] = used_recipes.get(recipe.id, 0) + 1
         # A storyboard can explicitly request a semantic type, but a vague
         # "concept" now resolves through the audited recipe registry instead
@@ -143,6 +146,8 @@ def build_visual_beats(plan, decisions: dict, transcript: dict | None = None) ->
             motion_style=motion_style,
             recipe_id=recipe.id,
             why=str(item.get("why") or ""),
+            sentence_indices=[sentence] if 0 <= sentence < len(sentences) else [],
+            spoken=str(sentences[sentence].get("text") or "") if 0 <= sentence < len(sentences) else "",
         ))
     # Output edits may repeat a source range (cold open) or collapse adjacent
     # anchors.  Enforce one readable visual at a time after source-to-output
@@ -193,9 +198,14 @@ def _continuous_beats(plan, decisions: dict, transcript: dict) -> list[VisualBea
             end = float(shot.out_start) + max(0, boundary-float(shot.src_in)) if shot else float(plan.duration)
         if end-start < .65:
             continue
+        visual_type = _visual_type(title, idea.get('items') or [], str(idea.get('visual_type') or ''))
+        recipe_id = ''
+        if idea.get('resource_id'):
+            from creative.resources.planning import resolve_talking_recipe
+            recipe_id = resolve_talking_recipe(idea['resource_id'], visual_type).id
         result.append(VisualBeat(id=f'beat-{indices[0]}-group-{n}', start=start, end=end,
             title=title, items=[str(x)[:35] for x in idea.get('items', [])][:4],
-            visual_type=_visual_type(title, idea.get('items') or [], str(idea.get('visual_type') or '')),
+            visual_type=visual_type, recipe_id=recipe_id,
             layout='top_panel', narrative_role=str(idea.get('narrative_role') or 'explanation'),
             why=str(idea.get('visual') or evidence), spoken=evidence, sentence_indices=indices,
             motion_style=str(idea.get('motion_style') or 'assemble')))

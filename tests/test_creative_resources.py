@@ -10,6 +10,42 @@ from creative.resources import providers, registry
 from app.routers.creative_resources import router
 
 
+def test_source_grounded_resource_planning_and_compiler_binding():
+    from creative.resources.planning import plan_talking_resources, resolve_talking_recipe
+    from creative.schemas import Beat, Concept, ContentBrief, Critique, CreativePlan
+    from creative.production import bind_talking
+    beats = [Beat(sentence=0, title="سه مرحله", visual_type="steps", role="steps"),
+             Beat(sentence=1, title="آمار", visual_type="stat"),
+             Beat(sentence=99, title="نامعتبر")]
+    sentences = [{"text": "سه مرحله برای شروع"}, {"text": "عدد مشخصی نداریم"}]
+    choices = plan_talking_resources(beats, sentences, "talking_2")
+    assert choices[0]["resource_id"] == "editorgpt-recipe:steps-rail"
+    assert choices[1]["reason"] == "no-numeric-source-evidence"
+    assert choices[2]["reason"] == "missing-source-anchor"
+    assert plan_talking_resources(beats, sentences, "talking_1") == []
+    assert resolve_talking_recipe(choices[0]["resource_id"], "steps").renderer == "steps"
+    with pytest.raises(ValueError): resolve_talking_recipe("hyperframes:data-chart", "steps")
+    with pytest.raises(ValueError): resolve_talking_recipe(choices[0]["resource_id"], "stat")
+    concept = Concept(id="A", name="Test", angle="Teaching", hook="Start", beats=beats[:1])
+    plan = CreativePlan(kind="talk", brief=ContentBrief(topic="Test", core_message="Steps"),
+                        concepts=[concept], chosen=concept, critique=Critique(chosen_id="A"),
+                        style="talking_2", resource_choices=choices[:1])
+    board = bind_talking(plan, {}, sentences)["storyboard"]
+    assert board[0]["resource_id"] == choices[0]["resource_id"]
+    assert plan.public()["resource_choices"] == choices[:1]
+
+
+def test_repeated_steps_are_not_replaced_with_unrelated_visual_types():
+    from engine.hyperframes.builder import build_visual_beats
+    from types import SimpleNamespace
+    plan = SimpleNamespace(duration=30, shots=[SimpleNamespace(src_in=0, src_out=30, out_start=0)])
+    sentences = [{"start": 0, "end": 10, "text": "مرحله اول"}, {"start": 10, "end": 20, "text": "مرحله دوم"}]
+    decisions = {"storyboard": [{"i": i, "title": "مرحله", "items": ["شروع", "پایان"], "visual_type": "steps"} for i in range(2)]}
+    beats = build_visual_beats(plan, decisions, {"sentences": sentences})
+    assert [b.visual_type for b in beats] == ["steps", "steps"]
+    assert [b.sentence_indices for b in beats] == [[0], [1]]
+
+
 def test_snapshot_fingerprints_are_actual_and_not_license_approval():
     from creative.resources.provenance import snapshot_integrity
     report = snapshot_integrity()

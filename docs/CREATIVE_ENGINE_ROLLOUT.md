@@ -13,6 +13,11 @@ license approval, RTL certification, or a measured performance result.
 - Local source fingerprints: six committed metadata/adapter files exposed in
   registry summary; missing or changed files report an integrity failure.
   Fingerprints are **not** upstream installation pins or license receipts.
+- Director talking_2 beats now receive bounded, source-anchored local recipe
+  choices. Choices survive plan serialization and compiler binding; the native
+  builder revalidates IDs and preserves semantic visual types instead of
+  rotating repeated steps into unrelated charts. Other styles are unchanged.
+  External catalog execution and product recipe ports remain separate gates.
 
 ## Remaining acceptance gates (not completed)
 
