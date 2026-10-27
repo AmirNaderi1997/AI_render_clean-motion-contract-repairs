@@ -16,11 +16,8 @@ SUPPORTED_REGISTRY_ADAPTERS = frozenset({"caption-kinetic-slam", "paper-collage-
 
 
 def _install(project_dir: Path, name: str) -> bool:
-    result = subprocess.run(
-        [*cli_command(), "add", name, "--dir", ".", "--no-clipboard"],
-        cwd=project_dir, text=True, capture_output=True, timeout=180,
-    )
-    return result.returncode == 0
+    from .registry_pins import install_pinned
+    return install_pinned(project_dir, name)
 
 
 def _pipeline(project_dir: Path, labels: list[str], duration: float) -> bool:

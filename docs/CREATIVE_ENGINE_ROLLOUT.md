@@ -23,6 +23,12 @@ license approval, RTL certification, or a measured performance result.
   black scenes pass, truncated output fails, and inspection timeouts do not
   become fictional visual defects. Automatic semantic template rotation is
   disabled. This is not full audio/visual certification or model QA replacement.
+- The two existing external adapters now install only from HyperFrames commit
+  `07b0f2cda1cf7b51e0f12d0d05c304b37b4e881c`, checking fixed SHA-256 values
+  before writing any code. An Apache-2.0 license copy and per-resource source
+  receipt accompany each install. Real temporary-directory installs passed for
+  both files. Fonts/runtime/assets remain independently unapproved; this does
+  not certify rendering or approve the other catalog entries.
 
 ## Remaining acceptance gates (not completed)
 

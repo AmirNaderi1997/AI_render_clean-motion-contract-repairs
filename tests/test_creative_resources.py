@@ -10,6 +10,41 @@ from creative.resources import providers, registry
 from app.routers.creative_resources import router
 
 
+def test_pinned_installer_rejects_tampering_and_unknown_names(tmp_path, monkeypatch):
+    import hashlib
+    from engine.hyperframes import registry_pins as pins
+    source, license_text = b"<html>reviewed source</html>", b"reviewed license"
+    monkeypatch.setattr(pins, "PINS", {"known": hashlib.sha256(source).hexdigest()})
+    monkeypatch.setattr(pins, "LICENSE_SHA256", hashlib.sha256(license_text).hexdigest())
+    urls = []
+    def fetch(url):
+        urls.append(url)
+        return license_text if url.endswith("/LICENSE") else source
+    monkeypatch.setattr(pins, "_fetch", fetch)
+    assert not pins.install_pinned(tmp_path, "../../escape") and not urls
+    assert pins.install_pinned(tmp_path, "known")
+    receipt = json.loads((tmp_path / "resource-receipts/known.json").read_text())
+    assert receipt["upstream_commit"] in receipt["source_url"]
+    assert not receipt["commercial_use_approved"]
+    monkeypatch.setattr(pins, "_fetch", lambda url: b"tampered")
+    with pytest.raises(ValueError, match="integrity"):
+        pins.install_pinned(tmp_path, "known")
+    assert (tmp_path / "compositions/components/known.html").read_bytes() == source
+
+
+def test_pinned_installer_rejects_symlink_escape(tmp_path, monkeypatch):
+    import hashlib
+    from engine.hyperframes import registry_pins as pins
+    root, outside = tmp_path / "project", tmp_path / "outside"
+    root.mkdir(); outside.mkdir()
+    (root / "compositions").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(pins, "PINS", {"known": hashlib.sha256(b"x").hexdigest()})
+    monkeypatch.setattr(pins, "LICENSE_SHA256", hashlib.sha256(b"x").hexdigest())
+    monkeypatch.setattr(pins, "_fetch", lambda url: b"x")
+    with pytest.raises(ValueError, match="escapes"):
+        pins.install_pinned(root, "known")
+
+
 def test_real_native_qc_allows_intentional_static_black_and_detects_truncation(tmp_path):
     import subprocess
     import shutil
