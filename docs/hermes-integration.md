@@ -159,7 +159,8 @@ and support Persian/Arabic/English digits. Unsupported Persian scoring operation
 fail explicitly; no synthetic virality score is substituted. Speaking duration
 is an estimate, not forced alignment. Combined offline tests: 22 passed.
 The reviewed upstream pack is vendored unchanged under `vendor/instagram-agent-skill`.
-These helpers are not yet exposed as authenticated Studio/Hermes tools.
+These helpers are now exposed through the shared Studio tool and authenticated
+Hermes content-check endpoint described above.
 
 Composio implementation must use a stable server-derived user identity and reuse
 persisted session IDs. Explicit toolkit allowlists and disabled remote sandbox
