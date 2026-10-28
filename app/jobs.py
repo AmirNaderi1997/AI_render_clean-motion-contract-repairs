@@ -295,6 +295,8 @@ def _recover_local_folder(folder: Path, user_id: Optional[str]) -> Optional[Job]
     if talking.is_file():
         try:
             state = json.loads(talking.read_text())
+            from app.talking_reel import published_outputs
+            job.versions = [Path(output).name for output in published_outputs(state)]
             output = state.get("output")
             if state.get("status") == "done" and output and (folder / output).is_file():
                 job.render = RenderState(status="done", progress=100, output=Path(output).name)
@@ -307,7 +309,6 @@ def _recover_local_folder(folder: Path, user_id: Optional[str]) -> Optional[Job]
                 job.generate.status = "done"
         except (OSError, ValueError):
             pass
-    job.versions = [job.render.output] if job.render.status == "done" and job.render.output else []
     return job
 
 
@@ -1371,13 +1372,16 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
             job.music.started_at = time.time()
             _run_mix(job)
     except Exception as e:
-        job.render.status = "needs_review"
-        if "out_path" in locals() and out_path.is_file():
-            job.render.candidate_output = out_path.name
+        from creative.review import QualityReviewRequired
+        has_candidate = "out_path" in locals() and out_path.is_file()
+        job.render.status = "needs_review" if has_candidate else "error"
+        job.render.candidate_output = out_path.name if has_candidate else None
         job.render.output = None
         job.render.technical_qc = {**(job.render.technical_qc or {}), "renderer": job.render.renderer,
                                    "renderer_failure": job.render.renderer_failure, "hold_reason": str(e)[:800]}
-        job.render.message = "Render failed. Check server logs." if settings.APP_ENV == "production" else str(e)
+        job.render.message = ("Render failed. Check server logs."
+                              if settings.APP_ENV == "production" and not isinstance(e, QualityReviewRequired)
+                              else str(e))
         job.render.finished_at = time.time()
         _write_status(job)
         if raise_errors:

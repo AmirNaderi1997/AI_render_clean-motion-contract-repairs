@@ -47,17 +47,3 @@ def review_render(video: Path, beats: list, work_dir: Path) -> dict:
         problems.append("sampled scenes do not change enough")
     return {"passed": not problems, "problems": problems, "samples": len(images),
             "mean_scene_change": round(sum(differences) / len(differences), 2) if differences else 0}
-
-
-def improve_beats(beats: list) -> list:
-    """Diversify a failed board before the single automatic retry."""
-    types = ["kinetic_type", "concept", "comparison", "media_collage", "ui_showcase", "stat", "chat", "before_after"]
-    motions = ["slam", "assemble", "wipe", "collage", "orbit", "count_up", "type_on", "reveal"]
-    for index, beat in enumerate(beats):
-        beat.visual_type = types[index % len(types)]
-        beat.motion_style = motions[index % len(motions)]
-        beat.layout = "full_frame"
-        # build_project will install and record only adapters that are truly
-        # mounted.  Never advertise a catalog result as used code here.
-        beat.registry_refs = []
-    return beats

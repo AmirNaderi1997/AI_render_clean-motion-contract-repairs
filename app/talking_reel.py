@@ -517,9 +517,13 @@ def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False, cached_on
         except TaskCanceled:
             current = load(job_dir); current.update(status="canceled", stage="", message="Canceled by user"); save(job_dir, current)
         except Exception as exc:
-            log.exception("talking reel export held for %s", job_dir.name)
+            log.exception("talking reel export failed for %s", job_dir.name)
             current = load(job_dir)
-            current.update(status="needs_review", stage="quality review", message=str(exc)[:800],
+            candidate = current.get("candidate_output")
+            has_candidate = bool(candidate and (job_dir / candidate).is_file())
+            current.update(status="needs_review" if has_candidate else "error",
+                           stage="quality review" if has_candidate else "", message=str(exc)[:800],
+                           candidate_output=candidate if has_candidate else None, output=None,
                            technical_qc={**(current.get("technical_qc") or {}), "hold_reason": str(exc)[:800]})
             save(job_dir, current)
         finally:

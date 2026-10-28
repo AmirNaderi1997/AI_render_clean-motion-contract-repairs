@@ -94,27 +94,33 @@ def job_gate(tmp_path,monkeypatch,config):
     return jobs,job,data
 
 
+@pytest.mark.parametrize('production',[False,True])
 @pytest.mark.parametrize('verdict',['passed','needs_attention','unavailable'])
-def test_app_creative_review_is_a_publish_gate(job_gate,monkeypatch,verdict):
+def test_app_creative_review_is_a_publish_gate(job_gate,monkeypatch,verdict,production):
     from creative import review
     jobs,job,_=job_gate
+    monkeypatch.setattr(jobs.settings,'APP_ENV','production' if production else 'development')
     monkeypatch.setattr(review,'review_export',lambda *a,**k:{'status':verdict,'summary':'review verdict'})
     jobs._run_job(job,False)
     assert job.render.status==('done' if verdict=='passed' else 'needs_review')
     assert bool(job.versions)==(verdict=='passed')
     if verdict!='passed':
+        assert job.render.message=='review verdict'
         assert job.render.output is None
         assert (job.dir/'exports'/job.render.candidate_output).read_bytes()==b'reviewer file'
 
 
-def test_app_fallback_records_reason_and_holds_candidate(job_gate,monkeypatch):
+@pytest.mark.parametrize('production',[False,True])
+def test_app_fallback_records_reason_and_holds_candidate(job_gate,monkeypatch,production):
     jobs,job,_=job_gate
+    monkeypatch.setattr(jobs.settings,'APP_ENV','production' if production else 'development')
     def fail(*a,**k):raise RuntimeError('fixture browser failure')
     monkeypatch.setattr(product_reel,'render',fail)
     jobs._run_job(job,False)
     assert job.render.status=='needs_review' and not job.versions
     assert job.render.renderer=='remotion'
     assert job.render.technical_qc['renderer_failure']=='fixture browser failure'
+    assert job.render.message=='Renderer changed after HyperFrames failure: fixture browser failure'
     assert (job.dir/'exports'/job.render.candidate_output).is_file()
 
 
@@ -276,3 +282,118 @@ def test_legacy_history_uses_review_verdict(verdict,approved):
     state={'status':'done','output':'exports/talking_reel_v1.mp4','candidate_output':'exports/talking_reel_v1.mp4',
            'creative_review':{'status':verdict}}
     assert bool(published_outputs(state)) is approved
+
+
+@pytest.fixture
+def inline_workers(monkeypatch):
+    class InlineThread:
+        def __init__(self,target,args=(),**kwargs):self.target,self.args=target,args
+        def start(self):self.target(*self.args)
+    monkeypatch.setattr('threading.Thread',InlineThread)
+
+
+@pytest.mark.parametrize('failure',['bad_plan','missing_ffmpeg','provider_outage','render_crash'])
+def test_job_hard_failure_without_candidate_is_retryable(job_gate,monkeypatch,inline_workers,failure):
+    jobs,job,_=job_gate
+    monkeypatch.setattr(jobs,'CELERY_AVAILABLE',False)
+    monkeypatch.setattr(jobs.settings,'APP_ENV','development')
+    # A previous published export must not turn this failed attempt into a hold.
+    (job.dir/'exports').mkdir()
+    (job.dir/'exports/v1.mp4').write_bytes(b'previous export')
+    job.versions=['v1.mp4'];job.render.output='v1.mp4'
+    errors={'bad_plan':ValueError('invalid plan'),'missing_ffmpeg':FileNotFoundError('ffmpeg missing'),
+            'provider_outage':RuntimeError('provider unavailable'),'render_crash':RuntimeError('render crashed')}
+    reason=str(errors[failure])
+    def fail(*a,**k):raise errors[failure]
+    with monkeypatch.context() as patch:
+        if failure=='bad_plan':patch.setattr(jobs,'validate_plan',lambda *a,**k:(None,[reason]))
+        else:
+            patch.setattr(product_reel,'render',fail)
+            patch.setattr(remotion_renderer,'render',fail)
+        jobs.start_render(job,loudnorm=False)
+    assert job.render.status=='error' and job.render.message==reason
+    assert job.render.output is None and job.render.candidate_output is None
+    assert job.render.technical_qc['hold_reason']==reason
+    assert job.versions==['v1.mp4']
+    jobs.start_render(job,loudnorm=False)
+    assert job.render.status=='done' and job.versions==['v1.mp4','v2.mp4']
+
+
+@pytest.mark.parametrize('candidate',[False,True])
+def test_production_unexpected_render_exception_keeps_generic_message(job_gate,monkeypatch,candidate):
+    jobs,job,_=job_gate
+    monkeypatch.setattr(jobs.settings,'APP_ENV','production')
+    def fail(*a,**k):raise RuntimeError('unexpected diagnostic detail')
+    if candidate:monkeypatch.setattr(technical_qc,'inspect_export',fail)
+    else:monkeypatch.setattr(jobs,'load_plan',fail)
+    jobs._run_job(job,False)
+    assert job.render.status==('needs_review' if candidate else 'error')
+    assert job.render.message=='Render failed. Check server logs.'
+    assert bool(job.render.candidate_output) is candidate
+    assert job.render.output is None and not job.versions
+
+
+@pytest.mark.parametrize('candidate',['none','missing','directory','file'])
+@pytest.mark.parametrize('error',[ValueError('bad plan'),FileNotFoundError('ffmpeg missing'),RuntimeError('provider or renderer failed')])
+def test_talking_failure_holds_only_existing_file_and_allows_retry(tmp_path,monkeypatch,inline_workers,candidate,error):
+    from app import talking_reel as tr
+    exports=tmp_path/'exports';exports.mkdir()
+    (exports/'talking_reel_v1.mp4').write_bytes(b'previous export')
+    published=['exports/talking_reel_v1.mp4']
+    tr.save(tmp_path,{'analysis_ready':True,'status':'done','output':published[0],
+                      'published_outputs':published})
+    path='exports/talking_reel_v2.mp4'
+    def fail(folder,*a,**k):
+        state=tr.load(folder)
+        if candidate!='none':state['candidate_output']=path
+        if candidate=='file':(folder/path).write_bytes(b'candidate')
+        if candidate=='directory':(folder/path).mkdir()
+        tr.save(folder,state)
+        raise error
+    monkeypatch.setattr(tr,'_record_render_time',lambda *a:None)
+    with monkeypatch.context() as patch:
+        patch.setattr(tr,'_run',fail)
+        tr.start(tmp_path,tmp_path/'input.mp4')
+    state=tr.load(tmp_path)
+    held=candidate=='file'
+    assert state['status']==('needs_review' if held else 'error')
+    assert state['stage']==('quality review' if held else '')
+    assert state['candidate_output']==(path if held else None)
+    assert state['message']==str(error) and state['output'] is None
+    assert state['technical_qc']['hold_reason']==str(error)
+    assert tr.published_outputs(state)==published
+    assert str(tmp_path) not in tr._running
+    def success(folder,*a,**k):
+        output='exports/talking_reel_v3.mp4'
+        (folder/output).write_bytes(b'published')
+        state=tr.load(folder)
+        state.update(status='done',output=output,published_outputs=[*tr.published_outputs(state),output])
+        tr.save(folder,state)
+    monkeypatch.setattr(tr,'_run',success)
+    tr.start(tmp_path,tmp_path/'input.mp4')
+    state=tr.load(tmp_path)
+    assert state['status']=='done' and tr.published_outputs(state)==[*published,'exports/talking_reel_v3.mp4']
+
+
+@pytest.mark.parametrize('status',['done','needs_review','error'])
+def test_local_recovery_preserves_all_published_versions(tmp_path,status):
+    from app import jobs, talking_reel as tr
+    (tmp_path/'raw').mkdir();(tmp_path/'raw/input.mp4').touch()
+    (tmp_path/'exports').mkdir()
+    names=[f'talking_reel_v{i}.mp4' for i in (1,2,3)]
+    for name in names:(tmp_path/'exports'/name).touch()
+    published=[f'exports/{name}' for name in names[:2]]
+    tr.save(tmp_path,{'status':status,'analysis_ready':True,'message':'review reason',
+                     'output':published[-1] if status=='done' else None,
+                     'candidate_output':f'exports/{names[-1]}' if status=='needs_review' else None,
+                     'published_outputs':[*published,published[0]]})
+    job=jobs._recover_local_folder(tmp_path,'user')
+    assert job.versions==names[:2]
+    if status=='done':assert job.render.output==names[1]
+    if status=='needs_review':
+        assert job.render.candidate_output==names[-1] and job.render.output is None
+
+
+def test_quality_module_does_not_expose_unapproved_board_rewrite():
+    from engine.hyperframes import quality
+    assert not hasattr(quality,'improve_beats')
