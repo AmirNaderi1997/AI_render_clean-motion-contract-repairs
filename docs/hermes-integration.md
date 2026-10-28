@@ -140,7 +140,7 @@ profile credential resolution, bad origins, error sanitization and registration;
 combined Studio/content/bridge suite: 69 passed. Local running app and production
 were not restarted or changed.
 
-Dynamic discovery/execution through Hermes, backend-approved mutations, provider
+External tool execution through Hermes, backend-approved mutations, provider
 revocation, per-user skill controls, scoped brand voice, structured Creative
 Director handoff and Composio execution through LangGraph are not yet delivered. Installation alone
 does not activate those paths. Policy changes currently need an administrator to
@@ -176,3 +176,37 @@ No hardware-specific mobile/PWA testing or live OAuth success is claimed.
 Reviewed references: [Sessions](https://docs.composio.dev/docs/configuring-sessions),
 [authentication](https://docs.composio.dev/docs/authentication/manually-authenticating),
 official `composio==0.30.0` wheel source and the pinned Hermes source above.
+
+## Contextual tool discovery (implemented)
+
+`POST /api/hermes/composio/discover` accepts only an application and bounded use
+case query. Existing JWT authentication determines the user and the encrypted
+Session reference; callers cannot submit either identity. The SDK's current
+`session.search(query=...)` method is used within that user's restricted Session.
+It is not a catalog-wide context dump or unrestricted MCP connection.
+
+The response projects at most six matching tools from the requested allowed
+application. Only name, bounded description and a syntactically valid bounded
+input schema are returned. Incomplete/invalid/oversized schemas are marked
+unavailable. Raw execution guidance, memory, account details, session identifiers
+and connection payloads are omitted. Every returned tool is explicitly marked
+`executable: false`; discovery does not grant execution permission.
+
+Native Hermes plugin v0.2.0 registers `editorgpt_discover_app_tools` alongside
+the content check. It calls the fixed authenticated discovery endpoint with the
+current profile's credentials; there is no model-selected URL or session ID.
+The plugin remains compatible with host isolation and cannot override built-ins.
+Composio calls are capped at four concurrent requests per API process; SDK HTTP
+timeouts and disabled retries remain. Provider HTTP 429 is returned as an
+explicit sanitized rate-limit error, not retried invisibly.
+
+Verification: 87 Python tests passed, including the real SDK search response
+model and fake HTTP transport, invalid schemas, other-toolkit filtering, user
+scope, failure/rate-limit handling and both native plugin tools. Official Hermes
+plugin validation passed with a safe security scan and no warnings. No live
+Composio, OAuth, Instagram or model call was made. The running EditorGPT app and
+server remain unchanged. External action execution and its approval UI are still
+pending, not represented as working by this discovery feature.
+
+Reference: [official search contract](https://docs.composio.dev/toolkits/meta-tools/search_tools)
+and `composio-client==2.0.0rc19` generated `SessionSearchResponse` types.

@@ -82,3 +82,18 @@ def test_native_registration_contract():
     assert registrations[0]["name"] == "editorgpt_instagram_check"
     assert registrations[0]["handler"] is plugin.check
     assert "user_id" not in registrations[0]["schema"]["parameters"]["properties"]
+    assert registrations[1]["name"] == "editorgpt_discover_app_tools"
+    assert "session_id" not in registrations[1]["schema"]["parameters"]["properties"]
+
+
+def test_native_discovery_delegates_only_to_authenticated_fixed_endpoint(monkeypatch):
+    monkeypatch.setattr(plugin, "_secret", {"EDITORGPT_API_ORIGIN": "https://editor.example", "EDITORGPT_ACCESS_TOKEN": "secret"}.get)
+    requests = []
+    class Opener:
+        def open(self, request, timeout):
+            requests.append(request)
+            return BytesIO(json.dumps({"tools": [], "notice": "Discovery only"}).encode())
+    monkeypatch.setattr(plugin, "build_opener", lambda *a: Opener())
+    assert json.loads(plugin.discover({"application": "instagram", "query": "read profile"}))["tools"] == []
+    assert requests[0].full_url == "https://editor.example/api/hermes/composio/discover"
+    assert "secret" not in plugin.discover({"application": "instagram", "query": "read profile"})

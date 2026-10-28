@@ -35,6 +35,12 @@ def setup(monkeypatch):
         def authorize(self, toolkit, **kwargs):
             calls.append(("authorize", toolkit, kwargs))
             return Obj(redirect_url="https://connect.composio.dev/authorization")
+        def search(self, **kwargs):
+            calls.append(("search", kwargs))
+            return Obj(success=True, session="private-search-session", memory="private-memory",
+                tool_schemas={"INSTAGRAM_GET_PROFILE": Obj(tool_slug="INSTAGRAM_GET_PROFILE", toolkit="instagram",
+                    description="Read profile", has_full_schema=True,
+                    input_schema={"type": "object", "properties": {}})})
     class Sessions:
         def create(self, **kwargs):
             calls.append(("create", kwargs))
@@ -126,3 +132,59 @@ def test_changed_policy_fails_closed(setup, monkeypatch):
             await service.session_id("1")
         assert error.value.status_code == 409
     asyncio.run(scenario())
+
+
+def test_context_discovery_is_scoped_bounded_and_does_not_forward_raw_state(setup):
+    async def scenario():
+        await service.set_enabled("1", True)
+        return await service.discover("1", "instagram", "Read my profile")
+    result = asyncio.run(scenario())
+    assert result["tools"][0]["name"] == "INSTAGRAM_GET_PROFILE"
+    assert result["tools"][0]["executable"] is False
+    assert "private" not in str(result)
+    assert ("search", {"query": "instagram: Read my profile"}) in setup[1]
+
+
+def test_discovery_filters_other_apps_and_invalid_or_oversized_schemas():
+    def item(slug, toolkit="instagram", schema=None):
+        return Obj(tool_slug=slug, toolkit=toolkit, description="Read", has_full_schema=True,
+                   input_schema=schema if schema is not None else {"type": "object"})
+    tools = {"GMAIL_READ": item("GMAIL_READ", "gmail"),
+             "INSTAGRAM_BAD_SCHEMA": item("INSTAGRAM_BAD_SCHEMA", schema={"type": "invented"}),
+             "INSTAGRAM_LARGE_SCHEMA": item("INSTAGRAM_LARGE_SCHEMA", schema={"description": "x" * 6001})}
+    tools.update({f"INSTAGRAM_GET_{n}": item(f"INSTAGRAM_GET_{n}") for n in range(20)})
+    result = service.public_discovery(Obj(success=True, tool_schemas=tools), "instagram")
+    assert len(result["tools"]) == 6
+    assert all(tool["application"] == "instagram" for tool in result["tools"])
+    assert not result["tools"][0]["schema_available"]
+    assert not result["tools"][1]["schema_available"]
+
+
+def test_discovery_failure_does_not_masquerade_as_no_matching_tools():
+    with pytest.raises(HTTPException) as error:
+        service.public_discovery(Obj(success=False, tool_schemas={}), "instagram")
+    assert error.value.detail["code"] == "COMPOSIO_DISCOVERY_FAILED"
+
+
+def test_discovery_route_does_not_accept_caller_supplied_session_or_user(setup):
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        app.dependency_overrides[current_user] = lambda: Obj(id=1)
+        body = {"application": "instagram", "query": "Read profile", "session_id": "another-user-session"}
+        assert client.post("/api/hermes/composio/discover", json=body).status_code == 422
+    assert not setup[1]
+
+
+def test_rate_limit_is_explicit_and_not_retried():
+    calls = []
+    class RateLimited(Exception):
+        status_code = 429
+    def fail():
+        calls.append(True)
+        raise RateLimited("private-provider-response")
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(service.remote(fail))
+    assert error.value.status_code == 429
+    assert error.value.headers["Retry-After"] == "30"
+    assert calls == [True]

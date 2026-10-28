@@ -21,6 +21,15 @@ SCHEMA = {
         "required": ["operation", "language", "text"]},
 }
 
+DISCOVERY_SCHEMA = {
+    "name": "editorgpt_discover_app_tools",
+    "description": "Discover up to six tools for one specific use case in an administrator-allowed connected app. Prefer an English query. Returns schemas only, not account data or authorization to execute. Do not include credentials or private message contents. No publishing, messaging or arbitrary execution.",
+    "parameters": {"type": "object", "additionalProperties": False,
+        "properties": {"application": {"type": "string", "maxLength": 64, "pattern": "^[a-z0-9_]+$"},
+                       "query": {"type": "string", "minLength": 1, "maxLength": 1000}},
+        "required": ["application", "query"]},
+}
+
 
 def _secret(name):
     from agent.secret_scope import get_secret
@@ -32,7 +41,7 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def check(args, **kwargs):
+def _call(args, schema, endpoint, required):
     try:
         origin = _secret("EDITORGPT_API_ORIGIN") or ""
         token = _secret("EDITORGPT_ACCESS_TOKEN") or ""
@@ -40,21 +49,21 @@ def check(args, **kwargs):
         secure = parsed.scheme == "https" or (parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"})
         if not token or not secure or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
             return json.dumps({"error": "EDITORGPT_PROFILE_CONNECTION_REQUIRED"})
-        if not isinstance(args, dict) or set(args) - set(SCHEMA["parameters"]["properties"]):
+        if not isinstance(args, dict) or set(args) - set(schema["parameters"]["properties"]):
             return json.dumps({"error": "INVALID_ARGUMENTS"})
         payload = json.dumps(args, ensure_ascii=False, allow_nan=False).encode()
         if len(payload) > 100_000:
             return json.dumps({"error": "INPUT_TOO_LARGE"})
-        request = Request(origin.rstrip("/") + "/api/hermes/content-tools/check", data=payload,
+        request = Request(origin.rstrip("/") + endpoint, data=payload,
                           headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, method="POST")
         # Never forward bearer credentials to a redirected host or ambient proxy.
         opener = build_opener(NoRedirect(), ProxyHandler({}))
-        with opener.open(request, timeout=15) as response:
+        with opener.open(request, timeout=45) as response:
             raw = response.read(1_048_577)
         if len(raw) > 1_048_576:
             return json.dumps({"error": "RESPONSE_TOO_LARGE"})
         result = json.loads(raw)
-        if not isinstance(result, dict) or "result" not in result or "disclaimer" not in result:
+        if not isinstance(result, dict) or not set(required).issubset(result):
             return json.dumps({"error": "INVALID_RESPONSE"})
         return json.dumps(result, ensure_ascii=False)
     except HTTPError as exc:
@@ -63,6 +72,16 @@ def check(args, **kwargs):
         return json.dumps({"error": "EDITORGPT_CHECK_UNAVAILABLE"})
 
 
+def check(args, **kwargs):
+    return _call(args, SCHEMA, "/api/hermes/content-tools/check", ("result", "disclaimer"))
+
+
+def discover(args, **kwargs):
+    return _call(args, DISCOVERY_SCHEMA, "/api/hermes/composio/discover", ("tools", "notice"))
+
+
 def register(ctx):
     ctx.register_tool(name=SCHEMA["name"], toolset="editorgpt_instagram",
                       schema=SCHEMA, handler=check)
+    ctx.register_tool(name=DISCOVERY_SCHEMA["name"], toolset="editorgpt_instagram",
+                      schema=DISCOVERY_SCHEMA, handler=discover)
