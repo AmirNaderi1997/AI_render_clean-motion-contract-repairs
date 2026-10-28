@@ -1,0 +1,2 @@
+# Optional Hermes connected-apps integration; do not install in Hermes' PM environment.
+composio==0.30.0

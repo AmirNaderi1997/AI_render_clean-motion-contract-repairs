@@ -43,11 +43,59 @@ its English timing regex misses Persian words. Do not use those scripts directly
 for Persian content. Heuristic scores are editing aids, not virality predictions
 or scientific AI-authorship determinations.
 
+## Connected-apps foundation
+
+`hermes/services/composio_sessions.py` uses the official Sessions API from
+Composio 0.30.0. `hermes/routers/connected_apps.py` uses existing JWT identity;
+client-supplied identities/session IDs are rejected. References use encrypted
+`HermesSetting` values, so no additional database migration is needed for this
+foundation (the existing Hermes settings migration must already be applied).
+Unknown applications, disabled integration and changed session policies fail
+closed. Sandbox, arbitrary proxy execution and connection-management agent tools
+are disabled. The session currently allows read-only tagged tools only.
+
+Settings includes a small Connected Apps section, using the existing design
+tokens. Enable/disable, explicit OAuth-link creation and connection checks are
+implemented. A redirect is **not** considered a successful connection; status
+comes from Composio. Disabling is not provider-side revocation.
+
+No SDK execution endpoint, raw MCP URL or general proxy is exposed. External
+mutations remain unavailable pending integration with the Studio approval ledger.
+
+### Setup (not automatically deployed)
+
+1. Install `requirements-composio.txt` in the **EditorGPT backend environment**,
+   not in the official Hermes managed environment. Resolve alongside the existing
+   application lock; do not update the running environment blindly.
+2. Configure `COMPOSIO_API_KEY` via server secret management, never frontend env.
+3. Set `COMPOSIO_INSTANCE_ID` to a persistent installation-specific random ID.
+   Keep it stable across restarts; separate development and production IDs.
+4. Set `COMPOSIO_CALLBACK_URL` to the installation's HTTPS `/hermes/settings` URL.
+5. Set `COMPOSIO_TOOLKITS=instagram` (default). Only administrator-configured
+   applications are allowed. Empty means none, not the whole catalog.
+6. Keep a persistent `HERMES_ENCRYPTION_KEY` and existing database configuration.
+7. Deploy/restart the Hermes service and frontend together after review. Open
+   Settings, enable, choose Connect, complete hosted OAuth, then check connections.
+
+Current tests use mocks only. Real OAuth, account revocation, multiple-account
+selection and provider permissions require authorized integration tests before
+production sign-off. No new background service or renderer is introduced.
+
+### Rollback
+
+Disable Composio in Settings, restore the previous frontend/backend release and
+remove the optional dependency on the next environment rebuild. Existing Instagram
+credentials/accounts are unchanged. Encrypted Composio settings may remain inert;
+rolling back code does not revoke OAuth consent. Revoke consent at the provider
+or Composio dashboard if required. Do not rotate encryption keys as a rollback.
+
 ## Pending acceptance gates
 
-Composio Sessions adapter, authenticated UI connections, approved external action
-execution, structured Creative Director handoff and LangGraph
-tools are not yet delivered. Installation alone does not activate those paths.
+Dynamic discovery/execution through Hermes, backend-approved mutations, provider
+revocation, per-user skill controls, scoped brand voice, structured Creative
+Director handoff and LangGraph tools are not yet delivered. Installation alone
+does not activate those paths. Policy changes currently need an administrator to
+review/reset the affected saved session; there is no automatic widening.
 No live account or paid model calls are required for installation tests.
 
 Verified locally: all 13 skills passed native security scans and appear enabled
@@ -67,4 +115,15 @@ These helpers are not yet exposed as authenticated Studio/Hermes tools.
 Composio implementation must use a stable server-derived user identity and reuse
 persisted session IDs. Explicit toolkit allowlists and disabled remote sandbox
 tools are required. Discovery is not authorization; every mutation must pass the
-existing backend approval contract. API keys stay encrypted server-side.
+existing backend approval contract. API keys stay in server secret management.
+
+Validation: 30 Python tests (including real Composio SDK with mocked HTTP), one
+React/jsdom settings test and full frontend TypeScript checking passed. The SDK
+contract test confirmed its public `sandbox` option maps to the API `workbench`
+field with execution disabled. The SDK was installed only in a temporary test
+directory; running local and production application environments were unchanged.
+No hardware-specific mobile/PWA testing or live OAuth success is claimed.
+
+Reviewed references: [Sessions](https://docs.composio.dev/docs/configuring-sessions),
+[authentication](https://docs.composio.dev/docs/authentication/manually-authenticating),
+official `composio==0.30.0` wheel source and the pinned Hermes source above.

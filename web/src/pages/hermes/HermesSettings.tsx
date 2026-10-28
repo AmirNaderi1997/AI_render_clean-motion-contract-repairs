@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import hermesApi from '../../services/hermesApi';
 import { message } from './hermesUtils';
+import ConnectedAppsPanel from './ConnectedAppsPanel';
 
 export type InstagramStatus = { configured: boolean; instagram_user_id: string | null };
 
@@ -101,5 +102,6 @@ export default function HermesSettings() {
   return <div className="hm-page hm-rise">
     <div className="hm-page-head"><div><span className="hm-eyebrow">ACCOUNT SETTINGS</span><h2>Instagram credentials</h2><p>Enter your Instagram API credentials here instead of editing the server's .env file.</p></div></div>
     <InstagramSettingsPanel />
+    <ConnectedAppsPanel />
   </div>;
 }
