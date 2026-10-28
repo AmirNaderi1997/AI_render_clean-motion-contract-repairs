@@ -112,6 +112,30 @@ def test_callback_does_not_mark_connection_successful(setup):
     assert asyncio.run(scenario())["status"] == "AUTHORIZATION_REQUIRED"
 
 
+@pytest.mark.parametrize('url,environment,allowed', [
+    ('http://127.0.0.1:5187/hermes/settings', 'development', True),
+    ('http://localhost:5187/hermes/settings', 'development', True),
+    ('http://127.0.0.1:5187/hermes/settings', 'production', False),
+    ('http://192.168.0.1/hermes/settings', 'development', False),
+    ('http://localhost.attacker.test/hermes/settings', 'development', False),
+    ('https://user:secret@example.com/hermes/settings', 'production', False),
+    ('https://editor.example/hermes/settings', 'production', True),
+])
+def test_callback_security(setup, monkeypatch, url, environment, allowed):
+    monkeypatch.setattr(service.settings, 'COMPOSIO_CALLBACK_URL', url)
+    monkeypatch.setattr(service.settings, 'APP_ENV', environment)
+    async def scenario():
+        await service.set_enabled('1', True)
+        if allowed:
+            assert (await service.connect('1', 'instagram'))['status'] == 'AUTHORIZATION_REQUIRED'
+        else:
+            with pytest.raises(HTTPException) as error:
+                await service.connect('1', 'instagram')
+            assert error.value.status_code == 503
+            assert not setup[1]
+    asyncio.run(scenario())
+
+
 def test_authenticated_routes_reject_client_identity_and_arbitrary_actions(setup):
     app = FastAPI()
     app.include_router(router)

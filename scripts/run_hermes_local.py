@@ -26,11 +26,17 @@ def main():
                        "instance": "local-test-" + secrets.token_hex(16)}, handle)
     state = json.loads(state_file.read_text())
     env = dict(os.environ)
+    if state.get("composio_api_key"):
+        env["COMPOSIO_API_KEY"] = state["composio_api_key"]
+    packages = DATA / "python-packages"
+    if packages.exists():
+        env["PYTHONPATH"] = str(packages) + os.pathsep + env.get("PYTHONPATH", "")
     env.update(APP_ENV="development", ENV="development", ENVIRONMENT="development",
         DATABASE_URL="", REDIS_URL="", JWT_SECRET=state["jwt"],
         HERMES_TOKEN_KEY=state["encryption"], HERMES_ENCRYPTION_KEY=state["encryption"],
         JOBS_DIR=str(DATA / "jobs"), HERMES_DATA_DIR=str(DATA / "hermes"),
         COMPOSIO_INSTANCE_ID=state["instance"], COMPOSIO_READ_TOOLS="",
+        COMPOSIO_CALLBACK_URL="http://127.0.0.1:5187/hermes/settings",
         VITE_REQUIRE_LOCAL_AUTH="1",
         API_TARGET="http://127.0.0.1:8192", HERMES_TARGET="http://127.0.0.1:8193")
     # No optional LAN/TLS settings leak into this loopback-only preview.

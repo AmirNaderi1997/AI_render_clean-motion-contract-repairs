@@ -10,15 +10,32 @@ export default function ConnectedAppsPanel() {
   const [connections, setConnections] = useState<AppConnection[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const mounted = useRef(true);
 
   useEffect(() => {
     mounted.current = true;
     const controller = new AbortController();
     hermesApi.getComposioSettings({ signal: controller.signal })
-      .then((result: Status) => { if (mounted.current) setStatus(result); })
+      .then(async (result: Status) => {
+        if (!mounted.current) return;
+        setStatus(result);
+        if (result.enabled && result.configured) {
+          const checked = await hermesApi.getComposioConnections();
+          if (mounted.current) setConnections(checked.applications);
+        }
+      })
       .catch((e: unknown) => { if (!controller.signal.aborted) setError(message(e)); });
     return () => { mounted.current = false; controller.abort(); };
+  }, []);
+
+  useEffect(() => {
+    // OAuth query parameters are never evidence of account ownership or success.
+    const query = new URLSearchParams(window.location.search);
+    if (!query.has('connected_account_id') && !query.has('status')) return;
+    setNotice('Returned from authorization. Checking your account with Composio…');
+    query.delete('connected_account_id'); query.delete('status');
+    window.history.replaceState(null, '', window.location.pathname + (query.size ? `?${query}` : '') + window.location.hash);
   }, []);
 
   async function run(action: () => Promise<void>) {
@@ -62,7 +79,14 @@ export default function ConnectedAppsPanel() {
     </div>
     <p className="hm-tiny">Connect supported services through their authorization page. Passwords and API keys are never requested here.</p>
     {error ? <div className="hm-alert" role="alert">{error}</div> : null}
-    {status && !status.configured ? <p className="hm-tiny">Server configuration is required before connecting apps.</p> : null}
+    {notice ? <p className="hm-tiny" role="status">{connections.some(item => item.connected) ? 'Your account connection has been verified with Composio.' : error ? 'Could not verify the connection. Try Check connections.' : connections.length ? 'No active connection was found. You can connect again below.' : notice}</p> : null}
+    {status && !status.configured ? <div className="hm-notice" role="status">
+      <strong>Set up Composio</strong>
+      <p className="hm-tiny">Server configuration is required before connecting apps. Signing in to the Composio dashboard alone does not connect this EditorGPT installation.</p>
+      <a className="hm-btn hm-btn-primary" href="https://platform.composio.dev" target="_blank" rel="noopener noreferrer">Open Composio dashboard ↗</a>
+      <p className="hm-tiny">The installation administrator must configure COMPOSIO_API_KEY, a stable COMPOSIO_INSTANCE_ID and an HTTPS COMPOSIO_CALLBACK_URL on the Hermes server, and install requirements-composio.txt. Never paste a key into chat.</p>
+      <p className="hm-tiny">After server setup, enable this integration below and choose Connect / reconnect to authorize your Instagram account. You do not enter Instagram credentials in the old form for this path.</p>
+    </div> : null}
     <div className="hm-account-actions">
       <button className="hm-btn hm-btn-quiet" type="button" onClick={toggle}
         disabled={busy || !status || (!status.configured && !status.enabled)}>

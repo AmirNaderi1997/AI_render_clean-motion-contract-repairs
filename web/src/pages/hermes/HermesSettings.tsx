@@ -100,8 +100,12 @@ export function HermesSettingsModal({ onClose, onChanged }: { onClose: () => voi
 
 export default function HermesSettings() {
   return <div className="hm-page hm-rise">
-    <div className="hm-page-head"><div><span className="hm-eyebrow">ACCOUNT SETTINGS</span><h2>Instagram credentials</h2><p>Enter your Instagram API credentials here instead of editing the server's .env file.</p></div></div>
-    <InstagramSettingsPanel />
+    <div className="hm-page-head"><div><span className="hm-eyebrow">HERMES SETTINGS</span><h2>Connected apps</h2><p>Connect Instagram and other supported services with Composio.</p></div></div>
     <ConnectedAppsPanel />
+    <details className="hm-panel" style={{ marginTop: 16 }}>
+      <summary>Advanced · Direct Instagram API credentials</summary>
+      <p className="hm-tiny">Optional legacy connection for your own Meta developer app. This is separate from Composio.</p>
+      <InstagramSettingsPanel />
+    </details>
   </div>;
 }

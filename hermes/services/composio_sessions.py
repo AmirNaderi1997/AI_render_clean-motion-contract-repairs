@@ -190,7 +190,10 @@ async def connect(user_id: str, toolkit: str) -> dict:
         raise HTTPException(422, detail={"code": "COMPOSIO_APPLICATION_NOT_ALLOWED"})
     callback = settings.COMPOSIO_CALLBACK_URL
     parsed = urlsplit(callback)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    local_callback = (settings.APP_ENV == "development" and parsed.scheme == "http"
+                      and parsed.hostname in {"127.0.0.1", "localhost", "::1"})
+    if (not (parsed.scheme == "https" or local_callback) or not parsed.hostname
+            or parsed.username or parsed.password or parsed.fragment):
         raise HTTPException(503, detail={"code": "COMPOSIO_HTTPS_CALLBACK_REQUIRED"})
     reference = await session_id(user_id)
     def authorize():

@@ -72,6 +72,11 @@ remain unavailable pending integration with the Studio approval ledger.
 3. Set `COMPOSIO_INSTANCE_ID` to a persistent installation-specific random ID.
    Keep it stable across restarts; separate development and production IDs.
 4. Set `COMPOSIO_CALLBACK_URL` to the installation's HTTPS `/hermes/settings` URL.
+   The isolated development launcher supplies `http://127.0.0.1:5187/hermes/settings`.
+   HTTP callbacks are accepted only for literal loopback hosts in development;
+   production and LAN addresses still require HTTPS. Callback query parameters
+   never establish account ownership: the settings UI rechecks the authenticated
+   user's session through Composio before displaying an active connection.
 5. Set `COMPOSIO_TOOLKITS=instagram` (default). Only administrator-configured
    applications are allowed. Empty means none, not the whole catalog.
 6. Keep a persistent `HERMES_ENCRYPTION_KEY` and existing database configuration.
