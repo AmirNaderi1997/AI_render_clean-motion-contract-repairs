@@ -150,6 +150,27 @@ def test_real_persistence_audit_stale_baseline_and_undo(saved_job):
     assert jobs.load_plan(saved_job) == initial
 
 
+def test_real_saved_plan_draft_render_has_no_paid_review(saved_job, monkeypatch):
+    from app import jobs
+    from creative import review
+    if not (shutil.which("melt") or shutil.which("melt-7")):
+        pytest.skip("Native MLT unavailable")
+    data = jobs.load_plan(saved_job)
+    data["canvas"] = {"width": 64, "height": 96, "fps": 30}
+    data["captions"] = []
+    data["generation_meta"] = {"creative_plan": {"schema_version": 2}}
+    assert not jobs.save_plan(saved_job, data)[1]
+    def forbidden(*args, **kwargs):
+        pytest.fail("Draft previews must not call paid creative review")
+    monkeypatch.setattr(review, "review_export", forbidden)
+    jobs._run_job(saved_job, preview=True, loudnorm=False, raise_errors=True)
+    assert saved_job.render.status == "done"
+    assert saved_job.render.output.endswith("_preview.mp4")
+    assert saved_job.render.technical_qc["creative_review"]["status"] == "not_run"
+    from engine.probe import video_dimensions
+    assert video_dimensions(saved_job.dir / "exports" / saved_job.render.output) == (32, 48)
+
+
 def test_owned_api_context_and_actual_operation_roundtrip(saved_job):
     from app.routers.plans import router
     app = FastAPI()

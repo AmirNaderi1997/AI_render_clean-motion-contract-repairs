@@ -40,6 +40,7 @@ export function ResourceEffectEditor({jobId,plan,savedPlanText,dirty,disabled,on
   const [frames,setFrames]=React.useState(initialTransition?.duration_frames||6),[direction,setDirection]=React.useState(initialTransition?.direction||"left");
   const [intensity,setIntensity]=React.useState(initialTransition?.intensity??1),[zoomMode,setZoomMode]=React.useState(initialTransition?.zoom_mode||"zoom_in"),[zoomScale,setZoomScale]=React.useState(initialTransition?.zoom_scale??1.15);
   const [busy,setBusy]=React.useState(false),[loading,setLoading]=React.useState(false);
+  const [previewBusy,setPreviewBusy]=React.useState(false);
   const [error,setError]=React.useState(""),[message,setMessage]=React.useState(""),[retry,setRetry]=React.useState(0);
   const pending=React.useRef(false),alive=React.useRef(true);
   const activeJob=React.useRef(jobId);activeJob.current=jobId;
@@ -87,6 +88,18 @@ export function ResourceEffectEditor({jobId,plan,savedPlanText,dirty,disabled,on
       onApplied(result.plan,expected);setMessage("همهٔ تغییرات ذخیره شد؛ ویدیوی قبلی دست‌نخورده است. نتیجه در رندر بعدی دیده می‌شود.");
     }catch(e){if(alive.current&&activeJob.current===submittedJob)setError(friendlyError(e,"save creative resources"));}
     finally{pending.current=false;if(alive.current){setBusy(false);onBusyChange(false);}}
+  }
+  async function preview(){
+    if(blocked||pending.current||count)return;
+    pending.current=true;setBusy(true);setPreviewBusy(true);onBusyChange(true);setError("");
+    const submittedJob=jobId;
+    try{
+      await api.previewCreativeResources(jobId,context!.plan);
+      if(!alive.current||activeJob.current!==submittedJob)return;
+      setMessage("پیش‌نمایش واقعی برنامه در صف رندر قرار گرفت؛ نتیجه در تب Preview نمایش داده می‌شود. این نسخه تأیید نهایی انتشار نیست.");
+      onApplied(context!.plan,JSON.stringify(plan));
+    }catch(e){if(alive.current&&activeJob.current===submittedJob)setError(friendlyError(e,"render draft preview"));}
+    finally{pending.current=false;if(alive.current){setBusy(false);setPreviewBusy(false);onBusyChange(false);}}
   }
   const catalog=(context?.effects||[]).filter(item=>`${effectLabel(item)} ${item.name} ${item.id}`.toLowerCase().includes(search.toLowerCase()))
     .sort((a,b)=>(COMMON.indexOf(a.id.split(":")[1])<0?100:COMMON.indexOf(a.id.split(":")[1]))-(COMMON.indexOf(b.id.split(":")[1])<0?100:COMMON.indexOf(b.id.split(":")[1])));
@@ -140,6 +153,8 @@ export function ResourceEffectEditor({jobId,plan,savedPlanText,dirty,disabled,on
       <div className="cr-save"><button className="btn" type="button" disabled={blocked||!count||!valid} onClick={()=>void save()}>{busy?"در حال ذخیره…":count?`ذخیرهٔ ${count} تغییر`:"ذخیرهٔ تغییرات"}</button>
         {count>0&&<button className="btn btn-secondary" type="button" disabled={busy} onClick={()=>{setOperations({});setDraftBase(null);setMessage("");}}>لغو تغییرات</button>}</div>
       {message&&<p role="status">{message}</p>}
+      <button type="button" className="btn btn-secondary" disabled={blocked||count>0} onClick={()=>void preview()}>{previewBusy?"در حال شروع پیش‌نمایش…":"رندر پیش‌نمایش واقعی برنامه"}</button>
+      <small className="ec-hint">با موتور بومی همین نصب، از برنامهٔ ذخیره‌شده؛ بدون تولید دوبارهٔ تصویر یا صدا. ابتدا تغییرات را ذخیره کنید.</small>
     </>}
   </EditCard>;
 }

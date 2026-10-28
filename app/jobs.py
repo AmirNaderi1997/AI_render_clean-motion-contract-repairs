@@ -736,8 +736,10 @@ def _run_mix(job: Job, *, raise_errors: bool = False) -> None:
             raise
 
 
-def start_render(job: Job, preview: bool = False, loudnorm: bool = True) -> None:
+def start_render(job: Job, preview: bool = False, loudnorm: bool = True, *, expected_plan: dict | None = None) -> None:
     with _lock:
+        if expected_plan is not None and load_plan(job) != expected_plan:
+            raise ValueError("Plan changed; reload before requesting a preview")
         if job.generate.status == "running":
             raise ValueError("plan generation must finish before rendering")
         if job.render.status in {"queued", "running"}:
@@ -1282,7 +1284,10 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
         from creative.review import required as creative_review_required, review_export
         creative_direction=(data.get('generation_meta') or {}).get('creative_plan')
         creative_v2=creative_review_required(creative_direction)
-        if creative_v2:
+        if preview:
+            job.render.technical_qc['creative_review'] = {'status': 'not_run',
+                'summary': 'Draft preview: final creative review is required for publication.'}
+        if creative_v2 and not preview:
             job.render.message='reviewing creative output'
             _write_status(job)
             board_path=job.dir/'storyboard.json'
@@ -1314,7 +1319,7 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
             if report.get('status')!='passed':
                 job.render.message=(report.get('summary') or '')[:600]
 
-        if motion_config and not creative_v2:
+        if motion_config and not creative_v2 and not preview:
             from brain.qc_pipeline import run_qc
             job.render.message = "reviewing motion scenes"
             _write_status(job)

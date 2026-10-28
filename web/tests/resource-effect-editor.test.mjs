@@ -28,6 +28,25 @@ function setup(api,overrides={}){
 }
 const context=(source=plan)=>({plan:source,version:7,effects,transitions});
 
+test('real preview is explicit, draft-blocked and protected against double submission',async()=>{
+  const calls=[];let finish;
+  const env=setup({planCreativeResources:async()=>context(),previewCreativeResources:(...args)=>{
+    calls.push(args);return new Promise(r=>{finish=r;});
+  }});
+  try{
+    await env.open();assert.equal(calls.length,0);
+    env.click('نزدیک‌شدن آرام');
+    assert.equal([...document.querySelectorAll('button')].find(b=>b.textContent==='رندر پیش‌نمایش واقعی برنامه').disabled,true);
+    env.click('لغو تغییرات');
+    const b=[...document.querySelectorAll('button')].find(b=>b.textContent==='رندر پیش‌نمایش واقعی برنامه');
+    flushSync(()=>{b.click();b.click();});assert.equal(calls.length,1);
+    assert.deepEqual(calls[0],['owned',plan]);
+    finish({status:'queued'});await settle();
+    assert.equal(env.applied.length,1);
+    assert.match(document.querySelector('details').textContent,/تب Preview/);
+  }finally{env.close();}
+});
+
 test('all segments and all boundaries stage together; a single atomic save is double-click protected',async()=>{
   const calls=[];let finish;
   const env=setup({planCreativeResources:async()=>context(),applyResourceOperations:(...args)=>{calls.push(args);return new Promise(r=>{finish=r;});}});
