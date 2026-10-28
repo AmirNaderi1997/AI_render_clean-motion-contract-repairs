@@ -91,9 +91,24 @@ or Composio dashboard if required. Do not rotate encryption keys as a rollback.
 
 ## Pending acceptance gates
 
+### Shared Studio/LangGraph content checks (implemented)
+
+`instagram_content_check` is now registered in `app/studio_tools.py` and exposed
+through the existing Medium tool catalog and strict EditingPlan schema. It uses
+the same activity events, checkpoints, per-user run ownership and operation
+ledger as existing editing tools. It is read-only, bounded and idempotent; no
+approval is needed to inspect supplied text. A completed operation is reused
+after recovery rather than executed again. No provider/model/agent-mode defaults
+change. The planner is told to treat warnings as suggestions and never invent
+metrics to improve a score.
+
+Seven integration tests cover actual Persian checks, schema validation, activity
+events, persisted results, replay protection and run ownership. Together with
+the pre-existing Studio agent suite and content checks: 61 tests passed.
+
 Dynamic discovery/execution through Hermes, backend-approved mutations, provider
 revocation, per-user skill controls, scoped brand voice, structured Creative
-Director handoff and LangGraph tools are not yet delivered. Installation alone
+Director handoff and Composio execution through LangGraph are not yet delivered. Installation alone
 does not activate those paths. Policy changes currently need an administrator to
 review/reset the affected saved session; there is no automatic widening.
 No live account or paid model calls are required for installation tests.
