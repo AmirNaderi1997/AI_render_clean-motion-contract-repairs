@@ -46,13 +46,23 @@ or scientific AI-authorship determinations.
 ## Pending acceptance gates
 
 Composio Sessions adapter, authenticated UI connections, approved external action
-execution, Persian adapters, structured Creative Director handoff and LangGraph
+execution, structured Creative Director handoff and LangGraph
 tools are not yet delivered. Installation alone does not activate those paths.
 No live account or paid model calls are required for installation tests.
 
 Verified locally: all 13 skills passed native security scans and appear enabled
 in `hermes skills list --source hub`; a second installation was a no-op for all
 13. Three offline installer contract tests passed. No production changes were made.
+
+`hermes/services/instagram_quality.py` now provides bounded execution of all six
+original English helpers with fixed commands, stdin-only text, an eight-second
+timeout, CPU/file-output limits and a credential-free environment. Persian hook,
+caption, conservative normalization and beat-sheet adapters preserve ZWNJ/ZWJ
+and support Persian/Arabic/English digits. Unsupported Persian scoring operations
+fail explicitly; no synthetic virality score is substituted. Speaking duration
+is an estimate, not forced alignment. Combined offline tests: 22 passed.
+The reviewed upstream pack is vendored unchanged under `vendor/instagram-agent-skill`.
+These helpers are not yet exposed as authenticated Studio/Hermes tools.
 
 Composio implementation must use a stable server-derived user identity and reuse
 persisted session IDs. Explicit toolkit allowlists and disabled remote sandbox
