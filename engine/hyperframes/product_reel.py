@@ -47,7 +47,7 @@ def _fmt(x: float) -> str:
 
 
 def word_times(text: str, start: float, end: float) -> list[tuple[str, float]]:
-    """Each word of the narration with the time it appears: spread over the scene by word length (the voice is not aligned word by word)."""
+    """Explicit estimated fallback only; exports using this must be held for review."""
     words = text.split()
     if not words:
         return []
@@ -89,20 +89,27 @@ def _scene_html(i: int, scene: dict, start: float, dur: float, lead: float, coun
                   f'ease:"sine.inOut",yoyo:true,repeat:{min(repeats, 3) * 2 + 1},repeatDelay:{_fmt(.1 + rng.random() * .4)}}},{_fmt(start + delay)});')
 
     # Captions: pages of four words; the word being said takes the accent colour.
-    timed = word_times(str(scene.get("narration_text") or ""), start + .2, start + dur - .35)
+    aligned = scene.get('caption_words') if scene.get('caption_timing') == 'aligned' else None
+    timed = [(w['w'], start + w['start']) for w in aligned] if aligned else word_times(
+        str(scene.get("narration_text") or ""), start + .2, start + dur - .35)
+    ends = [start + w['end'] for w in aligned] if aligned else []
     pages = [timed[p:p + PAGE_WORDS] for p in range(0, len(timed), PAGE_WORDS)]
     caps = []
     for p, page in enumerate(pages):
         words = "".join(f'<span class="cw" id="{sid}c{p}w{q}">{escape(w)}</span>' for q, (w, _) in enumerate(page))
         caps.append(f'<div class="cpage" id="{sid}c{p}">{words}</div>')
         first = page[0][1]
-        last = pages[p + 1][0][1] if p + 1 < len(pages) else start + dur
+        last = pages[p + 1][0][1] if p + 1 < len(pages) else (ends[-1] if ends else start + dur)
         js.append(f'tl.set("#{sid}c{p}",{{opacity:1}},{_fmt(first)});')
         js.append(f'tl.set("#{sid}c{p}",{{opacity:0}},{_fmt(last)});')
         for q, (_, at) in enumerate(page):
-            nxt = page[q + 1][1] if q + 1 < len(page) else min(last, at + .5)
-            js.append(f'tl.fromTo("#{sid}c{p}w{q}",{{opacity:0,scale:.6,y:18,color:"#ffffff"}},{{opacity:1,scale:1.16,y:0,color:"{accent}",duration:.18,ease:"back.out(2)"}},{_fmt(at)});')
-            js.append(f'tl.to("#{sid}c{p}w{q}",{{scale:1,color:"#ffffff",duration:.15}},{_fmt(nxt)});')
+            nxt = ends[p * PAGE_WORDS + q] if ends else (page[q + 1][1] if q + 1 < len(page) else min(last, at + .5))
+            # Discrete colour/visibility changes land on the measured boundary;
+            # the decorative pop cannot delay the active-word highlight.
+            js.append(f'tl.set("#{sid}c{p}w{q}",{{opacity:1,color:"{accent}"}},{_fmt(at)});')
+            js.append(f'tl.fromTo("#{sid}c{p}w{q}",{{scale:.6,y:18}},{{scale:1.16,y:0,duration:{_fmt(min(.18, max(.001, nxt-at)))},ease:"back.out(2)"}},{_fmt(at)});')
+            js.append(f'tl.set("#{sid}c{p}w{q}",{{color:"#ffffff"}},{_fmt(nxt)});')
+            js.append(f'tl.to("#{sid}c{p}w{q}",{{scale:1,duration:.15}},{_fmt(nxt)});')
 
     ticks = "".join(
         f'<div class="tk"><div class="tkf" id="{sid}t{n}" style="width:{100 if n < i else 0}%"></div></div>' for n in range(count))
@@ -159,7 +166,7 @@ html,body{margin:0;background:#08060b}
 .hw{display:inline-block}
 .bar{position:absolute;left:430px;width:220px;height:7px;border-radius:7px}
 .cpage{position:absolute;left:56px;right:56px;bottom:250px;opacity:0;display:flex;flex-wrap:wrap;justify-content:center;gap:6px 22px;font-weight:900;font-size:92px;line-height:1.32;text-align:center;color:#fff}
-.cw{display:inline-block;color:#fff;text-shadow:0 4px 18px #000d,0 0 3px #000d}
+.cw{display:inline-block;opacity:0;color:#fff;text-shadow:0 4px 18px #000d,0 0 3px #000d}
 .ticks{position:absolute;left:60px;right:60px;top:48px;display:flex;gap:8px;direction:ltr}
 .tk{flex:1;height:6px;border-radius:6px;background:#ffffff30;overflow:hidden}
 .tkf{height:100%;background:#fff}
@@ -175,11 +182,14 @@ def _fit_music(source: Path, target: Path, seconds: float) -> None:
                    check=True, capture_output=True, timeout=120)
 
 
-def build_project(directory: Path, config: dict, *, job_dir: Path | None = None) -> Path:
+def build_project(directory: Path, config: dict, *, job_dir: Path | None = None, captions_prepared: bool = False) -> Path:
     """Write index.html and its local assets into *directory*. *config* is the Remotion scene config after engine.remotion_renderer._enrich:
     absolute asset / narration paths, kind, accent, title, narration_text and frames per scene."""
     from engine.motion_contract import validate_motion_config
     config = validate_motion_config(config, job_dir or directory.parent)
+    if not captions_prepared:
+        from engine.narration_alignment import prepare
+        config, _ = prepare(config, job_dir or directory.parent)
     from engine.hyperframes.assets import ensure_gsap
     from engine.hyperframes.fonts import FONT_FILES, fonts_css
     scenes = config["scenes"]
@@ -289,14 +299,14 @@ def _run_cli(project: Path, output: Path, *, timeout: int, on_progress=None, sho
         raise HyperFramesError("HyperFrames render failed: " + summarize_failure("".join(tail)[-2400:]))
 
 
-def render(config: dict, output: Path, *, job_dir: Path, on_progress=None, should_cancel=None, timeout: int = 5400) -> Path:
+def render(config: dict, output: Path, *, job_dir: Path, on_progress=None, should_cancel=None, timeout: int = 5400, captions_prepared: bool = False) -> Path:
     from engine.motion_contract import validate_motion_config
     config = validate_motion_config(config, job_dir)
     project = job_dir / "hyperframes_reel"
     if project.exists():
         shutil.rmtree(project)
     project.mkdir(parents=True)
-    build_project(project, config, job_dir=job_dir)
+    build_project(project, config, job_dir=job_dir, captions_prepared=captions_prepared)
     _run_cli(project, output, timeout=timeout, on_progress=on_progress, should_cancel=should_cancel)
     shutil.rmtree(project, ignore_errors=True)         # the page and its copied assets are rebuilt on every render
     return output

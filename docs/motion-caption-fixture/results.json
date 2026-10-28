@@ -1,0 +1,102 @@
+{
+  "fixture": "local macOS Majed isolated spoken words; mocked ElevenLabs ASR",
+  "live_provider_calls": 0,
+  "mocked_stt_calls_this_run": 1,
+  "words": [
+    {
+      "w": "این",
+      "start": 0.3,
+      "end": 0.47520833333333334
+    },
+    {
+      "w": "محصول",
+      "start": 0.7752083333333334,
+      "end": 1.4940416666666667
+    },
+    {
+      "w": "برای",
+      "start": 1.7940416666666668,
+      "end": 2.173875
+    },
+    {
+      "w": "خانه",
+      "start": 2.473875,
+      "end": 3.023875
+    },
+    {
+      "w": "شماست",
+      "start": 3.323875,
+      "end": 3.9859166666666668
+    }
+  ],
+  "scene_frames": 129,
+  "results": {
+    "product-reel": {
+      "width": 1080,
+      "height": 1920,
+      "fps": "30/1",
+      "duration": "8.600000",
+      "decode": "passed",
+      "changes": [
+        {
+          "alignment_start_s": 0.7752083333333334,
+          "first_highlight_frame": 24,
+          "error_s": 0.024791666666666656,
+          "accent_pixels": [
+            0,
+            5604,
+            8957
+          ]
+        },
+        {
+          "alignment_start_s": 7.623875,
+          "first_highlight_frame": 229,
+          "error_s": 0.00945833333333379,
+          "accent_pixels": [
+            0,
+            3237,
+            7149
+          ]
+        }
+      ],
+      "sha256": "9642c9d7f0a9b939bdb93b98cc2762ff9932d5002ecaf3fac8702867a2b155e7"
+    },
+    "remotion-reel": {
+      "width": 1080,
+      "height": 1920,
+      "fps": "30/1",
+      "duration": "8.619000",
+      "decode": "passed",
+      "changes": [
+        {
+          "alignment_start_s": 0.7752083333333334,
+          "first_highlight_frame": 24,
+          "error_s": 0.024791666666666656,
+          "accent_pixels": [
+            0,
+            5768,
+            6161
+          ]
+        },
+        {
+          "alignment_start_s": 7.623875,
+          "first_highlight_frame": 229,
+          "error_s": 0.00945833333333379,
+          "accent_pixels": [
+            0,
+            5276,
+            5575
+          ]
+        }
+      ],
+      "sha256": "cb58b56a3abddf1415bcf050b34a2470be840b7e16b11592b4025946c0beaf9e"
+    }
+  },
+  "human_audio_review": false,
+  "app_run": false,
+  "runtime_versions": {
+    "hyperframes": "0.8.161",
+    "remotion": "4.0.536",
+    "gsap": "3.14.2"
+  }
+}

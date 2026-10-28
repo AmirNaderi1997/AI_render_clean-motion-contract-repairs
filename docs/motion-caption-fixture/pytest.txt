@@ -1,0 +1,37 @@
+.....................................................s.................. [ 12%]
+..........s............................................................. [ 24%]
+........................................................................ [ 37%]
+.......................................................................s [ 49%]
+ss...................................................................... [ 62%]
+........................................................................ [ 74%]
+........................................................................ [ 87%]
+....................................................ss...............s.. [ 99%]
+...                                                                      [100%]
+=============================== warnings summary ===============================
+../../../../private/tmp/pr4-review-venv/lib/python3.14/site-packages/pythonjsonlogger/jsonlogger.py:11
+  /private/tmp/pr4-review-venv/lib/python3.14/site-packages/pythonjsonlogger/jsonlogger.py:11: DeprecationWarning: pythonjsonlogger.jsonlogger has been moved to pythonjsonlogger.json
+    warnings.warn(
+
+app/config.py:7
+  /Users/amirhossein/Documents/AI_render_clean/app/config.py:7: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.12/migration/
+    class Settings(BaseSettings):
+
+../../../../private/tmp/pr4-review-venv/lib/python3.14/site-packages/langchain_core/utils/pydantic.py:42
+  /private/tmp/pr4-review-venv/lib/python3.14/site-packages/langchain_core/utils/pydantic.py:42: UserWarning: Core Pydantic V1 functionality isn't compatible with Python 3.14 or greater.
+    from pydantic.v1 import BaseModel as BaseModelV1
+
+tests/test_studio_agents.py::test_database_preferences_runs_claims_and_isolation
+tests/test_studio_agents.py::test_database_preferences_runs_claims_and_isolation
+  /private/tmp/pr4-review-venv/lib/python3.14/site-packages/sqlalchemy/sql/schema.py:4296: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return util.wrap_callable(lambda ctx: fn(), fn)  # type: ignore[call-arg, no-any-return, no-untyped-call]  # noqa: E501
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_creative_plan.py:277: no ffmpeg with libass
+SKIPPED [1] tests/test_effects.py:72: could not import 'mediapipe': No module named 'mediapipe'
+SKIPPED [2] tests/test_motion_so.py:88: libass ffmpeg unavailable
+SKIPPED [1] tests/test_motion_so.py:112: libass ffmpeg unavailable
+SKIPPED [1] tests/test_talking2_layout.py:99: opt-in actual FFmpeg composition
+SKIPPED [1] tests/test_talking2_layout.py:129: opt-in actual Chromium panel and FFmpeg assembly
+SKIPPED [1] tests/test_tscaps_overlay.py:99: slow: set RUN_TSCAPS_E2E=1 (needs node, Chrome and the installed engine)
+571 passed, 8 skipped, 5 warnings in 40.83s

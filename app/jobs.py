@@ -47,6 +47,7 @@ class RenderState:
     candidate_output: Optional[str] = None
     renderer: Optional[str] = None
     renderer_failure: Optional[str] = None
+    caption_timing: Optional[str] = None
     preview: bool = False
     loudnorm: bool = False
     started_at: Optional[float] = None
@@ -1230,7 +1231,13 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
         job.render.candidate_output = None
         job.render.renderer_failure = None
         job.render.renderer = "native"
+        job.render.caption_timing = None
+        caption_evidence = None
         if motion_config:
+            from engine.remotion_renderer import prepare_reel_config
+            from engine.narration_alignment import prepare as prepare_captions
+            motion_config, caption_evidence = prepare_captions(prepare_reel_config(motion_config, job.dir), job.dir)
+            job.render.caption_timing = caption_evidence['caption_timing']
             from engine.remotion_renderer import render as render_motion
             job.render.message = "rendering motion scenes"
             _write_status(job)
@@ -1242,8 +1249,7 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
                 # The HyperFrames engine renders the cinematic reel; Remotion stays as the fallback when it cannot run.
                 try:
                     from engine.hyperframes import product_reel
-                    from engine.remotion_renderer import prepare_reel_config
-                    product_reel.render(prepare_reel_config(motion_config, job.dir), out_path, job_dir=job.dir, on_progress=report)
+                    product_reel.render(motion_config, out_path, job_dir=job.dir, on_progress=report, captions_prepared=True)
                     job.render.renderer = "hyperframes"
                     rendered = True
                 except Exception as exc:
@@ -1253,7 +1259,7 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
             if not rendered:
                 job.render.renderer = "remotion"
                 _write_status(job)
-                render_motion(motion_config, out_path, job_dir=job.dir, on_progress=report)
+                render_motion(motion_config, out_path, job_dir=job.dir, on_progress=report, captions_prepared=True)
         else:
             run_render(
                 mlt, out_path, preview=preview, style_name=plan.style,
@@ -1301,6 +1307,11 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
         )
 
         job.render.technical_qc.update(renderer=job.render.renderer, renderer_failure=job.render.renderer_failure)
+        if caption_evidence:
+            job.render.technical_qc.update(caption_evidence)
+        if job.render.caption_timing == 'estimated':
+            from creative.review import QualityReviewRequired
+            raise QualityReviewRequired('Caption timing is estimated; narration alignment needs review')
         from creative.review import required as creative_review_required, review_export
         creative_direction=(data.get('generation_meta') or {}).get('creative_plan')
         creative_v2=creative_review_required(creative_direction)
@@ -1379,6 +1390,8 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
         job.render.output = None
         job.render.technical_qc = {**(job.render.technical_qc or {}), "renderer": job.render.renderer,
                                    "renderer_failure": job.render.renderer_failure, "hold_reason": str(e)[:800]}
+        if 'caption_evidence' in locals() and caption_evidence:
+            job.render.technical_qc.update(caption_evidence)
         job.render.message = ("Render failed. Check server logs."
                               if settings.APP_ENV == "production" and not isinstance(e, QualityReviewRequired)
                               else str(e))

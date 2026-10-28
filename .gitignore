@@ -33,9 +33,15 @@ assets/effect_previews/
 
 # Clean distribution repository: keep runtime source only.
 /.claude/
+!/.claude/
+/.claude/*
+!/.claude/skills/
+/.claude/skills/*
+!/.claude/skills/ai-render-motion/
 /.cursor/
 /tests/*
 !/tests/test_studio_agents.py
+!/tests/test_narration_alignment.py
 /hermes/tests/
 *.test.ts
 *.test.tsx

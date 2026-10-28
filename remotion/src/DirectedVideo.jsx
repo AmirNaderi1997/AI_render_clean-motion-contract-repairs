@@ -28,19 +28,19 @@ const Sparkles=({accent,frame,seed})=>Array.from({length:9}).map((_,i)=>{
   return <div key={i} style={{position:'absolute',left:x,top:y,width:size,height:size,opacity:glow*.95,transform:`rotate(${frame*.6+i*20}deg) scale(${.4+glow})`,
     background:`radial-gradient(circle,#fff 0%,${accent} 28%,transparent 62%)`,clipPath:'polygon(50% 0,60% 40%,100% 50%,60% 60%,50% 100%,40% 60%,0 50%,40% 40%)'}}/>;});
 
-// Words of the narration appear one by one while they are spoken (timing spread by word length over the scene).
-const Captions=({text,frame,total,accent,lead})=>{
+// Caption boundaries are measured against the narration, in scene-local seconds.
+const Captions=({text,timed=[],frame,total,accent,lead})=>{
   const words=String(text||'').split(/\s+/).filter(Boolean);
   if(!words.length) return null;
   const weights=words.map(w=>Math.max(2,w.length)+1),sum=weights.reduce((a,b)=>a+b,0);
   const span=Math.max(10,total-lead-14);let at=lead,starts=[];
-  words.forEach((w,i)=>{starts.push(at);at+=span*weights[i]/sum;});
+  words.forEach((w,i)=>{starts.push(timed.length?timed[i].start*30:at);at+=span*weights[i]/sum;});
   const active=starts.reduce((n,s,i)=>frame>=s?i:n,-1);
   const PAGE=4,page=Math.max(0,Math.floor(active/PAGE)),shown=words.slice(page*PAGE,page*PAGE+PAGE);
-  if(active<0) return null;
+  if(active<0 || (timed.length && frame>=timed.at(-1).end*30)) return null;
   return <div style={{position:'absolute',left:56,right:56,bottom:250,display:'flex',flexWrap:'wrap',justifyContent:'center',gap:'6px 22px',
       direction:'rtl',fontFamily:FONT,fontWeight:900,fontSize:92,lineHeight:1.32,textAlign:'center'}}>
-    {shown.map((w,k)=>{const index=page*PAGE+k,begun=frame>=starts[index],isNow=index===active;
+    {shown.map((w,k)=>{const index=page*PAGE+k,begun=frame>=starts[index],isNow=index===active && (!timed.length || frame<timed[index].end*30);
       const pop=spring({frame:frame-starts[index],fps:30,config:{damping:12,stiffness:210}});
       return <span key={index} style={{display:'inline-block',opacity:begun?1:0,transform:`scale(${begun?(isNow?1+.16*pop:1):.6}) translateY(${begun?(1-pop)*18:0}px)`,
         color:isNow?accent:'#fff',textShadow:'0 6px 26px rgba(0,0,0,.85),0 0 3px rgba(0,0,0,.9)',WebkitTextStroke:'2px rgba(0,0,0,.35)',paintOrder:'stroke fill'}}>{w}</span>;})}
@@ -117,7 +117,7 @@ const Scene=({scene,index,count,lead,total})=>{
         return <span key={i} style={{display:'inline-block',opacity:p,transform:`translateY(${(1-p)*-46}px) scale(${.85+.15*p})`,filter:`blur(${(1-p)*8}px)`}}>{word}</span>;})}
     </div>
     <div style={{position:'absolute',top:headline.length>26?236:262,left:'50%',height:7,width:220*enter,marginLeft:-110*enter,borderRadius:7,background:accent,boxShadow:`0 0 22px ${accent}`}}/>
-    <Captions text={scene.narration_text} frame={t} total={total-lead} accent={accent} lead={5}/>
+    <Captions text={scene.narration_text} timed={scene.caption_words} frame={frame-lead} total={total-lead} accent={accent} lead={5}/>
     {isLast?<div style={{position:'absolute',left:'50%',bottom:96,width:140,height:14,marginLeft:-70,borderRadius:14,background:accent,transform:`scaleX(${pulse*2.4})`,boxShadow:`0 0 30px ${accent}`}}/>:null}
     {/* progress ticks */}
     <div style={{position:'absolute',left:60,right:60,top:48,display:'flex',gap:8,direction:'ltr'}}>

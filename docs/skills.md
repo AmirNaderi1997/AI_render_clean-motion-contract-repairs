@@ -3,6 +3,23 @@
 هر «مهارت» یک کار مشخص است که سیستم (یا Agent) باید بلد باشد. برای هر مهارت: ورودی، خروجی، ابزار، و معیار قبولی.
 همه‌ی مهارت‌ها از طریق **Edit Plan JSON** (تعریف‌شده در [plan.md](plan.md)) به هم وصل می‌شوند.
 
+## Motion — maintained templates and acceptance
+
+The sections below also contain roadmap descriptions. This table identifies
+the current motion implementation and the evidence needed for its claims.
+Branch-specific results are in [motion-caption-evidence.md](motion-caption-evidence.md).
+
+| Capability | Implementation files | Acceptance evidence |
+| --- | --- | --- |
+| HyperFrames-first product reel; Remotion candidate after failure | `app/jobs.py`, `engine/hyperframes/product_reel.py`, `engine/remotion_renderer.py`, `remotion/render.mjs` | `tests/test_motion_contract_repairs.py` tests renderer failure recording and publication hold with mocked engines; caption fixture renders actual browser/MP4 output. No served app run claimed. |
+| Speech-timed product caption pages and active-word colour | `brain/tts.py`, `brain/content_creator.py`, `engine/narration_alignment.py`, `engine/hyperframes/product_reel.py`, `remotion/src/DirectedVideo.jsx` | `tests/test_narration_alignment.py` mocks TTS/STT, checks script fidelity, cache reuse, timeline times and estimated-caption hold. `scripts/product_caption_fixture.py` checks decoded word changes within one frame in both engines. Live relay/TTS/STT remains pending. |
+| Shared budgets and owned media | `engine/motion_contract.py`, both renderer adapters | `tests/test_motion_contract_repairs.py` rejects missing/outside/symlink assets and invalid frame/scene budgets before rendering. |
+| Template-only talking_2 upper-panel beats; explicit full-frame gate | `brain/talking_reel_2.py`, `engine/hyperframes/{builder,schema,renderer}.py`, `engine/talking_styles/talking_2.py`, `app/talking_reel.py` | `tests/test_talking2_layout.py`, `tests/test_motion_contract_repairs.py`; optional render fixtures are separate from default unit tests. Default builder rejects full-frame without `allow_full_frame=True`. Strict local-only 260487f speech-grounding/evidence schema is not present. |
+| 1080×1920, 30 fps delivery and review hold | `engine/technical_qc.py`, `app/jobs.py`, `app/talking_reel.py` | Contract tests reject wrong size/fps and exercise worker holds. Caption fixture saves ffprobe output, full-decode results and frame sheets. Human review and a served run remain separate. |
+| Persian RTL and local Ray fonts | `engine/hyperframes/fonts.py`, `engine/persian_text.py`, maintained HyperFrames/React templates | Persian fixture captions, phone-size frame sheet and existing layout tests. No claim of complete Persian linguistic/audio acceptance. |
+| Chat motion graphic disabled; models emit data only | `app/motion_graphic.py`, `creative/motion_graphic.py`, maintained builders | `tests/test_motion_contract_repairs.py` tests disabled chat entry without provider calls and worker template-only paths. |
+| Agent motion guidance | `.claude/skills/ai-render-motion/SKILL.md` | Skill frontmatter validation and code comparison. A skill document is not proof a feature works. Runtime digest and local-only `brain/motion_llm.py` are not installed. |
+
 ---
 
 ## A. موتور (Engine) — مرحله ۱

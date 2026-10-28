@@ -472,7 +472,7 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                             raise ValueError("Set an ElevenLabs voice ID for generated narration.")
                         tts_result = generate_narration(
                             scene.narration_text, gen_dir, provider="elevenlabs", language=storyboard.language,
-                            context=casting_context, **voice_kwargs,
+                            context=casting_context, with_timestamps=True, **voice_kwargs,
                         )
                         record = {
                             "scene_index": scene.index,
