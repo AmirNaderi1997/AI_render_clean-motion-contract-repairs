@@ -23,13 +23,20 @@ def _hf_cli() -> list[str] | None:
     return None
 
 
+def _hf_model_cached() -> bool:
+    """The remove-background model is already on disk (a server without internet could never fetch it, and must not wait for it)."""
+    import os
+    root = Path(os.environ.get("HYPERFRAMES_CACHE_DIR") or Path.home() / ".cache" / "hyperframes")
+    return any((root / "background-removal" / "models").glob("*.onnx")) and any((root / "optional").glob("onnxruntime-node@*"))
+
+
 def engines() -> list[str]:
     """Matte engines usable here, best first: HyperFrames' own remove-background, then the MediaPipe selfie segmenter."""
     import os
     from engine import face_effects
     want = os.environ.get("PERSON_MATTE_ENGINE", "auto")
     found = []
-    if _hf_cli() and want in ("auto", "hyperframes"):
+    if _hf_cli() and (want == "hyperframes" or (want == "auto" and _hf_model_cached())):
         found.append("hyperframes")
     if face_effects.available() and want in ("auto", "mediapipe", "hyperframes"):
         found.append("mediapipe")
