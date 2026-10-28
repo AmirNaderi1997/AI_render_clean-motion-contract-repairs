@@ -72,6 +72,19 @@ class ProjectRefInput(ToolInput):
     external_ref: str
 
 
+class InstagramContentCheckInput(ToolInput):
+    operation: str = Field(pattern=r"^(hook|beats|caption|humanize|audit_text|swipe)$")
+    text: str = Field(min_length=1, max_length=20_000)
+    language: str = Field(pattern=r"^(fa|en)$")
+    wpm: float = Field(default=150, ge=60, le=300, allow_inf_nan=False)
+    target: float | None = Field(default=None, ge=1, le=600, allow_inf_nan=False)
+
+
+def _instagram_content_check(args: InstagramContentCheckInput) -> dict:
+    from hermes.services.instagram_quality import evaluate
+    return evaluate(args.operation, args.text, args.language, wpm=args.wpm, target=args.target)
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str
@@ -182,6 +195,7 @@ def _cancel(args: ProjectRefInput) -> dict:
 TOOLS = {
     spec.name: spec for spec in (
         ToolSpec("search_creative_resources", "Search shared creative metadata. Catalog-only entries cannot be rendered. No installation, uploads or project changes.", ResourceSearchInput, "catalog_read", False, True, _search_resources),
+        ToolSpec("instagram_content_check", "Check supplied Instagram hooks, script timing, captions or naturalness locally. English: hook, beats, caption, humanize, audit_text, swipe. Persian/mixed Persian: hook, beats, caption, humanize only; preserve ZWNJ. Heuristics are not virality predictions. No research, publishing or media generation.", InstagramContentCheckInput, "supplied_text", False, True, _instagram_content_check),
         ToolSpec("inspect_media", "Read duration, streams and dimensions of an owned upload.", InspectMediaInput, "owned_attachment", False, True, _inspect_media),
         ToolSpec("inspect_url", "Read a public product page and download verified product images.", InspectUrlInput, "public_url", False, True, _inspect_url),
         ToolSpec("localize_video", "Run the existing Persian Localize analysis pipeline.", LocalizeInput, "owned_attachment", True, False, _localize),

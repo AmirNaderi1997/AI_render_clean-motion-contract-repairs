@@ -71,3 +71,7 @@ deploy/**/.vercel/
 vendor/
 # Owner-specific recovery snapshots must never enter source control.
 /recovery/
+
+# Isolated Hermes local preview (credentials and test data).
+/.local-hermes-test/
+/web/node_modules

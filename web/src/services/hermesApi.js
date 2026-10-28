@@ -31,6 +31,10 @@ const query = (values = {}) => {
 };
 
 export const hermesApi = {
+  getComposioSettings: (options) => request('/composio', options),
+  setComposioEnabled: (enabled) => request('/composio', { method: 'PUT', body: { enabled } }),
+  getComposioConnections: () => request('/composio/connections'),
+  connectComposioApp: (application) => request('/composio/connect', { method: 'POST', body: { application } }),
   getInstagramSettings: () => request('/settings/instagram'),
   saveInstagramSettings: (credentials) => request('/settings/instagram', { method: 'POST', body: credentials }),
   deleteInstagramSettings: () => request('/settings/instagram', { method: 'DELETE' }),

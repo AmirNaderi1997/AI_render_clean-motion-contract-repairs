@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     HERMES_PUBLIC_MEDIA_BASE_URL: str = ""
     APP_ENV: str = "development"
     INSTAGRAM_GRAPH_VERSION: str = "v25.0"
+    COMPOSIO_API_KEY: str = ""
+    COMPOSIO_INSTANCE_ID: str = ""
+    COMPOSIO_TOOLKITS: str = "instagram"
+    COMPOSIO_CALLBACK_URL: str = ""
+    COMPOSIO_READ_TOOLS: str = ""  # Explicit reviewed slugs; empty enables no execution.
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

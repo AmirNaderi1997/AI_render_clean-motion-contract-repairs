@@ -2,6 +2,7 @@ let accessToken: string | null = null;
 let refreshPromise: Promise<string | null> | null = null;
 
 export const isLocalDevelopment = import.meta.env.DEV &&
+  import.meta.env.VITE_REQUIRE_LOCAL_AUTH !== '1' &&
   (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" || window.location.hostname === "::1");
 
 export function getToken(): string | null {

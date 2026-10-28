@@ -1,0 +1,282 @@
+# Hermes integration: architecture and implementation status
+
+## Audited architecture
+
+The existing `hermes/` application is EditorGPT's Instagram FastAPI service,
+not NousResearch Hermes Agent. Its account ownership, encrypted settings,
+scheduled publishing claims and authentication remain authoritative.
+
+| Component | Existing responsibility | Integration boundary |
+| --- | --- | --- |
+| `hermes/main.py`, `routers/`, `security.py` | Instagram API, per-user authorization | Connected apps and bounded agent operations |
+| `hermes/models.py`, `database.py` | Shared SQLAlchemy users; local JSON fallback | Encrypted provider settings and owned connection references |
+| `app/agents/medium/` | LangGraph checkpoints, approval interrupts, tool ledger | Typed, bounded Hermes tools; no second render job lifecycle |
+| `app/studio_tools.py`, `studio_activity.py` | Shared validated tools and public activity | Reuse for progress and permission enforcement |
+| `creative/director.py` | Concepts, scripts, visual direction | Structured approved scripts, not automatic rendering |
+| `brain/lm_gateway.py` | Provider configuration and accounting | Retained; no separate model defaults |
+| Native FFmpeg, HyperFrames, Remotion | Media production | Unchanged |
+| Official Hermes Agent | Native skills, conversational research | Separate managed runtime, not replacement of `hermes/` |
+
+The independent local installation is official Hermes v0.22.5, revision
+`bf0203a794a07aac3ff764972ab9087baa4e4f4e`. It has an isolated home and no model
+credentials configured. Do not use its unrestricted terminal or raw MCP actions
+as an authenticated web-user tool. EditorGPT must remain the permission boundary.
+
+## Pinned Instagram skills
+
+`scripts/install_instagram_skills.py` installs all 13 definitions and supporting
+resources through Hermes' **native** quarantine, security scan, install ledger
+and discovery. It does not create another skill registry or edit upstream files.
+Source: Jake Schincariol's MIT-licensed `instagram-agent-skill`, pinned at
+`d03c56bb598be770c60b201f94237e5d1a4268a6`. Every installed skill retains the license.
+The voice template is a reference, not a shared user profile.
+
+Run with the official Hermes managed Python, passing explicit source, runtime
+and isolated home directories. The source checkout must match the pinned commit.
+Existing installations are not overwritten. Upgrades require source review and
+an explicit pin update. Removal uses native `hermes skills uninstall <name>`.
+
+Important upstream limitations: its instructions refer to Claude home paths;
+web integration must substitute authenticated project references, never a shared
+`~/.claude/instagram` directory. Its English humanizer deletes Persian ZWNJ and
+its English timing regex misses Persian words. Do not use those scripts directly
+for Persian content. Heuristic scores are editing aids, not virality predictions
+or scientific AI-authorship determinations.
+
+## Connected-apps foundation
+
+`hermes/services/composio_sessions.py` uses the official Sessions API from
+Composio 0.30.0. `hermes/routers/connected_apps.py` uses existing JWT identity;
+client-supplied identities/session IDs are rejected. References use encrypted
+`HermesSetting` values, so no additional database migration is needed for this
+foundation (the existing Hermes settings migration must already be applied).
+Unknown applications, disabled integration and changed session policies fail
+closed. Sandbox, arbitrary proxy execution and connection-management agent tools
+are disabled. The session currently allows read-only tagged tools only.
+
+Settings includes a small Connected Apps section, using the existing design
+tokens. Enable/disable, explicit OAuth-link creation and connection checks are
+implemented. A redirect is **not** considered a successful connection; status
+comes from Composio. Disabling is not provider-side revocation.
+
+No generic SDK execution endpoint, raw MCP URL or general proxy is exposed.
+A separately gated read-only endpoint is described below. External mutations
+remain unavailable pending integration with the Studio approval ledger.
+
+### Setup (not automatically deployed)
+
+1. Install `requirements-composio.txt` in the **EditorGPT backend environment**,
+   not in the official Hermes managed environment. Resolve alongside the existing
+   application lock; do not update the running environment blindly.
+2. Configure `COMPOSIO_API_KEY` via server secret management, never frontend env.
+3. Set `COMPOSIO_INSTANCE_ID` to a persistent installation-specific random ID.
+   Keep it stable across restarts; separate development and production IDs.
+4. Set `COMPOSIO_CALLBACK_URL` to the installation's HTTPS `/hermes/settings` URL.
+   The isolated development launcher supplies `http://127.0.0.1:5187/hermes/settings`.
+   HTTP callbacks are accepted only for literal loopback hosts in development;
+   production and LAN addresses still require HTTPS. Callback query parameters
+   never establish account ownership: the settings UI rechecks the authenticated
+   user's session through Composio before displaying an active connection.
+5. Set `COMPOSIO_TOOLKITS=instagram` (default). Only administrator-configured
+   applications are allowed. Empty means none, not the whole catalog.
+6. Keep a persistent `HERMES_ENCRYPTION_KEY` and existing database configuration.
+7. Deploy/restart the Hermes service and frontend together after review. Open
+   Settings, enable, choose Connect, complete hosted OAuth, then check connections.
+
+Current tests use mocks only. Real OAuth, account revocation, multiple-account
+selection and provider permissions require authorized integration tests before
+production sign-off. No new background service or renderer is introduced.
+
+### Rollback
+
+Disable Composio in Settings, restore the previous frontend/backend release and
+remove the optional dependency on the next environment rebuild. Existing Instagram
+credentials/accounts are unchanged. Encrypted Composio settings may remain inert;
+rolling back code does not revoke OAuth consent. Revoke consent at the provider
+or Composio dashboard if required. Do not rotate encryption keys as a rollback.
+
+## Pending acceptance gates
+
+### Shared Studio/LangGraph content checks (implemented)
+
+`instagram_content_check` is now registered in `app/studio_tools.py` and exposed
+through the existing Medium tool catalog and strict EditingPlan schema. It uses
+the same activity events, checkpoints, per-user run ownership and operation
+ledger as existing editing tools. It is read-only, bounded and idempotent; no
+approval is needed to inspect supplied text. A completed operation is reused
+after recovery rather than executed again. No provider/model/agent-mode defaults
+change. The planner is told to treat warnings as suggestions and never invent
+metrics to improve a score.
+
+Seven integration tests cover actual Persian checks, schema validation, activity
+events, persisted results, replay protection and run ownership. Together with
+the pre-existing Studio agent suite and content checks: 61 tests passed.
+
+### Native Hermes bridge (implemented, connection not provisioned)
+
+`integrations/hermes/editor-instagram-tools` is an out-of-tree native Hermes
+plugin. It registers `editorgpt_instagram_check`, which calls the authenticated
+`POST /api/hermes/content-tools/check` endpoint. The endpoint reuses the shared
+Studio tool implementation and limits concurrent checks to two per API process.
+The plugin cannot supply user IDs, paths, shell commands or endpoint URLs in
+tool arguments. It blocks redirects and ambient proxies and sanitizes errors.
+
+The plugin resolves `EDITORGPT_API_ORIGIN` and `EDITORGPT_ACCESS_TOKEN` using
+Hermes' profile-scoped secret API on **each call**, never a global cached token.
+The origin must be HTTPS, or HTTP on loopback only, with no embedded credentials,
+path, query or fragment. The token is an existing EditorGPT access token, not a
+second authentication system. Do not put it in chat, frontend configuration,
+source control or a shared multi-user profile. Expired access returns an explicit
+authentication error; automatic token refresh/provisioning is not yet implemented.
+
+For a trusted single-user setup, install the plugin directory under the isolated
+`HERMES_HOME/plugins/editor-instagram-tools`, run native `hermes plugins validate`
+and enable with `hermes plugins enable editor-instagram-tools --no-allow-tool-override`.
+Provision profile secrets through the deployment's secure credential mechanism.
+For hosted multi-user invocation, the application must bind the authenticated
+user's short-lived credentials per execution; do not configure one shared user's
+bearer token for all web users. This hosted invocation wiring remains pending.
+
+Verified: official Hermes v0.22.5 validator passed every check, including isolated
+registration, declared tools, no core override, safe scan and host-isolation
+compatibility. The plugin is installed and enabled in the isolated local Hermes
+profile. No access token or API origin has been provisioned, and no live agent
+or account call was made. Eight more tests cover the authenticated endpoint,
+profile credential resolution, bad origins, error sanitization and registration;
+combined Studio/content/bridge suite: 69 passed. Local running app and production
+were not restarted or changed.
+
+Backend-approved mutations, provider
+revocation, per-user skill controls, scoped brand voice, structured Creative
+Director handoff and mutating Composio execution through LangGraph are not yet delivered. Installation alone
+does not activate those paths. Policy changes currently need an administrator to
+review/reset the affected saved session; there is no automatic widening.
+No live account or paid model calls are required for installation tests.
+
+Verified locally: all 13 skills passed native security scans and appear enabled
+in `hermes skills list --source hub`; a second installation was a no-op for all
+13. Three offline installer contract tests passed. No production changes were made.
+
+`hermes/services/instagram_quality.py` now provides bounded execution of all six
+original English helpers with fixed commands, stdin-only text, an eight-second
+timeout, CPU/file-output limits and a credential-free environment. Persian hook,
+caption, conservative normalization and beat-sheet adapters preserve ZWNJ/ZWJ
+and support Persian/Arabic/English digits. Unsupported Persian scoring operations
+fail explicitly; no synthetic virality score is substituted. Speaking duration
+is an estimate, not forced alignment. Combined offline tests: 22 passed.
+The reviewed upstream pack is vendored unchanged under `vendor/instagram-agent-skill`.
+These helpers are now exposed through the shared Studio tool and authenticated
+Hermes content-check endpoint described above.
+
+Composio implementation must use a stable server-derived user identity and reuse
+persisted session IDs. Explicit toolkit allowlists and disabled remote sandbox
+tools are required. Discovery is not authorization; every mutation must pass the
+existing backend approval contract. API keys stay in server secret management.
+
+Validation: 30 Python tests (including real Composio SDK with mocked HTTP), one
+React/jsdom settings test and full frontend TypeScript checking passed. The SDK
+contract test confirmed its public `sandbox` option maps to the API `workbench`
+field with execution disabled. The SDK was installed only in a temporary test
+directory; running local and production application environments were unchanged.
+No hardware-specific mobile/PWA testing or live OAuth success is claimed.
+
+### Isolated local preview on 5187
+
+`scripts/run_hermes_local.py` starts the frontend on loopback port 5187, Studio
+API on 8192 and Hermes API on 8193. Run it with an existing EditorGPT Python
+environment and frontend dependencies installed. It keeps test projects, Hermes
+data and persistent encryption material in gitignored `.local-hermes-test` and
+does not load the prior application's `.env` or connect to its databases.
+Local authentication accounts are in this checkout's gitignored `jobs/users.json`.
+Use a fresh local test account; old accounts and projects were not removed.
+
+`VITE_REQUIRE_LOCAL_AUTH=1` opts this preview out of the normal localhost UI bypass
+so Hermes receives a real JWT. This does not weaken backend authentication or
+change other local installations' default behavior. Composio credentials are not
+copied or invented; its configured-status warning is expected until the server
+secret is provided. Reviewed read execution remains default-deny.
+
+The explicit `scripts/check_hermes_local.py` smoke test creates a named local
+verification account and checks frontend-proxied signup/authentication, encrypted
+settings persistence and an actual Persian content check. It prints no secrets
+and makes zero external calls. Do not run it against production. The test passed
+on the preview; both API health checks and the actual browser login page passed.
+
+Reviewed references: [Sessions](https://docs.composio.dev/docs/configuring-sessions),
+[authentication](https://docs.composio.dev/docs/authentication/manually-authenticating),
+official `composio==0.30.0` wheel source and the pinned Hermes source above.
+
+## Contextual tool discovery (implemented)
+
+`POST /api/hermes/composio/discover` accepts only an application and bounded use
+case query. Existing JWT authentication determines the user and the encrypted
+Session reference; callers cannot submit either identity. The SDK's current
+`session.search(query=...)` method is used within that user's restricted Session.
+It is not a catalog-wide context dump or unrestricted MCP connection.
+
+The response projects at most six matching tools from the requested allowed
+application. Only name, bounded description and a syntactically valid bounded
+input schema are returned. Incomplete/invalid/oversized schemas are marked
+unavailable. Raw execution guidance, memory, account details, session identifiers
+and connection payloads are omitted. Every returned tool is explicitly marked
+`executable: false`; discovery does not grant execution permission.
+
+Native Hermes plugin v0.2.0 registers `editorgpt_discover_app_tools` alongside
+the content check. It calls the fixed authenticated discovery endpoint with the
+current profile's credentials; there is no model-selected URL or session ID.
+The plugin remains compatible with host isolation and cannot override built-ins.
+Composio calls are capped at four concurrent requests per API process; SDK HTTP
+timeouts and disabled retries remain. Provider HTTP 429 is returned as an
+explicit sanitized rate-limit error, not retried invisibly.
+
+Verification: 87 Python tests passed, including the real SDK search response
+model and fake HTTP transport, invalid schemas, other-toolkit filtering, user
+scope, failure/rate-limit handling and both native plugin tools. Official Hermes
+plugin validation passed with a safe security scan and no warnings. No live
+Composio, OAuth, Instagram or model call was made. The running EditorGPT app and
+server remain unchanged. External action execution and its approval UI are still
+pending, not represented as working by this discovery feature.
+
+Reference: [official search contract](https://docs.composio.dev/toolkits/meta-tools/search_tools)
+and `composio-client==2.0.0rc19` generated `SessionSearchResponse` types.
+
+## Reviewed read-only execution (implemented; default deny)
+
+`POST /api/hermes/composio/read` accepts a strict application, tool slug and
+bounded arguments. The authenticated user determines the Session. It accepts no
+user/session/account selector, approval boolean, provider key, URL or command.
+
+Enable only after administrator review by setting `COMPOSIO_READ_TOOLS` to a
+comma-separated list of **actual, verified read tool slugs**. Empty (the default)
+permits no execution. Meta tools beginning `COMPOSIO_` cannot be allowlisted.
+Do not copy fictional test slugs into production configuration.
+
+For every call, the backend retrieves current metadata through the official
+`client.tools.get_raw_composio_tool_by_slug` method. It verifies the application,
+exact slug, non-deprecated state, `readOnlyHint` tag and absence of create/update/
+destructive tags. Schema and input size are bounded; input must match the actual
+JSON Schema. External `$ref`/dynamic/recursive references are rejected without
+network resolution. Only then does `session.execute` run the read. The existing
+read-only Session policy is an independent additional boundary. No mutating
+operation can be approved by sending an `approved` field to this endpoint.
+
+Only confirmed `result_type=completed` returns success. Failed/blocked results
+produce sanitized errors and are not silently retried. Credential-shaped fields
+and configured API-key values are redacted; response size/depth are bounded.
+No raw SDK errors, shell tool, HTTP proxy or credential-bearing MCP URL is exposed.
+
+Native Hermes plugin v0.3.0 adds `editorgpt_read_connected_app`. Medium gains
+`discover_connected_app_tools` and `read_connected_app` using the same strict
+input contracts. The caller identity comes from the existing owned run, not model
+arguments. Existing activity, result persistence and completed-operation replay
+protection apply; no additional orchestrator or job state machine is introduced.
+Lite/Medium selection and model/provider configuration are unchanged.
+
+104 combined Python tests passed with external APIs mocked, including original
+Studio agent regressions, strict read authorization, JSON Schema validation,
+credential redaction, user isolation, no failed-read retry, native registration
+and Medium run-owner propagation. Official Hermes validation passed all checks
+with a safe security scan. No live account action was performed. The installed
+isolated plugin is updated to v0.3.0; running EditorGPT and production remain
+unchanged. Publishing/messaging/deletion approval flows and a live OAuth/permission
+test remain acceptance gates, not completed functionality.
