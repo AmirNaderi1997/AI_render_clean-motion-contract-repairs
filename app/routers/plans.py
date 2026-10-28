@@ -19,6 +19,22 @@ class PlanBody(BaseModel):
     plan: dict
 
 
+@router.post("/{job_id}/creative-resources/preview", status_code=202,
+             dependencies=[Depends(require_job_access)])
+def preview_resources(job_id: str, body: PlanBody, request: Request):
+    """Explicit native draft render of the saved project; no model generation."""
+    job = get_job_for_request(request, job_id)
+    if (body.plan.get('generation_meta') or {}).get('remotion'):
+        raise HTTPException(422, "This preview control supports native EditPlan projects only")
+    if job.render.status in {'running', 'queued'}:
+        raise HTTPException(409, "A render is already active")
+    try:
+        jobstore.start_render(job, preview=True, loudnorm=False, expected_plan=body.plan)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(409, str(exc)) from None
+    return {"status": job.render.status, "preview": True, "paid_generation": False}
+
+
 @router.put("/{job_id}/plan", dependencies=[Depends(require_job_access)])
 def put_plan(job_id: str, body: PlanBody, request: Request, db: AsyncSession = Depends(get_db)):
     job = get_job_for_request(request, job_id)

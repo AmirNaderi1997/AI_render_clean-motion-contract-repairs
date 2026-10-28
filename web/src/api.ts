@@ -698,6 +698,11 @@ export const api = {
   async planCreativeResources(id: string, signal?: AbortSignal): Promise<{ version: number | null; plan: any; effects: { id: string; name: string }[]; transitions?: { id: string; name: string }[] }> {
     return j(await authFetch(`${BASE}/jobs/${encodeURIComponent(id)}/creative-resources`, { signal }));
   },
+  async previewCreativeResources(id: string, plan: any): Promise<{ status: string }> {
+    return j(await authFetch(`${BASE}/jobs/${encodeURIComponent(id)}/creative-resources/preview`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ plan }),
+    }));
+  },
   async applyResourceOperations(id: string, operations: Record<string, unknown>[], baseVersion: number | null, basePlan: any): Promise<{ ok: boolean; plan: any; version: number }> {
     return j(await authFetch(`${BASE}/jobs/${encodeURIComponent(id)}/operations`, {
       method: "POST", headers: { "content-type": "application/json" },
