@@ -5,24 +5,29 @@ import {friendlyError} from '../ui';
 import {EditCard,EditGrid} from './EditCard';
 
 type Clip={id:string;status:string;ready:boolean;url?:string;remote_job_id?:string};
-export function MotionScenes({jobId,onSaved}:{jobId:string;onSaved:()=>void}) {
+export function MotionScenes({jobId,onSaved,revision}:{jobId:string;onSaved:()=>void;revision?:string}) {
   const [state,setState]=React.useState<{configured:boolean;timeline_supported:boolean;placement_kind?:string;sentences?:{i:number;text:string}[];items:Clip[]}|null>(null);
   const [sentence,setSentence]=React.useState<number|undefined>();
   const [prompt,setPrompt]=React.useState('');
   const [duration,setDuration]=React.useState(5),[at,setAt]=React.useState(0);
   const [aspect,setAspect]=React.useState('9:16'),[effort,setEffort]=React.useState('light');
   const [error,setError]=React.useState(''),[notice,setNotice]=React.useState(''),[busy,setBusy]=React.useState(false);
+  const [refreshTick,setRefreshTick]=React.useState(0);
   React.useEffect(()=>{
     let live=true;
-    const refresh=()=>api.motionScenes(jobId).then(v=>{if(live)setState(v);}).catch(e=>{if(live)setError(friendlyError(e,'load the motion clips'));});
-    void refresh();const timer=window.setInterval(()=>void refresh(),5000);
-    return()=>{live=false;window.clearInterval(timer);};
-  },[jobId]);
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    setState(null);setError('');setNotice('');
+    const refresh=()=>api.motionScenes(jobId).then(v=>{if(!live)return;setState(v);
+      if(v.items.some((item:Clip)=>!item.ready&&['queued','running','pending'].includes(item.status)))timer=setTimeout(()=>void refresh(),5000);
+    }).catch(e=>{if(live)setError(friendlyError(e,'load the motion clips'));});
+    void refresh();
+    return()=>{live=false;if(timer)clearTimeout(timer);};
+  },[jobId,revision,refreshTick]);
   async function generate() {
     if (!prompt.trim() || busy) return;
     if (!window.confirm('ساخت کلیپ موشن از اعتبار حساب شما استفاده می‌کند؛ هزینهٔ دقیق مشخص نیست. شرح این صحنه برای سرویس موشن ارسال شود؟ فقط یک درخواست ارسال می‌شود؛ اگر قبلاً همین صحنه ثبت شده باشد، همان جاب پیگیری می‌شود.'))return;
     setBusy(true);setError('');setNotice('');
-    try{await api.createMotionScene(jobId,{prompt,duration,aspect,effort,confirmed:true});setNotice('Request accepted. Existing sessions are reused; no automatic paid retries.');}
+    try{await api.createMotionScene(jobId,{prompt,duration,aspect,effort,confirmed:true});setRefreshTick(n=>n+1);}
     catch(e){setError(friendlyError(e,'create this motion clip'));}
     finally{setBusy(false);}
   }
@@ -33,7 +38,7 @@ export function MotionScenes({jobId,onSaved}:{jobId:string;onSaved:()=>void}) {
     finally{setBusy(false);}
   }
   // Only where a motion clip can actually be placed (motion projects and talking style 2); nothing for other videos.
-  if (!state || !state.timeline_supported) return null;
+  if (!state || !state.timeline_supported || !state.items.length) return null;
   const top=state.placement_kind==='talking_top';
   const STATUS:Record<string,string>={ready:'آماده',running:'در حال ساخت',queued:'در صف',failed:'ناموفق',error:'ناموفق'};
   return <EditCard title="کلیپ موشن هوشمند" summary={state.items.length?`${state.items.length} کلیپ`:'نمودار، دیاگرام و صحنه‌های بصری بی‌صدا'}

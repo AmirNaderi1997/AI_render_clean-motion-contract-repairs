@@ -95,6 +95,11 @@ textarea.input { resize: vertical; line-height: 1.5; }
 .badge[data-tone="warning"] { background: var(--warning-soft); color: var(--warning); }
 .badge[data-tone="error"] { background: var(--error-soft); color: var(--error); }
 .badge[data-tone="working"] { color: var(--text); }
+.project-status-dot { display: inline-block; flex: none; width: 7px; height: 7px; margin-inline: 6px; border-radius: 50%; background: var(--text-3); }
+.project-status-dot[data-tone="success"] { background: var(--success); }
+.project-status-dot[data-tone="warning"] { background: var(--warning); }
+.project-status-dot[data-tone="error"] { background: var(--error); }
+.project-status-dot[data-tone="working"] { background: var(--ink); }
 .badge[data-tone="working"] i { animation: pulse-dot 1.4s ease-in-out infinite; }
 
 /* ── Progress ────────────────────────────────────────────── */

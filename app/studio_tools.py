@@ -27,6 +27,18 @@ class InspectUrlInput(ToolInput):
     output_dir: str
 
 
+class ResourceSearchInput(ToolInput):
+    query: str = Field(default="", max_length=300)
+    engine: str | None = None
+    availability: str | None = None
+    limit: int = Field(default=6, ge=1, le=12)
+
+
+def _search_resources(args: ResourceSearchInput) -> dict:
+    from creative.resources import search_resources
+    return search_resources(args.query, engine=args.engine, availability=args.availability, limit=args.limit)
+
+
 class LocalizeInput(ToolInput):
     source_path: str
     filename: str
@@ -169,6 +181,7 @@ def _cancel(args: ProjectRefInput) -> dict:
 
 TOOLS = {
     spec.name: spec for spec in (
+        ToolSpec("search_creative_resources", "Search shared creative metadata. Catalog-only entries cannot be rendered. No installation, uploads or project changes.", ResourceSearchInput, "catalog_read", False, True, _search_resources),
         ToolSpec("inspect_media", "Read duration, streams and dimensions of an owned upload.", InspectMediaInput, "owned_attachment", False, True, _inspect_media),
         ToolSpec("inspect_url", "Read a public product page and download verified product images.", InspectUrlInput, "public_url", False, True, _inspect_url),
         ToolSpec("localize_video", "Run the existing Persian Localize analysis pipeline.", LocalizeInput, "owned_attachment", True, False, _localize),

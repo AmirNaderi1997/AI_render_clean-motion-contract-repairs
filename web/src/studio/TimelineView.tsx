@@ -5,9 +5,13 @@ import { CaptionCanvas } from "./CaptionCanvas";
 import { Look, lookIsEmpty } from "./canvas";
 import { AuthenticatedMedia } from "../AuthenticatedMedia";
 import { friendlyError } from "../ui";
+import { Icon, type IconName } from "../components/Icon";
+import { effectLabel } from "../ResourceEffectEditor";
 import { CaptionForm, MUSIC_LIMITS, MusicForm, PictureForm, TYPE_LABEL, VIA_LABEL, captionForm, captionOp, captionProblem, clock, findElement, musicChanged, musicEdits, musicForm, musicProblem, pictureForm, pictureOp, pictureProblem, playerMatches, stackRows, syncNotice, ticks } from "./timeline";
 
 const HEADER = 92;   // px, sticky track labels
+const TRACK_ICONS: Record<string, IconName> = {video:"film",broll:"image",title:"captions",caption:"captions",motion:"motion",effect:"wand",audio:"mic",music:"music"};
+const elementLabel = (item: DocElement) => item.type === "effect" ? effectLabel({id: item.props.resource_id || `editorgpt:${item.label}`, name: item.label}) : item.label;
 
 /** Caption editor: text, timing and hiding. Every save becomes a new plan version that needs approval. */
 function CaptionEditor({ project, element, duration, onChanged, look, onLook }: { project: StudioProject; element: DocElement; duration: number; onChanged: () => void; look: Look; onLook: (look: Look) => void }) {
@@ -211,11 +215,14 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
   const [revision, setRevision] = React.useState(0);     // bumped when the timeline changed without the project record changing (Localize looks)
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const laneRef = React.useRef<HTMLDivElement>(null);
+  const fitted = React.useRef(false);
 
   React.useEffect(() => {
     let active = true;
     setError("");
-    api.studioDocument(project.id).then(value => { if (active) setDoc(value); })
+    api.studioDocument(project.id).then(value => { if (active) { setDoc(value);
+      if (!fitted.current) { setZoom(Math.max(36, Math.min(180, 320 / Math.max(1, value.duration)))); fitted.current = true; }
+    } })
       .catch(e => { if (active) { setDoc(null); setError(friendlyError(e, "load the timeline")); } });
     // The newest rendered file, listed directly: a plan version awaiting approval does not hide it.
     if (project.engine === "talking") api.studioOutputs(project.id).then(items => { if (active) setLatestFile(items[items.length - 1]?.file ?? null); }).catch(() => undefined);
@@ -303,13 +310,13 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
         </div>
         {doc.tracks.map(track => <div key={track.id} className="tl-track" data-kind={track.kind}>
           {stackRows(track.elements).map((row, rowIndex) => <div key={rowIndex} className="tl-row">
-            <div className="tl-head" dir="rtl">{rowIndex === 0 ? track.label : ""}</div>
+            <div className="tl-head" dir="rtl">{rowIndex === 0 ? <><Icon name={TRACK_ICONS[track.kind]||"film"} size={14}/><span>{track.label}</span></> : null}</div>
             <div className="tl-lane" style={{ width }}>
               {row.map(item => <button key={item.id} type="button" className="tl-el" data-type={item.type} aria-pressed={item.id === selected}
                 data-edited={item.props.edited || undefined} data-deleted={(item.props.deleted || item.props.hidden) || undefined}
                 style={{ left: item.start * zoom, width: Math.max(4, (item.end - item.start) * zoom) }}
-                title={`${item.label}${item.text ? ` — ${item.text}` : ""}`} onClick={() => pick(item)}>
-                <span dir="auto">{item.text || item.label}</span>
+                title={`${elementLabel(item)}${item.text ? ` — ${item.text}` : ""}`} onClick={() => pick(item)}>
+                <span dir="auto">{item.text || elementLabel(item)}</span>
               </button>)}
             </div>
           </div>)}
@@ -320,7 +327,7 @@ export function TimelineView({ project, onChanged, currentOutput }: { project: S
 
     {doc.edit_count || doc.stale_edits.length ? <p className="tl-hint">{doc.edit_count ? `${doc.edit_count} زیرنویس ویرایش‌شده` : ""}{doc.stale_edits.length ? ` · ${doc.stale_edits.length} ویرایش مربوط به زیرنویس‌هایی که دیگر وجود ندارند نادیده گرفته می‌شود` : ""}</p> : null}
     {element ? <section className="tl-detail" aria-label="جزئیات عنصر">
-      <header><b>{TYPE_LABEL[element.type] || element.type}</b><span>{element.label}</span><small dir="ltr">{clock(element.start)} – {clock(element.end)}</small></header>
+      <header><b>{TYPE_LABEL[element.type] || element.type}</b><span>{elementLabel(element)}</span><small dir="ltr">{clock(element.start)} – {clock(element.end)}</small></header>
       {element.text ? <p className="bidi" dir="auto">{element.text}</p> : null}
       {element.source?.label ? <p className="tl-meta">منبع: {element.source.label}{element.source.file ? ` · ${element.source.file}` : ""}
         {element.source.in != null ? <span dir="ltr"> ({clock(element.source.in)}–{clock(element.source.out || 0)} در فایل اصلی)</span> : null}</p> : null}

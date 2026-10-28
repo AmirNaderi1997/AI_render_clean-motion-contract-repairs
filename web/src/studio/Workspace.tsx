@@ -10,6 +10,7 @@ import { renderView } from "./model";
 import { ThinkingRow } from "./Activity";
 import { RenderProgress } from "./RenderProgress";
 import {MotionScenes} from './MotionScenes';
+import { CreativeResources } from './CreativeResources';
 import { LocalizeEdit } from "./LocalizeEdit";
 import { EditCard, EditSwitch } from "./EditCard";
 import { EffectsEditor } from "./EffectsEditor";
@@ -17,6 +18,7 @@ import { PlanReview } from "./PlanReview";
 import { currentVersion, planPhase } from "./plan";
 import { TimelineView } from "./TimelineView";
 import { useTopbarAction } from '../components/ShellContext';
+import { ProjectStatusDot } from '../components/ProjectStatusDot';
 
 export type WorkspaceTab = "preview" | "edit";
 
@@ -154,14 +156,16 @@ function EditPane({ project, onSaved, superseding = false }: { project?: StudioP
     {shown === "timeline" ? <TimelineView project={project} onChanged={onSaved} currentOutput={projectOutputUrl(project)}/> : null}
     {shown === "timeline" ? null : project.engine === "localize" && project.external_ref ? <LocalizeEdit key={project.external_ref} id={project.external_ref} onChanged={onSaved}/>
       : hasPlan(project) ? <PlanReview project={project} onChanged={onSaved} superseding={superseding} footerSlot={footerSlot}/>
+      : project.engine === "motion" && project.external_ref ? null
       : <header className="ws-edit-intro" dir="rtl"><h2>ویرایش این ویدیو</h2><p>تغییر زیرنویس، ریتم، رنگ یا صدا را در چت بگویید. هر چه این نوع ویدیو پشتیبانی کند، همین‌جا کنترلش را می‌بینید.</p></header>}
     {shown === "timeline" ? null : <>
     {project.engine === 'talking' && project.external_ref ? <EffectsEditor key={`fx-${project.external_ref}`} jobId={project.external_ref} onSaved={onSaved}/> : null}
     {project.engine === 'talking' && project.external_ref ? <KeyMoments key={`km-${project.external_ref}`} jobId={project.external_ref} onSaved={onSaved}/> : null}
     {project.engine === 'talking' && project.external_ref && !hasPlan(project) ? <TalkingShade key={project.external_ref} jobId={project.external_ref} onSaved={onSaved}/> : null}
     {project.state?.storyboard?.scenes?.length ? <StoryboardEditor project={project} onSaved={onSaved}/> : null}
-    {project.external_ref && project.engine!=='localize' ? <MotionScenes jobId={project.external_ref} onSaved={onSaved}/> : null}
+    {project.external_ref && project.engine!=='localize' ? <MotionScenes jobId={project.external_ref} revision={project.updated_at} onSaved={onSaved}/> : null}
     </>}
+    <div hidden={shown === "timeline"}><CreativeResources key={project.id} project={project} onSaved={onSaved} disabled={superseding}/></div>
     {shown === "timeline" ? null : advanced
       ? <NavLink className="adv-link" to={advanced}><Icon name="advanced" size={20}/><span><b>ویرایشگر پیشرفته</b><small>تایم‌لاین، صدا و تنظیمات دقیق‌تر</small></span><Icon name="chevron" size={18}/></NavLink>
       : <p className="ws-hint" dir="rtl">تغییر را در چت بگویید؛ نسخهٔ تازه‌ای ساخته می‌شود و نسخهٔ فعلی دست‌نخورده می‌ماند.</p>}
@@ -253,19 +257,21 @@ function TalkingShade({jobId, onSaved}: {jobId:string; onSaved:()=>void}) {
   </section>;
 }
 
-export function Workspace({ conversation, project, projects, onSelectProject, tab, onTab, sourceAttachment, onCancel, onSaved, onCollapse, showTabs, panelRef, resizer, topbarEdit = false, working = null }: {
+export function Workspace({ conversation, project, projects, onSelectProject, tab, onTab, sourceAttachment, onCancel, onSaved, onCollapse, showTabs, panelRef, resizer, topbarControls = false, working = null }: {
   conversation: StudioConversation | null; project?: StudioProject; projects: StudioProject[]; onSelectProject: (id: string) => void;
   tab: WorkspaceTab; onTab: (tab: WorkspaceTab) => void; sourceAttachment?: string; onCancel: () => void; onSaved: () => void | Promise<unknown>;
   onCollapse?: () => void; showTabs: boolean; panelRef?: React.Ref<HTMLElement>;
   /** Drag handle on the panel's inner edge (desktop only), rendered by the page that owns the layout. */
   resizer?: React.ReactNode;
-  topbarEdit?: boolean;
+  topbarControls?: boolean;
   /** What the assistant is doing right now (a new edit request being worked on), shown in the Edit tab like in the chat. */
   working?: string | null;
 }) {
   const meta = statusMeta(project);
   const panel = usePanelFullscreen();
-  const action = React.useMemo(() => topbarEdit ? { active: panel.active, onClick: () => { void panel.toggle(); } } : null, [topbarEdit, panel.active, panel.toggle]);
+  const action = React.useMemo(() => topbarControls ? { active: panel.active, onClick: () => { void panel.toggle(); },
+    status: project ? {label: meta.label, tone: meta.tone} : undefined } : null,
+    [topbarControls, panel.active, panel.toggle, Boolean(project), meta.label, meta.tone]);
   useTopbarAction(action);
   const view = renderView(project);
   const rendering = tab === "edit" && ["queued", "rendering", "finalizing"].includes(view.phase);
@@ -276,7 +282,7 @@ export function Workspace({ conversation, project, projects, onSelectProject, ta
   }, [panelRef, panel.node]);
   return <section className="workspace" ref={setNode} data-max={panel.active || undefined} aria-label="Video workspace">
     {resizer}
-    <header className="ws-head" hidden={topbarEdit}>
+    <header className="ws-head" hidden={topbarControls}>
       {showTabs ? <div className="tabs-bar" role="tablist" aria-label="Workspace">
         {(["preview", "edit"] as WorkspaceTab[]).map(item => <button key={item} role="tab" id={`ws-tab-${item}`} aria-controls={`ws-panel-${item}`} aria-selected={tab === item} tabIndex={tab === item ? 0 : -1} className="tab"
           onClick={() => onTab(item)}
@@ -284,13 +290,14 @@ export function Workspace({ conversation, project, projects, onSelectProject, ta
           <Icon name={item === "preview" ? "eye" : "edit"} size={15}/>{item === "preview" ? "Preview" : "Edit"}</button>)}
       </div> : <h2 className="ws-title-solo">{tab === "preview" ? "Preview" : "Edit"}</h2>}
       <span className="grow"/>
+      {project ? <ProjectStatusDot status={meta}/> : null}
       {projects.length > 1 ? <select className="input ws-select" aria-label="Project" value={project?.id} onChange={event => onSelectProject(event.target.value)}>{projects.map(item => <option key={item.id} value={item.id}>{displayTitle(item.title, 32)}</option>)}</select> : null}
       <button className="icon-btn" onClick={() => void panel.toggle()} aria-pressed={panel.active} aria-label={panel.active ? "Exit full screen" : "Full screen"}
         data-tip={panel.active ? "Exit full screen" : "Full screen"}><Icon name={panel.active ? "fullscreenExit" : "fullscreen"} size={19}/></button>
       {onCollapse && !panel.active ? <button className="icon-btn" onClick={onCollapse} aria-label="Hide workspace" data-tip="Hide workspace"><Icon name="panelRight" size={19}/></button> : null}
     </header>
-    {topbarEdit && panel.active ? <button className="icon-btn ws-edit-exit" onClick={() => void panel.toggle()} aria-label="Exit full screen"><Icon name="fullscreenExit" size={18}/></button> : null}
-    {project ? <div className="ws-titlebar"><h2 className="bidi wrap-safe" dir="auto" title={project.title}>{displayTitle(project.title, 80)}</h2><span className="badge" data-tone={meta.tone === "neutral" ? undefined : meta.tone}><i/>{meta.label}</span></div> : null}
+    {topbarControls && panel.active ? <button className="icon-btn ws-edit-exit" onClick={() => void panel.toggle()} aria-label="Exit full screen"><Icon name="fullscreenExit" size={18}/></button> : null}
+    {topbarControls && projects.length > 1 ? <div className="ws-project-picker"><select className="input" aria-label="Project" value={project?.id} onChange={event => onSelectProject(event.target.value)}>{projects.map(item => <option key={item.id} value={item.id}>{displayTitle(item.title, 32)}</option>)}</select></div> : null}
     {rendering ? <div className="ws-edit-progress"><RenderProgress project={project!}/></div> : null}
     {working && !rendering && tab === "edit" ? <div className="ws-edit-progress" role="status" dir="rtl"><ThinkingRow label={working}/></div> : null}
     <div className="ws-body">

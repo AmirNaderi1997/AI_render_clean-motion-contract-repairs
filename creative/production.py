@@ -77,7 +77,7 @@ def bind_talking(plan: CreativePlan, decisions: dict, sentences: list[dict]) -> 
     if plan.style not in {'talking_2','talking_3'}:
         return result
     board = []
-    for beat in plan.chosen.beats:
+    for beat_index, beat in enumerate(plan.chosen.beats):
         i = beat.sentence
         if i is None or not 0 <= i < len(sentences):
             raise CreativeUnavailable('صحنهٔ خلاقانه به جملهٔ واقعی ویدیو متصل نیست.')
@@ -89,6 +89,11 @@ def bind_talking(plan: CreativePlan, decisions: dict, sentences: list[dict]) -> 
             raise CreativeUnavailable('نمایش آمار بدون عدد واقعی در گفتار مجاز نیست.')
         board.append({'i':i,'title':beat.title,'visual_type':beat.visual_type,
             'narrative_role':beat.role,'motion_style':beat.motion,'items':beat.items,'why':beat.intent})
+        choice = next((c for c in plan.resource_choices if c.get('beat_index') == beat_index), None)
+        if choice and choice.get('resource_id'):
+            from .resources.planning import resolve_talking_recipe
+            resolve_talking_recipe(choice['resource_id'], beat.visual_type)
+            board[-1]['resource_id'] = choice['resource_id']
     if board:
         result['storyboard']=board
         # B-roll slots are derived from meaningful beats, not inserted to meet a

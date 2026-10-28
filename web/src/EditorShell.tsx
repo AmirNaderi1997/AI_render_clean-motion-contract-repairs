@@ -2,6 +2,7 @@ import React from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api, StudioConversation } from "./api";
 import { Icon } from "./components/Icon";
+import { ProjectStatusDot } from "./components/ProjectStatusDot";
 import { Resizer, usePanelWidth } from "./components/Resizer";
 import { ShellContext, TopbarAction } from "./components/ShellContext";
 import { useFocusTrap, useMediaQuery, useVisualViewportHeight } from "./components/hooks";
@@ -134,6 +135,7 @@ export default function EditorShell() {
         <header className="topbar">
           <button className="icon-btn icon-btn-lg" onClick={() => setDrawer(true)} aria-label="Open navigation" aria-expanded={drawer}><Icon name="menu"/></button>
           <div className="topbar-title">{topTitle}</div>
+          {topbarAction?.status ? <ProjectStatusDot status={topbarAction.status}/> : null}
           {topbarAction ? <button className="icon-btn icon-btn-lg" onClick={topbarAction.onClick} aria-pressed={topbarAction.active} aria-label={topbarAction.active ? "Exit full screen" : "Full screen"}><Icon name={topbarAction.active ? "fullscreenExit" : "fullscreen"}/></button> : <button className="icon-btn icon-btn-lg" onClick={() => navigate("/studio")} aria-label="New edit"><Icon name="edit"/></button>}
         </header>
         <main id="main-content" className={`main${kind === "legacy" ? " eg-legacy" : ""}`} data-route={kind} tabIndex={-1}>

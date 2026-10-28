@@ -449,7 +449,12 @@ export default function Studio() {
     else if (layout === "tablet") setOverlayOpen(false);
     else setMobileView("chat");
   };
-  React.useEffect(() => { if (layout !== "tablet") setOverlayOpen(false); if (layout !== "mobile") setMobileView("chat"); }, [layout]);
+  React.useEffect(() => {
+    if (layout !== "tablet") setOverlayOpen(false);
+    // Keep the last mobile tab across breakpoint changes. Native fullscreen
+    // exits before its resize settles, so a document.fullscreenElement guard
+    // alone would still reset Preview/Edit to Chat during that transition.
+  }, [layout]);
   React.useEffect(() => {
     if (!overlayOpen || layout !== "tablet") return;
     const key = (event: KeyboardEvent) => { if (event.key === "Escape") setOverlayOpen(false); };
@@ -536,7 +541,7 @@ export default function Studio() {
     <Workspace conversation={conversation} project={current} projects={projects} onSelectProject={setSelectedProject} tab={wsTab} onTab={setWsTab}
       sourceAttachment={sourceAttachment} onCancel={stop} onSaved={() => refresh()} showTabs={layout !== "mobile"} onCollapse={layout === "mobile" ? undefined : closeWorkspace}
       panelRef={workspaceRef}
-      topbarEdit={layout === "mobile" && mobileView === "edit"}
+      topbarControls={layout === "mobile" && mobileView !== "chat"}
       working={processing && !renderLive ? (step?.label || thinking || "در حال بررسی درخواست شما…") : null}
       resizer={layout === "desktop" && wsVisible ? <Resizer panel={workspaceRef} edge="start" label="عرض پنل پیش‌نمایش" width={shownWorkspace}
         bounds={() => ({ min: WORKSPACE_BOUNDS.min, max: Math.min(WORKSPACE_BOUNDS.max, (studioRef.current?.clientWidth ?? 1400) - MIN_CHAT) })}
