@@ -1,6 +1,74 @@
-.local-hermes-test/
-.jwt_secret
-jobs/
-web/node_modules
 __pycache__/
 *.pyc
+.venv/
+venv/
+node_modules/
+web/dist/
+jobs/
+/backups/
+samples/media/
+samples/plans/out*.mp4
+samples/plans/kdenlive_check.mp4
+samples/plans/captions*.srt
+samples/plans/captions.ass
+samples/plans/project.mlt
+samples/plans/project.kdenlive
+samples/plans/*.png
+proof/exports/
+proof/media/
+proof/project.mlt
+proof/captions*.srt
+proof/captions.ass
+proof/proof_out.mp4
+proof/*.png
+.env
+.DS_Store
+*.egg-info/
+.pytest_cache/
+celerybeat-schedule*
+docs/effects_showcase.mp4
+docs/effects_v4_frames/
+assets/effect_previews/
+.jwt_secret
+
+# Clean distribution repository: keep runtime source only.
+/.claude/
+/.cursor/
+/tests/*
+!/tests/test_studio_agents.py
+/hermes/tests/
+*.test.ts
+*.test.tsx
+/web/src/test/
+/proof/
+/Claude outputs/
+/dist/
+/instagram_story_choices/
+/instagram_story_choices_max_quality/
+/rebuilt_instagram_stories/
+/docs/recordings/
+/docs/screenshots/
+/docs/asr_compare/
+
+# Docker
+.lmapi_key
+.motion_key
+backups/
+nginx/certs/
+/certs/
+/tools/face_track/face_track
+
+# Excluded from GitHub (large media kept local only)
+raw/MYVIDEO.mp4
+assets/sfx/YTDown.com_YouTube_Parham-Potki-x-MMV-x-PanizPRZ-Jan-Fadaye_Media_9XiY4HjXknY_006_128k.m4a
+
+# local model/cache files (never commit)
+/cache/
+deploy/**/.vercel/
+/.local-lan/
+vendor/
+# Owner-specific recovery snapshots must never enter source control.
+/recovery/
+
+# Isolated Hermes local preview (credentials and test data).
+/.local-hermes-test/
