@@ -506,52 +506,11 @@ def render_hook(plan: ReelPlan, work_dir: Path, pack: StylePack) -> Optional[Pat
     return out
 
 
-def author_panels(plan: ReelPlan, work_dir: Path) -> int:
-    """The Motion Designer writes one scene per panel (creative/motion.py, cached next to the job). Returns how many were authored."""
-    from creative import motion as creative_motion
-    from engine.hyperframes.schema import VisualBeat
-    if not creative_motion.enabled():
-        return 0
-    segs = [s for s in plan.script["segments"] if s["layout"] == "split" and s.get("beat")]
-    beats = []
-    for n, seg in enumerate(segs):
-        b = seg["beat"]
-        sentence = int(b.get("sentence") if b.get("sentence") is not None else 0)
-        bid = f"beat-{sentence}-{n}"
-        b["bid"] = bid
-        spoken = b.get("spoken") or (plan.sentences[sentence]["text"] if 0 <= sentence < len(plan.sentences) else "")
-        beats.append(VisualBeat(id=bid, start=float(seg["start"]), end=float(seg["end"]), title=(str(b.get("title") or "") or "…")[:80],
-                                items=[str(i)[:35] for i in (b.get("items") or [])][:4], layout="top_panel",
-                                narrative_role=str(b.get("role") or "evidence"), why=str(b.get("visual") or ""), spoken=spoken))
-    if not beats:
-        return 0
-    creative_motion.PANEL_MAX_Y = CARD_Y - EXTRA - 20          # below this the speaker's head rises into the panel
-    for attempt in range(3):                              # a provider hiccup must not cost a scene: compose reuses what is cached and retries the rest
-        creative_motion.compose(beats, creative_motion.plan_from_public(plan.creative_plan), plan.sentences, cache=work_dir / "authored_scenes_v2.json")
-        if all(b.custom for b in beats):
-            break
-    done = 0
-    for seg, beat in zip(segs, beats):
-        if beat.custom:
-            seg["beat"]["custom"] = beat.custom
-            done += 1
-        else:                                            # never show a weak or empty panel: the speaker keeps the whole frame
-            seg["layout"], seg["beat"] = "full", None
-            for shot in plan.shots:
-                if seg["start"] - 1e-3 <= shot.out_start < seg["end"] - 1e-3:
-                    shot.split = False
-    return done
-
-
 def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Optional[Path] = None,
            on_progress: Optional[Callable[[int], None]] = None, **kwargs) -> Path:
     work_dir.mkdir(parents=True, exist_ok=True)
     pack = kwargs.get("pack") or plan.pack
     report = (lambda lo, hi: (lambda p: on_progress(lo + int(p * (hi - lo) / 100)))) if on_progress else (lambda lo, hi: None)
-    if getattr(plan, "creative_plan", None) is not None and author_panels(plan, work_dir):
-        bg = next((s["beat"]["custom"].get("bg") for s in plan.script["segments"] if s.get("beat") and s["beat"].get("custom")), None)
-        if bg:                                          # the speaker card's rounded corners show this colour: it must be the panel's
-            pack = pack.model_copy(update={"palette": pack.palette.model_copy(update={"panel_bg": bg})})
     panel = render_layer(plan, work_dir / "t5_panel.webm", work_dir=work_dir, part="panel", pack=pack, on_progress=report(5, 45))
     hook = render_hook(plan, work_dir, pack)
     text = render_layer(plan, work_dir / "t5_text.webm", work_dir=work_dir, part="text", pack=pack, on_progress=report(45, 75))

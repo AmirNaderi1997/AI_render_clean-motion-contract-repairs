@@ -10,6 +10,13 @@ from .cli import cli_command
 
 VERSION = "0.8.161"
 
+
+def _data_json(value) -> str:
+    # Safe in script text AND single-quoted JSON metadata attributes.
+    return (json.dumps(value, ensure_ascii=False, allow_nan=False)
+            .replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+            .replace("'", "\\u0027").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
 # Discovery may advertise only these context-specific registry adapters as
 # connected. Keep this shared with the registry; catalog membership is not execution.
 SUPPORTED_REGISTRY_ADAPTERS = frozenset({"caption-kinetic-slam", "paper-collage-reveal"})
@@ -27,8 +34,8 @@ def _pipeline(project_dir: Path, labels: list[str], duration: float) -> bool:
     if not path.is_file():
         return False
     source = path.read_text()
-    nodes = ", ".join(f"{{ label: {json.dumps(value, ensure_ascii=False)} }}" for value in labels[:4])
-    source, count = re.subn(r"nodes:\s*\[[^\]]+\]", f"nodes: [{nodes}]", source, count=1, flags=re.S)
+    nodes = ", ".join(f"{{ label: {_data_json(value)} }}" for value in labels[:4])
+    source, count = re.subn(r"nodes:\s*\[[^\]]+\]", lambda _: f"nodes: [{nodes}]", source, count=1, flags=re.S)
     if not count:
         return False
     source = source.replace('font-family: "Caveat", cursive;', 'font-family: "Ray", sans-serif;')
@@ -50,8 +57,8 @@ def _component(project_dir: Path, name: str, duration: float, labels: list[str])
     source = re.sub(r'data-duration="[0-9.]+"', f'data-duration="{duration:.3f}"', source)
     if name == "comparison-split":
         pair = (labels + ["خدمت", "محصول"])[:2]
-        source = source.replace('"default": "Before"', f'"default": {json.dumps(pair[0], ensure_ascii=False)}')
-        source = source.replace('"default": "After"', f'"default": {json.dumps(pair[1], ensure_ascii=False)}')
+        source = source.replace('"default": "Before"', f'"default": {_data_json(pair[0])}')
+        source = source.replace('"default": "After"', f'"default": {_data_json(pair[1])}')
         source = source.replace('font-family: var(--font-body, Inter, system-ui, sans-serif);',
                                 'font-family: Ray, sans-serif; direction: rtl;')
         source = source.replace("<style>", "<style>@font-face{font-family:Ray;src:url('../../assets/ray-extrabold.ttf')}\n", 1)
@@ -62,7 +69,7 @@ def _component(project_dir: Path, name: str, duration: float, labels: list[str])
         for index, word in enumerate(words):
             start = index * step
             entries.append({"text": word, "start": round(start, 3), "end": round(min(duration - .08, start + step * .82), 3)})
-        source = re.sub(r"var WORDS = \[[\s\S]*?\n\s*\];", "var WORDS = " + json.dumps(entries, ensure_ascii=False) + ";", source, count=1)
+        source = re.sub(r"var WORDS = \[[\s\S]*?\n\s*\];", lambda _: "var WORDS = " + _data_json(entries) + ";", source, count=1)
         source = re.sub(r"var KEYWORDS = new Set\([^;]+;", f"var KEYWORDS = new Set([{max(0, len(words)-1)}]);", source, count=1)
         source = source.replace('font-family: "Anton", sans-serif;', 'font-family: "Ray", sans-serif; direction: rtl;')
         source = source.replace("width: 1920px;", "width: 1080px;").replace("height: 1080px;", "height: 1920px;")

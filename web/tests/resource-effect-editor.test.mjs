@@ -21,7 +21,13 @@ function setup(api,overrides={}){
   const draw=()=>flushSync(()=>root.render(React.createElement(mod.exports.ResourceEffectEditor,props)));
   draw();
   return {dom,props,applied,draw,
-    async open(){const d=document.querySelector('details');flushSync(()=>{d.open=true;d.dispatchEvent(new dom.window.Event('toggle'));});await settle();},
+    async open(){
+      const d=document.querySelector('details');
+      flushSync(()=>{d.open=true;d.dispatchEvent(new dom.window.Event('toggle'));});
+      const deadline=Date.now()+2000;
+      while(!document.querySelector('.cr-option[aria-pressed]')&&Date.now()<deadline)await settle();
+      assert.ok(document.querySelector('.cr-option[aria-pressed]'),'resource catalog finished loading');
+    },
     click(text){const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text);assert.ok(!!b,`button ${text}`);flushSync(()=>b.click());},
     save(){return document.querySelector('.cr-save button');},
     close(){flushSync(()=>root.unmount());dom.window.close();Object.assign(globalThis,old);delete globalThis.__resourceAPI;}};

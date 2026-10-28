@@ -1,3 +1,4 @@
+const faDigits = value => String(value).replace(/[0-9]/g, digit => "۰۱۲۳۴۵۶۷۸۹"[Number(digit)]);
 import React, {useEffect, useState} from "react";
 import {
   AbsoluteFill, Audio, Composition, Img, Sequence, interpolate,
@@ -26,7 +27,7 @@ const ProductScene = ({scene, index, count, resolveAsset = staticFile}) => {
     {spotlight ? <div style={{position: "absolute", top: 28, left: 28, right: 28, height: 550, borderRadius: "44px 44px 100px 100px", background: accent, transform: `translateY(${(1-enter)*-100}px)`}}/> : null}
     <div style={{position: "absolute", top: 64, left: 70, right: 70, display: "flex", alignItems: "center", justifyContent: "space-between", direction: "ltr"}}>
       <div style={{width: 72, height: 6, background: accent, borderRadius: 6}}/>
-      <div style={{fontSize: 20, color: "#6b7280"}}>{String(index + 1).padStart(2, "0")} / {String(count).padStart(2, "0")}</div>
+      <div style={{fontSize: 20, color: "#6b7280"}}>{faDigits(String(index + 1).padStart(2, "0"))} / {faDigits(String(count).padStart(2, "0"))}</div>
     </div>
     <div style={{position: "absolute", top: isHero ? 180 : 165, left: 70, right: 70, textAlign: "right", direction: "rtl", transform: `translateY(${(1-enter)*38}px)`, opacity: enter}}>
       <div style={{display: "inline-block", padding: "10px 20px", borderRadius: 999, background: accent, color: "white", fontSize: 24, fontWeight: 800, marginBottom: 22}}>{isHero ? "انتخاب حرفه‌ای" : isCta ? "همین حالا" : "ویژگی محصول"}</div>

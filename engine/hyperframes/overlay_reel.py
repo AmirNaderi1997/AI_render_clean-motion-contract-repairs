@@ -17,6 +17,7 @@ from creative.style_packs import StylePack
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSITION_ID = "overlay"
 W, H = 1080, 1920
+PERSIAN_DIGITS = str.maketrans("0123456789%", "۰۱۲۳۴۵۶۷۸۹٪")
 SPLIT_Y = 888                   # the panel ends here (the Motion Designer's 1080x888 panel contract), the speaker card starts here
 CAPTION_Y_SPLIT = 905           # caption line centre over a split shot
 
@@ -69,7 +70,7 @@ def _panel(index: int, beat: dict, pack: StylePack, start: float, end: float) ->
         badge = max(52, int(h * .56))
         cards = "".join(
             f'<div class="ci{" last" if n == len(items) - 1 else ""}" id="{pid}i{n}" style="height:{h}px;font-size:{fs}px">'
-            f'<b style="width:{badge}px;height:{badge}px;font-size:{int(badge * .55)}px">{n + 1}</b><span>{escape(t)}</span></div>' for n, t in enumerate(items))
+            f'<b style="width:{badge}px;height:{badge}px;font-size:{int(badge * .55)}px">{str(n + 1).translate(PERSIAN_DIGITS)}</b><span>{escape(t)}</span></div>' for n, t in enumerate(items))
         body = f'{_title_html(title, pack, size=74)}<div class="stack" style="gap:{gap}px">{cards}</div>'
         js.append(f'tl.from("#{pid} .ptitle .tw",{{opacity:0,y:-40,duration:.45,stagger:.1,ease:"back.out(1.6)"}},{_f(start + .05)});')
         js.append(f'tl.from("#{pid} .ci",{{opacity:0,y:90,scale:.92,duration:.5,stagger:.22,ease:"power3.out"}},{_f(start + .35)});')
@@ -88,7 +89,7 @@ def _panel(index: int, beat: dict, pack: StylePack, start: float, end: float) ->
         js.append(f'tl.from("#{pid}n",{{opacity:0,scale:.4,duration:.6,ease:"back.out(2)"}},{_f(start + .1)});')
         js.append(f'tl.from("#{pid}l",{{opacity:0,y:50,duration:.5,ease:"power3.out"}},{_f(start + .55)});')
     elif kind == "steps":
-        chips = "".join(f'<div class="step" id="{pid}s{n}"><b>{n + 1}</b><span>{escape(t)}</span></div>' for n, t in enumerate(items))
+        chips = "".join(f'<div class="step" id="{pid}s{n}"><b>{str(n + 1).translate(PERSIAN_DIGITS)}</b><span>{escape(t)}</span></div>' for n, t in enumerate(items))
         body = f'{_title_html(title, pack, size=74)}<div class="steps">{chips}</div>'
         js.append(f'tl.from("#{pid} .ptitle .tw",{{opacity:0,y:-40,duration:.45,stagger:.1,ease:"back.out(1.6)"}},{_f(start + .05)});')
         js.append(f'tl.from("#{pid} .step",{{opacity:0,x:140,duration:.5,stagger:.25,ease:"power3.out"}},{_f(start + .4)});')
@@ -105,28 +106,15 @@ def _panel(index: int, beat: dict, pack: StylePack, start: float, end: float) ->
 
 def _component_panel(index: int, name: str, values: dict, pack: StylePack, start: float, end: float, zoom: float = 1.0) -> tuple[str, list[str]]:
     """A panel scene made by a vendored HyperFrames registry component: background and frame here, the motion from the library."""
-    import json as _json
+    from creative.panel_library import validate_values
     pid = f"p{index}"
-    attr = _json.dumps(values, ensure_ascii=False).replace("&", "&amp;").replace("'", "&#39;")
+    attr = escape(json.dumps(validate_values(name, values), ensure_ascii=False, allow_nan=False), quote=True)
     html = (f'<section id="{pid}" class="clip panel {pack.panel_theme}" data-start="{_f(start)}" data-duration="{_f(end - start)}"></section>'
             f'<div id="{pid}h" data-composition-id="{name}" data-composition-src="compositions/components/{name}.html" data-start="{_f(start)}" '
             f'data-duration="{_f(end - start)}" data-track-index="3" data-width="{int(968 / zoom)}" data-height="{int(888 / zoom)}" data-variable-values=\'{attr}\' '
             f'style="position:absolute;left:56px;top:56px;width:{int(968 / zoom)}px;height:{int(888 / zoom)}px;overflow:hidden;zoom:{zoom:.4f}"></div>'
             f'<section id="{pid}f" class="clip panelframe" data-start="{_f(start)}" data-duration="{_f(end - start)}"><div class="frame"></div></section>')
     return html, []
-
-
-def _authored_panel(index: int, seg: dict, pack: StylePack, start: float, end: float) -> tuple[str, list[str], str]:
-    """A panel scene written by the Motion Designer (creative/motion.py): its markup, its scoped css and its GSAP, in the page's one timeline."""
-    from engine.hyperframes.scenes import scene_markup, scene_script
-    beat = seg["beat"]
-    custom = beat["custom"]
-    bid = beat["bid"]
-    bg = custom.get("bg") or pack.palette.panel_bg
-    html = (f'<div id="{bid}-bg" class="clip panelbg" data-start="{_f(start)}" data-duration="{_f(end - start)}" style="background:{bg}"></div>'
-            + scene_markup(bid, start, end - start, custom["html"]).replace('class="custom-beat clip"', 'class="custom-beat clip panelscene"'))
-    js = [scene_script(bid, start, end, custom["js"], "full")]
-    return html, js, custom.get("css", "")
 
 
 # ── captions / hook / key moments ────────────────────────────────────────────────────────────────────────────────────
@@ -269,7 +257,7 @@ def build_project(directory: Path, pack: StylePack, script: dict, part: str = "a
     """index.html + assets for the overlay. part: "panel" (the panels, drawn UNDER the speaker so a head can rise over them), "text" (captions, hook,
     key-moment slams, drawn OVER the speaker) or "all". script: duration, segments[{start,end,layout,beat?}], words[{w,start,end}], hook?, moments[]."""
     from engine.hyperframes.assets import ensure_gsap
-    from engine.hyperframes.scenes import FONT_FILES, fonts_css
+    from engine.hyperframes.fonts import FONT_FILES, fonts_css
     duration = float(script["duration"])
     assets = directory / "assets"
     (assets / "fonts").mkdir(parents=True, exist_ok=True)
@@ -287,28 +275,29 @@ def build_project(directory: Path, pack: StylePack, script: dict, part: str = "a
 
     from creative import panel_library
     html, js = [], []
-    scene_css: list[str] = []
     used: set[str] = set()
-    comps = directory / "compositions" / "components"
     n = 0
     for seg in (segments if part in ("all", "panel") else []):
         if seg.get("layout") == "split" and seg.get("beat"):
-            if seg["beat"].get("custom"):
-                h, j, extra_css = _authored_panel(n, seg, pack, float(seg["start"]), float(seg["end"]))
-                scene_css.append(extra_css)
-                seg["component"] = "authored"
-                pick = None
-            else:
-                pick = panel_library.choose(seg["beat"], used, seed=str(n)) if script.get("use_library", True) else None
-                if pick:
-                    name, values = pick
-                    comps.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(panel_library.LIBRARY_DIR / f"{name}.html", comps / f"{name}.html")
-                    used.add(name)
+            beat = panel_library.clean_beat(seg["beat"])
+            legacy = bool(seg["beat"].get("custom"))
+            seg["beat"] = beat
+            pick = panel_library.choose(beat, used, seed=str(n)) if script.get("use_library", True) else None
+            reason = "legacy authored panel replaced" if legacy else "typed panel"
+            if pick:
+                name, values = pick
+                try:
+                    panel_library.install(directory, name)
                     h, j = _component_panel(n, name, values, pack, float(seg["start"]), float(seg["end"]), panel_library.LIBRARY[name].zoom)
+                    used.add(name)
                     seg["component"] = name
-                else:
-                    h, j = _panel(n, seg["beat"], pack, float(seg["start"]), float(seg["end"]))
+                except (OSError, ValueError):
+                    pick = None
+                    reason += "; registry integrity unavailable"
+            if not pick:
+                h, j = _panel(n, beat, pack, float(seg["start"]), float(seg["end"]))
+                seg["component"] = "builtin:" + beat["visual_type"]
+            seg["template_resolution"] = {"component": seg["component"], "reason": reason}
             html.append(h)
             js.extend(j)
             n += 1
@@ -332,7 +321,7 @@ def build_project(directory: Path, pack: StylePack, script: dict, part: str = "a
 {css(pack)}
 .panelbg{{position:absolute;left:0;top:0;width:{W}px;height:{SPLIT_Y}px}}
 .panelscene{{position:absolute;left:0;top:0;width:{W}px;height:{SPLIT_Y}px;overflow:hidden}}
-{''.join(scene_css)}
+
 </style></head><body>
 <div id="root" data-composition-id="{COMPOSITION_ID}" data-start="0" data-width="{W}" data-height="{H}" data-duration="{_f(duration)}">
 {chr(10).join(x for x in html if x)}

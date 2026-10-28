@@ -7,6 +7,9 @@ here. `choose()` is deterministic (same beat, same pick) and takes the component
 from __future__ import annotations
 
 import hashlib
+import json
+import math
+from html.parser import HTMLParser
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -242,12 +245,130 @@ def role_of(beat: dict) -> str:
     return "headline"
 
 
+# Only reviewed, whole-word/textContent components are executable. Other vendored
+# sources remain pinned and available for future maintained adapters.
+SAFE_COMPONENTS = frozenset({
+    "grid-card-assemble", "state-chip-rail", "tracing-beam", "notification-stack",
+    "kinetic-type-swap", "split-tilt-cards", "comparison-split", "before-after-wipe",
+    "focus-rack", "match-cut", "headline-slam", "push-in", "text-shimmer",
+    "titlecard-calm", "per-word-rise", "svg-mask-reveal", "drift-hold",
+    "constellation-hub", "radial-surround", "overwhelm-surround", "avatar-cloud",
+    "cta-lockup",
+})
+LICENSE_SHA256 = "4259155fb06f127687ee7b0a8a3682d45132db0f2da26cbc0b7a2d1e796436b8"
+PERSIAN_DIGITS = str.maketrans("0123456789%", "۰۱۲۳۴۵۶۷۸۹٪")
+
+
+class PanelDataError(ValueError):
+    pass
+
+
+def clean_beat(beat: dict) -> dict:
+    """Project stored/model data onto bounded fields; discard all legacy code."""
+    def text(value, limit):
+        return value[:limit].translate(PERSIAN_DIGITS) if isinstance(value, str) else ""
+    items = beat.get("items")
+    return {"title": text(beat.get("title"), 160),
+            "items": [text(i, 80) for i in items[:6] if isinstance(i, str)] if isinstance(items, list) else [],
+            "visual_type": beat.get("visual_type") if isinstance(beat.get("visual_type"), str) and beat.get("visual_type") in
+                {"kinetic_type", "concept", "comparison", "before_after", "stat", "steps"} else "concept",
+            "role": "cta" if beat.get("role") == "cta" else "evidence",
+            "component_id": beat.get("component_id") if isinstance(beat.get("component_id"), str) else ""}
+
+
+def verified_source(name: str) -> str:
+    """The manifest, license and exact local bytes are the execution boundary."""
+    manifest = json.loads((LIBRARY_DIR / "MANIFEST.json").read_text())
+    if name not in SAFE_COMPONENTS or name not in manifest["files"] or name not in LIBRARY:
+        raise PanelDataError("Component is not in the reviewed manifest allowlist")
+    if hashlib.sha256((LIBRARY_DIR / "LICENSE.hyperframes").read_bytes()).hexdigest() != LICENSE_SHA256:
+        raise PanelDataError("Component license integrity mismatch")
+    path = LIBRARY_DIR / f"{name}.html"
+    if path.is_symlink() or not path.resolve().is_relative_to(LIBRARY_DIR.resolve()):
+        raise PanelDataError("Component path escapes library")
+    source = path.read_bytes()
+    pin = manifest["files"][name]
+    if len(source) != pin["bytes"] or hashlib.sha256(source).hexdigest() != pin["sha256"]:
+        raise PanelDataError("Component integrity mismatch")
+    return source.decode("utf-8")
+
+
+class _Variables(HTMLParser):
+    fields = None
+    def handle_starttag(self, tag, attrs):
+        if tag == "html":
+            self.fields = json.loads(dict(attrs).get("data-composition-variables", "[]"))
+
+
+def validate_values(name: str, values: dict) -> dict:
+    parser = _Variables()
+    parser.feed(verified_source(name))
+    fields = {v["id"]: v for v in parser.fields or []}
+    # Models fill content only. Style, timing, URLs, markup and arbitrary keys
+    # never cross this boundary. Values are carried in escaped JSON attributes.
+    allowed = set(LIBRARY[name].fill({"title": "سلام", "items": ["یک", "دو", "سه"]}, 4))
+    if not isinstance(values, dict) or set(values) - allowed:
+        raise PanelDataError("Unknown component content field")
+    for key, value in values.items():
+        field = fields.get(key)
+        if not field or field.get("role") != "content":
+            raise PanelDataError("Field is not component content")
+        kind = field["type"]
+        if kind == "string":
+            if not isinstance(value, str) or len(value) > 1000:
+                raise PanelDataError("Invalid component text")
+        elif kind == "number":
+            if type(value) not in (int, float) or not math.isfinite(value) or abs(value) > 1_000_000:
+                raise PanelDataError("Invalid component number")
+        elif kind == "enum":
+            if value not in [o["value"] if isinstance(o, dict) else o for o in field["options"]]:
+                raise PanelDataError("Invalid component enum")
+        elif kind == "boolean":
+            if type(value) is not bool:
+                raise PanelDataError("Invalid component boolean")
+        else:
+            raise PanelDataError("Unsupported component field type")
+    return values
+
+
+def install(project: Path, name: str) -> Path:
+    """Adapt verified bytes only; never interpolate user data into source code."""
+    source = verified_source(name)
+    source = source.replace('lang="en"', 'lang="fa" dir="rtl"')
+    source = re.sub(r'<script src="https://[^"<>]+"></script>',
+                    '<script src="../../assets/gsap.min.js"></script>', source)
+    source = re.sub(r'letter-spacing\s*:[^;}]+', 'letter-spacing:0', source)
+    source = source.replace("</style>", """@font-face{font-family:Ray;src:url('../../assets/fonts/ray-extrabold.ttf')}
+#root{direction:rtl;--font-display:Ray;--font-body:Ray} #root *{font-family:Ray!important;letter-spacing:0!important;text-transform:none!important}
+</style>""", 1)
+    target = project / "compositions" / "components" / f"{name}.html"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(source)
+    receipts = project / "resource-receipts"
+    receipts.mkdir(exist_ok=True)
+    (receipts / "LICENSE.hyperframes").write_bytes((LIBRARY_DIR / "LICENSE.hyperframes").read_bytes())
+    (receipts / f"{name}.json").write_text(json.dumps({
+        "component": name, "upstream_commit": "3b2058a2b7a2", "license": "Apache-2.0",
+        "source_sha256": hashlib.sha256(verified_source(name).encode()).hexdigest(),
+        "adapter": "local-runtime-rtl-ray-v1", "adapted_sha256": hashlib.sha256(source.encode()).hexdigest(),
+    }, indent=2))
+    return target
+
+
 def available() -> list[str]:
-    return [n for n in LIBRARY if (LIBRARY_DIR / f"{n}.html").is_file()]
+    ready = []
+    for name in sorted(SAFE_COMPONENTS):
+        try:
+            verified_source(name)
+            ready.append(name)
+        except (OSError, ValueError):
+            pass
+    return ready
 
 
 def choose(beat: dict, used: set[str], seed: str = "") -> tuple[str, dict] | None:
     """The component for this beat and the variable values that fill it; None when the library has nothing that fits."""
+    beat = clean_beat(beat)
     role = role_of(beat)
     items = len(_items(beat, 1, 6))
     ready = set(available())
@@ -255,8 +376,15 @@ def choose(beat: dict, used: set[str], seed: str = "") -> tuple[str, dict] | Non
     def pool(r: str) -> list[str]:
         return sorted(n for n, e in LIBRARY.items() if n in ready and r in e.roles and e.min_items <= items <= e.max_items)
 
-    candidates = [n for n in pool(role) if n not in used] or [n for n in pool("headline") if n not in used] or [n for n in pool(role) if n not in used]
+    requested = beat.get("component_id")
+    if requested not in used and (requested in pool(role) or requested in pool("headline")):
+        candidates = [requested]
+    else:
+        candidates = [n for n in pool(role) if n not in used] or [n for n in pool("headline") if n not in used] or [n for n in pool(role) if n not in used]
     if not candidates:
         return None
     pick = candidates[int(hashlib.sha1(f"{seed}{beat.get('title','')}".encode()).hexdigest(), 16) % len(candidates)]
-    return pick, LIBRARY[pick].fill(beat, 4.0)
+    try:
+        return pick, validate_values(pick, LIBRARY[pick].fill(beat, 4.0))
+    except ValueError:
+        return None
