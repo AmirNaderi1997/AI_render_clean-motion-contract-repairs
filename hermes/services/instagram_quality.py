@@ -104,7 +104,7 @@ def evaluate(operation: str, text: str, language: str, *, wpm=150.0, target=None
     if language == "fa":
         result = persian(operation, text, wpm, target)
     else:
-        command = [sys.executable, "-I", "-S", "-c", RUNNER,
+        command = [sys.executable, "-I", "-S", "-B", "-c", RUNNER,
                    str(VENDOR / "skills" / SCRIPTS[operation]), "-", "--json"]
         if operation == "beats":
             command += ["--wpm", str(wpm)]
