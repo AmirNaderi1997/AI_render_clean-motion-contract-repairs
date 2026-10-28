@@ -62,3 +62,21 @@ def test_node_persists_result_emits_activity_and_does_not_repeat_completed_tool(
 def test_model_cannot_supply_paths_identity_shell_or_nonfinite_limits(extra):
     with pytest.raises(ValueError):
         studio_tools.execute("instagram_content_check", {**step()["arguments"], **extra})
+
+
+def test_connected_app_adapter_uses_run_owner_not_model_identity(monkeypatch):
+    from hermes.services import composio_read
+    record = seed(monkeypatch)
+    calls = []
+    async def read(user, application, slug, arguments):
+        calls.append((user, application, slug, arguments))
+        return {"status": "completed", "data": {"profile": "mock"}}
+    monkeypatch.setattr(composio_read, "execute", read)
+    proposal = {"tool": "read_connected_app", "label": "خواندن اطلاعات مجاز",
+                "arguments": {"application": "instagram", "tool": "INSTAGRAM_TEST_READ", "arguments": {"limit": 1}}}
+    result = tools.execute(record, proposal)
+    assert result["status"] == "completed"
+    assert calls == [(record["user_key"], "instagram", "INSTAGRAM_TEST_READ", {"limit": 1})]
+    assert "read_connected_app" in tools.READ_ONLY
+    with pytest.raises(ValueError):
+        tools.validate(record, {**proposal, "arguments": {**proposal["arguments"], "user_id": "bob"}})

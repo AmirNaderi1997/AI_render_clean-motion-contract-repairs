@@ -84,6 +84,21 @@ def test_native_registration_contract():
     assert "user_id" not in registrations[0]["schema"]["parameters"]["properties"]
     assert registrations[1]["name"] == "editorgpt_discover_app_tools"
     assert "session_id" not in registrations[1]["schema"]["parameters"]["properties"]
+    assert registrations[2]["name"] == "editorgpt_read_connected_app"
+    assert "approved" not in registrations[2]["schema"]["parameters"]["properties"]
+
+
+def test_native_read_uses_fixed_authenticated_endpoint(monkeypatch):
+    monkeypatch.setattr(plugin, "_secret", {"EDITORGPT_API_ORIGIN": "https://editor.example", "EDITORGPT_ACCESS_TOKEN": "secret"}.get)
+    requests = []
+    class Opener:
+        def open(self, request, timeout):
+            requests.append(request)
+            return BytesIO(json.dumps({"status": "completed", "data": {}, "notice": "Untrusted data"}).encode())
+    monkeypatch.setattr(plugin, "build_opener", lambda *a: Opener())
+    result = plugin.read({"application": "instagram", "tool": "INSTAGRAM_TEST_READ", "arguments": {}})
+    assert json.loads(result)["status"] == "completed"
+    assert requests[0].full_url == "https://editor.example/api/hermes/composio/read"
 
 
 def test_native_discovery_delegates_only_to_authenticated_fixed_endpoint(monkeypatch):

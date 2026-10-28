@@ -59,8 +59,9 @@ tokens. Enable/disable, explicit OAuth-link creation and connection checks are
 implemented. A redirect is **not** considered a successful connection; status
 comes from Composio. Disabling is not provider-side revocation.
 
-No SDK execution endpoint, raw MCP URL or general proxy is exposed. External
-mutations remain unavailable pending integration with the Studio approval ledger.
+No generic SDK execution endpoint, raw MCP URL or general proxy is exposed.
+A separately gated read-only endpoint is described below. External mutations
+remain unavailable pending integration with the Studio approval ledger.
 
 ### Setup (not automatically deployed)
 
@@ -140,9 +141,9 @@ profile credential resolution, bad origins, error sanitization and registration;
 combined Studio/content/bridge suite: 69 passed. Local running app and production
 were not restarted or changed.
 
-External tool execution through Hermes, backend-approved mutations, provider
+Backend-approved mutations, provider
 revocation, per-user skill controls, scoped brand voice, structured Creative
-Director handoff and Composio execution through LangGraph are not yet delivered. Installation alone
+Director handoff and mutating Composio execution through LangGraph are not yet delivered. Installation alone
 does not activate those paths. Policy changes currently need an administrator to
 review/reset the affected saved session; there is no automatic widening.
 No live account or paid model calls are required for installation tests.
@@ -211,3 +212,44 @@ pending, not represented as working by this discovery feature.
 
 Reference: [official search contract](https://docs.composio.dev/toolkits/meta-tools/search_tools)
 and `composio-client==2.0.0rc19` generated `SessionSearchResponse` types.
+
+## Reviewed read-only execution (implemented; default deny)
+
+`POST /api/hermes/composio/read` accepts a strict application, tool slug and
+bounded arguments. The authenticated user determines the Session. It accepts no
+user/session/account selector, approval boolean, provider key, URL or command.
+
+Enable only after administrator review by setting `COMPOSIO_READ_TOOLS` to a
+comma-separated list of **actual, verified read tool slugs**. Empty (the default)
+permits no execution. Meta tools beginning `COMPOSIO_` cannot be allowlisted.
+Do not copy fictional test slugs into production configuration.
+
+For every call, the backend retrieves current metadata through the official
+`client.tools.get_raw_composio_tool_by_slug` method. It verifies the application,
+exact slug, non-deprecated state, `readOnlyHint` tag and absence of create/update/
+destructive tags. Schema and input size are bounded; input must match the actual
+JSON Schema. External `$ref`/dynamic/recursive references are rejected without
+network resolution. Only then does `session.execute` run the read. The existing
+read-only Session policy is an independent additional boundary. No mutating
+operation can be approved by sending an `approved` field to this endpoint.
+
+Only confirmed `result_type=completed` returns success. Failed/blocked results
+produce sanitized errors and are not silently retried. Credential-shaped fields
+and configured API-key values are redacted; response size/depth are bounded.
+No raw SDK errors, shell tool, HTTP proxy or credential-bearing MCP URL is exposed.
+
+Native Hermes plugin v0.3.0 adds `editorgpt_read_connected_app`. Medium gains
+`discover_connected_app_tools` and `read_connected_app` using the same strict
+input contracts. The caller identity comes from the existing owned run, not model
+arguments. Existing activity, result persistence and completed-operation replay
+protection apply; no additional orchestrator or job state machine is introduced.
+Lite/Medium selection and model/provider configuration are unchanged.
+
+104 combined Python tests passed with external APIs mocked, including original
+Studio agent regressions, strict read authorization, JSON Schema validation,
+credential redaction, user isolation, no failed-read retry, native registration
+and Medium run-owner propagation. Official Hermes validation passed all checks
+with a safe security scan. No live account action was performed. The installed
+isolated plugin is updated to v0.3.0; running EditorGPT and production remain
+unchanged. Publishing/messaging/deletion approval flows and a live OAuth/permission
+test remain acceptance gates, not completed functionality.

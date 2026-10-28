@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     COMPOSIO_INSTANCE_ID: str = ""
     COMPOSIO_TOOLKITS: str = "instagram"
     COMPOSIO_CALLBACK_URL: str = ""
+    COMPOSIO_READ_TOOLS: str = ""  # Explicit reviewed slugs; empty enables no execution.
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
