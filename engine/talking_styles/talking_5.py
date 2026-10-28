@@ -111,17 +111,33 @@ def plan_reel(transcript: dict, decisions: dict, faces: list, duration: float, p
             held, gap, in_gap = 0.0, shot.length, True
         else:
             held += shot.length
-    # a panel shorter than MIN_PANEL has no time to play its motion: the speaker keeps those shots
-    run: list = []
-    for shot in plan.shots + [None]:
-        if shot is not None and shot.split:
-            run.append(shot)
+    # a panel shorter than MIN_PANEL has no time to play its motion: it grows into the next shots of the same sentence (else the
+    # previous ones), never past MAX_PANEL, instead of being dropped
+    shots = plan.shots
+    i = 0
+    while i < len(shots):
+        if not shots[i].split:
+            i += 1
             continue
-        if run and sum(r.length for r in run) < MIN_PANEL:
-            for r in run:
-                r.split = False
-                r.close = r.out_start // 1 % 2 == 1
-        run = []
+        j = i
+        while j + 1 < len(shots) and shots[j + 1].split:
+            j += 1
+        total = sum(s.length for s in shots[i:j + 1])
+        while total < MIN_PANEL:
+            nxt = shots[j + 1] if j + 1 < len(shots) else None
+            prv = shots[i - 1] if i > 0 else None
+            if nxt is not None and not nxt.split and nxt.out_start >= plan.cold_open and nxt.slot == shots[j].slot:
+                nxt.split, j, total = True, j + 1, total + nxt.length
+            elif prv is not None and not prv.split and prv.out_start >= plan.cold_open + 0.01 and prv.slot == shots[i].slot:
+                prv.split, i, total = True, i - 1, total + prv.length
+            else:
+                break
+        if total < MIN_PANEL:
+            for s in shots[i:j + 1]:
+                s.split = False
+        for s in shots[i:j + 1]:
+            s.close = (not s.split) and (s.out_start // 1 % 2 == 1)
+        i = j + 1
     run = []
     for shot in plan.shots + [None]:
         if shot is not None and shot.split:
@@ -231,33 +247,36 @@ FACE_FRAC = (EXTRA + 40) / TALL_H     # where the face centre sits in the tall w
 
 
 TRANSITION = 0.3                      # seconds the card takes to open to full frame (or close to a card)
-FACE_SCREEN = CARD_Y + 40             # where the face centre sits on screen, in BOTH layouts: the card is only a mask over the same picture
+POP = 130                             # how far the head rises above the card in a split shot (px)
+HEAD_UP = 0.17                        # head top above the face centre, as a fraction of the source height
 
 
-def _placement(plan: ReelPlan, src_w: int, src_h: int) -> tuple[float, float, float, float]:
-    """(scale, x0, y0, window height) of the one picture every shot uses: a single scale and face position for the whole reel, so
-    switching between full frame and card never moves or rescales the speaker (only a mask opens or closes)."""
-    faces = sorted(s.face[0] for s in plan.shots), sorted(s.face[1] for s in plan.shots)
-    cx, cy = faces[0][len(faces[0]) // 2], faces[1][len(faces[1]) // 2]
-    s_min = H / src_h
-    scale = min(max(FACE_SCREEN / max(cy * src_h, 1.0), s_min), s_min * 1.5)
-    h = H / scale
-    w = min(float(src_w), h * (W / H))
-    h = w * (H / W)
+def _placement(plan: ReelPlan, src_w: int, src_h: int) -> tuple[float, float, float, float, float]:
+    """(scale, x0, y0, window height, drop) of the one picture every shot uses: a single scale and face position for the whole reel, so no
+    shot jumps. `drop` is how far the same picture slides down inside a split shot, so the head ends POP px above the card."""
+    xs, ys = sorted(s.face[0] for s in plan.shots), sorted(s.face[1] for s in plan.shots)
+    cx, cy = xs[len(xs) // 2], ys[len(ys) // 2]
+    h = float(src_h)
+    w = h * (W / H)
+    if w > src_w:
+        w = float(src_w)
+        h = w * (H / W)
     scale = W / w
     x0 = min(max(0.0, cx * src_w - w / 2), src_w - w)
-    y0 = min(max(0.0, cy * src_h - FACE_SCREEN / scale), src_h - h)
-    return scale, x0, y0, h
+    y0 = min(max(0.0, cy * src_h - 0.38 * h), src_h - h)
+    head_top = (cy * src_h - HEAD_UP * src_h - y0) * scale
+    drop = min(max(0.0, (CARD_Y - POP) - head_top), CARD_Y - EXTRA - 40)
+    return scale, x0, y0, h, drop
 
 
 def _crop(plan: ReelPlan, shot: Shot, src_w: int, src_h: int, pack: StylePack, split: bool) -> tuple[int, int, int, int]:
     """(x, y, w, h) of the source window. Full: the shared picture (a close shot punches in on the face, keeping it where it was).
-    Split: the lower part of the same picture, from the head room above the card to the bottom (the head may rise over the panel)."""
-    scale, x0, y0, h = _placement(plan, src_w, src_h)
+    Split: the part of the same picture that sits from the head room above the card to the bottom of the frame (the head may rise over the panel)."""
+    scale, x0, y0, h, drop = _placement(plan, src_w, src_h)
     w = W / scale
     if split:
-        top = (CARD_Y - EXTRA) / scale
-        x, y, w2, h2 = x0, y0 + top, w, h - top
+        top = (CARD_Y - EXTRA - drop) / scale
+        x, y, w2, h2 = x0, y0 + top, w, (H - (CARD_Y - EXTRA)) / scale
     elif shot.close:
         z = pack.rhythm.close_zoom
         w2, h2 = w / z, h / z
@@ -267,6 +286,14 @@ def _crop(plan: ReelPlan, shot: Shot, src_w: int, src_h: int, pack: StylePack, s
     else:
         x, y, w2, h2 = x0, y0, w, h
     return int(x) // 2 * 2, int(y) // 2 * 2, int(w2) // 2 * 2, int(h2) // 2 * 2
+
+
+def _slide(drop: float, enter: bool, leave: bool, d: float) -> str:
+    """ffmpeg expression (in t) for how far down the picture sits: `drop` in a card, 0 in full frame, eased over TRANSITION at the cuts to full."""
+    tr = TRANSITION
+    a = "st(1,clip(t/%.3f,0,1));st(1,ld(1)*ld(1)*(3-2*ld(1)));" % tr if enter else "st(1,1);"
+    b = "st(2,clip((t-%.3f)/%.3f,0,1));st(2,1-ld(2)*ld(2)*(3-2*ld(2)));" % (d - tr, tr) if leave else "st(2,1);"
+    return a + b + "%.2f*ld(1)*ld(2)" % drop
 
 
 def _round_mask(path: Path) -> Path:
@@ -351,14 +378,18 @@ def _graph(plan: ReelPlan, pack: StylePack, src_w: int, src_h: int, fps: int, ma
                 parts.append(f"{_ramp(True, fps)}[ro{i}]")
                 pieces.append(f"[ro{i}]")
             parts.append(f"{''.join(pieces)}concat=n={len(pieces)}:v=1:a=0,format=gray[mk{i}]")
-            parts.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS,crop={sw}:{sh}:{sx}:{sy},scale={W}:{H}:flags=lanczos,{grade},format=yuv420p,split[pic{i}][tb0{i}]")
-            parts.append(f"[pic{i}][mk{i}]alphamerge,format=yuva420p[s{i}]")
-            parts.append(f"[tb0{i}]crop={W}:{TALL_H}:0:{CARD_Y - EXTRA},format=yuv420p[tb{i}]")
+            drop = _placement(plan, src_w, src_h)[4]
+            slide = _slide(drop, enter, leave, d)
+            parts.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS,crop={sw}:{sh}:{sx}:{sy},scale={W}:{H}:flags=lanczos,{grade},format=yuv420p[pic{i}]")
+            parts.append(f"color=c=black@0.0:s={W}x{H}:r={fps}:d={d:.3f},format=yuva420p[cv{i}]")
+            parts.append(f"[cv{i}][pic{i}]overlay=0:'{slide}':eval=frame:format=auto,format=yuv420p[pd{i}]")
+            parts.append(f"[pd{i}][mk{i}]alphamerge,format=yuva420p[s{i}]")
+            parts.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS,crop={w}:{h}:{x}:{y},scale={W}:{TALL_H}:flags=lanczos,{grade},format=yuv420p[tb{i}]")
             if i in matte_input:
                 parts.append(f"[{matte_input[i]}:v]format=gray,scale={W}:{TALL_H}:flags=bilinear,eq=contrast=1.35:brightness=-0.12,erosion,gblur=sigma=0.9,format=gray[mm{i}]")
                 parts.append(f"[tb{i}][mm{i}]alphamerge[person{i}]")
                 parts.append(f"color=c=black@0.0:s={W}x{H}:r={fps}:d={d:.3f},format=yuva420p[f{i}]")
-                parts.append(f"[f{i}][person{i}]overlay=0:{CARD_Y - EXTRA}:format=auto,format=yuva420p[p{i}]")
+                parts.append(f"[f{i}][person{i}]overlay=0:'{CARD_Y - EXTRA}-{drop:.2f}+({slide})':eval=frame:format=auto,format=yuva420p[p{i}]")
             else:
                 parts.append(f"[tb{i}]nullsink")
                 parts.append(f"color=c=black@0.0:s={W}x{H}:r={fps}:d={d:.3f},format=yuva420p[p{i}]")
@@ -381,7 +412,7 @@ def _graph(plan: ReelPlan, pack: StylePack, src_w: int, src_h: int, fps: int, ma
 
 
 def render_composite(video: Path, plan: ReelPlan, panel: Optional[Path], text: Optional[Path], out: Path, *, work_dir: Path,
-                     music: Optional[Path] = None, pack: StylePack | None = None, on_progress=None) -> Path:
+                     hook: Optional[Path] = None, music: Optional[Path] = None, pack: StylePack | None = None, on_progress=None) -> Path:
     """One ffmpeg pass: panel colour -> panel layer -> speaker (full frame or card) -> head over the panel -> text; cuts, grade, music, loudness."""
     pack = pack or plan.pack
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -409,6 +440,11 @@ def render_composite(video: Path, plan: ReelPlan, panel: Optional[Path], text: O
         parts.append(f"[{nxt}:v]format=yuva420p,setpts=PTS-STARTPTS[tx]")
         parts.append(f"[{last}][tx]overlay=0:0:format=auto:eof_action=pass[x4]")
         last, nxt = "x4", nxt + 1
+    if hook and hook.is_file():
+        inputs += ["-c:v", "libvpx-vp9", "-i", str(hook)]
+        parts.append(f"[{nxt}:v]format=yuva420p,setpts=PTS-STARTPTS[hk]")
+        parts.append(f"[{last}][hk]overlay=0:0:format=auto:eof_action=pass[x5]")
+        last, nxt = "x5", nxt + 1
     parts.append(f"[{last}]fps={fps},format=yuv420p[vout]")
     loud = f"loudnorm=I={LOUDNESS}:TP=-1:LRA=8,aresample=48000[aout]"
     if music and music.is_file():
@@ -442,6 +478,31 @@ def render_layer(plan: ReelPlan, out: Path, *, work_dir: Path, part: str, pack: 
     project.mkdir(parents=True)
     overlay_reel.build_project(project, pack, plan.script, part=part)
     _run_cli(project, out, timeout=timeout, on_progress=on_progress, fmt="webm")
+    return out
+
+
+def render_hook(plan: ReelPlan, work_dir: Path, pack: StylePack) -> Optional[Path]:
+    """The opening teaser drawn by a real tscaps template (the words keep their spoken timing). None when the pack asks for the system's own
+    word-by-word hook, or when tscaps is unavailable (then the captions page draws the teaser itself)."""
+    teaser = plan.script.get("teaser")
+    if pack.hook.mode != "tscaps" or not teaser or teaser[1] < 0.8:
+        return None
+    from engine import tscaps_overlay as ts
+    words = [ts.Word(w["w"], float(w["start"]), float(w["end"])) for w in plan.script["words"] if float(w["start"]) < teaser[1]]
+    if not words:
+        return None
+    cues = []
+    for k in range(0, len(words), 3):                   # three words at a time: a page the template can set in the frame
+        chunk = words[k:k + 3]
+        end = words[k + 3].s - 0.02 if k + 3 < len(words) else min(teaser[1], plan.duration)
+        cues.append(ts.Cue("hook", max(0.0, chunk[0].s - 0.05), max(end, chunk[-1].e + 0.1), chunk, y=0.44, scale=1.3))
+    try:
+        out = ts.render_overlay(cues, work_dir / "t5_hook.webm", width=W, height=H, fps=30, duration=plan.duration, work_dir=work_dir / "tscaps",
+                                kinds={"hook": {**ts.ROLES["hook"], "template": pack.hook.template}})
+    except ts.OverlayUnavailable as exc:
+        log.warning("tscaps hook unavailable, using the built-in one: %s", str(exc)[:200])
+        return None
+    plan.script["teaser"] = [teaser[0], teaser[1], "hidden"]
     return out
 
 
@@ -492,8 +553,65 @@ def render(video: Path, plan: ReelPlan, out: Path, *, work_dir: Path, music: Opt
         if bg:                                          # the speaker card's rounded corners show this colour: it must be the panel's
             pack = pack.model_copy(update={"palette": pack.palette.model_copy(update={"panel_bg": bg})})
     panel = render_layer(plan, work_dir / "t5_panel.webm", work_dir=work_dir, part="panel", pack=pack, on_progress=report(5, 45))
+    hook = render_hook(plan, work_dir, pack)
     text = render_layer(plan, work_dir / "t5_text.webm", work_dir=work_dir, part="text", pack=pack, on_progress=report(45, 75))
-    render_composite(video, plan, panel, text, out, work_dir=work_dir, music=music, pack=pack)
+    try:
+        fx = choose_effects(plan, pack, work_dir)
+    except Exception as exc:
+        log.warning("effects not chosen: %s", str(exc)[:300])
+        fx = []
+    if fx:
+        try:
+            apply_effects(video, plan, panel, text, hook, fx, out, work_dir=work_dir, music=music, pack=pack, on_progress=report(75, 97))
+        except Exception as exc:                          # a failed effect must never cost the reel
+            log.warning("effects skipped: %s", str(exc)[:300])
+            fx = []
+    if not fx:
+        render_composite(video, plan, panel, text, out, work_dir=work_dir, hook=hook, music=music, pack=pack)
     if on_progress:
         on_progress(99)
     return out
+
+
+def choose_effects(plan: ReelPlan, pack: StylePack, work_dir: Path) -> list[dict]:
+    """Face effects for the stretches where the speaker has the whole frame (cached next to the job so a re-render keeps the same choice)."""
+    import json
+    from engine import face_effects
+    cache = work_dir / "effects_plan.json"
+    if getattr(plan, "effects", None) is not None:
+        return plan.effects
+    if pack.effects_per_minute <= 0 or not face_effects.available():
+        return []
+    if cache.is_file():
+        try:
+            return face_effects.clean_plan(json.loads(cache.read_text()))
+        except Exception:
+            pass
+    from creative import effects_director
+    protect = [(float(m["start"]) - 0.2, float(m["end"]) + 0.2) for m in plan.script.get("moments") or []]
+    chosen = effects_director.choose(plan, per_minute=pack.effects_per_minute, protect=protect)
+    cache.write_text(json.dumps(chosen, ensure_ascii=False))
+    return chosen
+
+
+def apply_effects(video: Path, plan: ReelPlan, panel, text, hook, fx: list[dict], out: Path, *, work_dir: Path, music, pack: StylePack, on_progress=None) -> None:
+    """Base reel (speaker, panels, music) -> effects on it -> captions, hook and slams on top, so no effect ever hides the words."""
+    from engine import face_effects
+    base_out, fx_out = work_dir / "t5_base.mp4", work_dir / "t5_fx.mp4"
+    render_composite(video, plan, panel, None, base_out, work_dir=work_dir, music=music, pack=pack)
+    face_effects.apply(base_out, fx_out, fx, work=work_dir / "fx", on_progress=(lambda p, stage: on_progress(int(p * 100))) if on_progress else None)
+    cmd = ["ffmpeg", "-hide_banner", "-y", "-i", str(fx_out)]
+    last, n = "0:v", 1
+    parts = []
+    for layer in (text, hook):
+        if layer and layer.is_file():
+            cmd += ["-c:v", "libvpx-vp9", "-i", str(layer)]
+            parts.append(f"[{n}:v]format=yuva420p,setpts=PTS-STARTPTS[l{n}]")
+            parts.append(f"[{last}][l{n}]overlay=0:0:format=auto:eof_action=pass[o{n}]")
+            last, n = f"o{n}", n + 1
+    parts.append(f"[{last}]format=yuv420p[vout]")
+    cmd += ["-filter_complex", ";".join(parts), "-map", "[vout]", "-map", "0:a", "-c:v", "libx264", "-crf", "17", "-preset", "medium", "-c:a", "copy",
+            "-movflags", "+faststart", str(out)]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError("ffmpeg failed: " + proc.stderr[-800:])

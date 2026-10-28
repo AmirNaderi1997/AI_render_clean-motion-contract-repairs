@@ -16,3 +16,6 @@ Bundled with it (`assets/effects/`):
 - `lib/libGLESv2.so.2`, `lib/libGLdispatch.so.0`: libglvnd 1.7.0 (MIT-style licence), needed by the mediapipe shared library on a slim server image.
 
 Runtime: `mediapipe` (Apache 2.0), installed from wheels with `scripts/fetch_effects_wheels.sh`.
+
+Later changes: all 42 upstream effects are in the catalog (`catalog.py`); `_fa.py` joins and orders Persian letters when Pillow has no libraqm and swaps in Vazirmatn for any text with Persian
+letters; upstream author names, handles and product claims in default texts were replaced with neutral ones.

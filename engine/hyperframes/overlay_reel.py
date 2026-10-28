@@ -151,6 +151,9 @@ def _captions(words: list[dict], pack: StylePack, layout_at, blocked: list[tuple
     cap = pack.caption
     blocked = blocked or []
     words = [w for w in words if not any(a <= float(w["start"]) < b for a, b in blocked)]
+    if teaser and teaser[2:] == ["hidden"]:                  # another renderer (tscaps) draws the teaser words
+        words = [w for w in words if float(w["start"]) >= teaser[1]]
+        teaser = None
     lead = [w for w in words if teaser and float(w["start"]) < teaser[1]]            # the teaser is the hook: one big word at a time
     pages = _pages(lead, 1) + _pages(words[len(lead):], cap.per_page)
     for p, page in enumerate(pages):

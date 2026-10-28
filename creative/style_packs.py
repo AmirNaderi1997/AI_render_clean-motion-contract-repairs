@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 CAPTION_MODES = ("words", "phrase", "slam")                # word-by-word pages, calm phrases, one big word at a time
-HOOK_MODES = ("headline", "slam", "none")
+HOOK_MODES = ("words", "tscaps", "headline", "slam", "none")
 PANEL_THEMES = ("paper", "ink", "gradient")
 PANEL_SCENES = ("stack", "versus", "stat", "kinetic", "steps")
 
@@ -53,7 +53,10 @@ class CaptionStyle(_M):
 
 
 class HookStyle(_M):
-    mode: Literal["headline", "slam", "none"] = "headline"
+    """The opening teaser. words: big white words one at a time (the system's own hook); tscaps: the same words drawn by a tscaps template;
+    headline / slam: a static title (never used on top of captions)."""
+    mode: Literal["words", "tscaps", "headline", "slam", "none"] = "words"
+    template: Literal["noor", "elio", "loki"] = "noor"
     seconds: float = Field(default=3.0, ge=1.5, le=5.0)
     size: int = Field(default=92, ge=56, le=140)
 
@@ -75,6 +78,7 @@ class StylePack(_M):
     caption: CaptionStyle = Field(default_factory=CaptionStyle)
     hook: HookStyle = Field(default_factory=HookStyle)
     rhythm: Rhythm = Field(default_factory=Rhythm)
+    effects_per_minute: float = Field(default=3.0, ge=0.0, le=8.0)   # face effects (engine/face_effects) the director may place; 0 = none
     accent_font: Literal["Kharazmi", "Ray"] = "Kharazmi"          # the "serif italic" voice of the reference, in Persian
     grade: str = "warm"                                           # warm | cool | neutral
     source: str = ""                                              # what it was derived from ("reference: file.mp4", "director")
@@ -88,7 +92,7 @@ REFERENCE_AI_NEWS = StylePack(
     best_for="معرفی ابزار، آموزش سریع، اکسپلینر صحبتی",
     palette=Palette(), panel_theme="paper",
     caption=CaptionStyle(mode="words", per_page=3, size_full=96, size_split=84, pop=True),
-    hook=HookStyle(mode="headline", seconds=3.0, size=92),
+    hook=HookStyle(mode="tscaps", template="noor", seconds=3.0, size=92),
     rhythm=Rhythm(split_ratio=0.6, close_zoom=1.22, cut_min=1.6, cut_max=2.8),
     accent_font="Kharazmi", grade="warm",
 )
@@ -100,9 +104,9 @@ BOLD_VIRAL = StylePack(
     palette=Palette(panel_bg="#0E1112", panel_ink="#F4F1E8", card="#1B2022", accent="#FFD23F", accent_2="#FF5A5F", highlight="#FFD23F", dark="#050607"),
     panel_theme="ink",
     caption=CaptionStyle(mode="slam", per_page=2, size_full=124, size_split=104, y_full=0.66, pop=True),
-    hook=HookStyle(mode="slam", seconds=2.6, size=110),
+    hook=HookStyle(mode="tscaps", template="elio", seconds=2.6, size=110),
     rhythm=Rhythm(split_ratio=0.35, close_zoom=1.35, cut_min=1.2, cut_max=2.2),
-    accent_font="Ray", grade="warm",
+    accent_font="Ray", grade="warm", effects_per_minute=4.0,
 )
 
 CALM_PODCAST = StylePack(
@@ -112,9 +116,9 @@ CALM_PODCAST = StylePack(
     palette=Palette(panel_bg="#E9E6DF", panel_ink="#1A1C1D", accent="#8A6F4D", accent_2="#3F5E5A", highlight="#FFFFFF"),
     panel_theme="paper",
     caption=CaptionStyle(mode="phrase", per_page=4, size_full=76, size_split=70, y_full=0.76, pop=False, box=True),
-    hook=HookStyle(mode="headline", seconds=2.5, size=72),
+    hook=HookStyle(mode="words", seconds=2.5, size=72),
     rhythm=Rhythm(split_ratio=0.0, close_zoom=1.12, cut_min=2.4, cut_max=4.5),
-    accent_font="Kharazmi", grade="neutral",
+    accent_font="Kharazmi", grade="neutral", effects_per_minute=0.0,
 )
 
 PRESETS = {p.id: p for p in (REFERENCE_AI_NEWS, BOLD_VIRAL, CALM_PODCAST)}

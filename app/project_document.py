@@ -57,6 +57,9 @@ def _caption_frames(planned, job_dir: Path, state: dict) -> dict[int, dict]:
     from engine.talking_styles import talking_1 as first
     style, plan = planned.style, planned.plan
     try:
+        if style == "talking_5":
+            return {i: {"x": 540.0, "y": 0.70 * 1920, "size": 96.0, "box": None, "style": "words", "font": "Ray Bold", "x_locked": True}
+                    for i in range(len(plan.captions))}
         if style == "talking_4":
             from engine import tscaps_overlay as tso
             vertical = float(tso.ROLES["caption"]["alignment"]["verticalOffset"])

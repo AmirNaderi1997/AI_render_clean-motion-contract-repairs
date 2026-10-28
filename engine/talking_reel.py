@@ -14,6 +14,7 @@ STYLES = {
     "talking_2": ("صحبتی ۲ (آموزشی دوتکه)", "engine.talking_styles.talking_2"),
     "talking_3": ("صحبتی ۳ (سینمایی)", "engine.talking_styles.talking_3"),
     "talking_4": ("صحبتی ۴ (مینیمال واقعی)", "engine.talking_styles.talking_4"),
+    "talking_5": ("صحبتی ۵ (پک استایل: پنل، کارت گوینده، افکت)", "engine.talking_styles.talking_5"),
 }
 DEFAULT_STYLE = "talking_1"
 

@@ -146,18 +146,20 @@ def build_spec(cues: list[Cue], width: int, height: int, kinds: dict[str, dict] 
 
 
 def render_overlay(cues: list[Cue], out: Path, *, width: int, height: int, fps: int, duration: float,
-                   work_dir: Path, timeout: int = 900) -> Path:
+                   work_dir: Path, timeout: int = 900, kinds: dict[str, dict] | None = None) -> Path:
     """Render `cues` to a transparent VP9 WebM of exactly `duration` seconds; raises OverlayUnavailable on any failure."""
     cues = [c for c in cues if c.words]
     if not cues:
         raise OverlayUnavailable("no cues to render")
     if not available() and not (enabled() and ensure_installed() and shutil.which("node") and shutil.which("ffmpeg")):
         raise OverlayUnavailable("node, ffmpeg or the tscaps engine is not installed")
+    work_dir = Path(work_dir).resolve()
+    out = Path(out).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     blank, spec_path = work_dir / "tscaps_blank.mp4", work_dir / "tscaps_spec.json"
     try:
         _blank(blank, width, height, fps, duration)
-        spec_path.write_text(json.dumps(build_spec(cues, width, height), ensure_ascii=False))
+        spec_path.write_text(json.dumps(build_spec(cues, width, height, kinds), ensure_ascii=False))
         out.unlink(missing_ok=True)
         proc = subprocess.run(["node", "run.mjs", str(spec_path), str(blank), str(out)], cwd=TOOL, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
