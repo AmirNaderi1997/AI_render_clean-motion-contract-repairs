@@ -175,6 +175,28 @@ field with execution disabled. The SDK was installed only in a temporary test
 directory; running local and production application environments were unchanged.
 No hardware-specific mobile/PWA testing or live OAuth success is claimed.
 
+### Isolated local preview on 5187
+
+`scripts/run_hermes_local.py` starts the frontend on loopback port 5187, Studio
+API on 8192 and Hermes API on 8193. Run it with an existing EditorGPT Python
+environment and frontend dependencies installed. It keeps test projects, Hermes
+data and persistent encryption material in gitignored `.local-hermes-test` and
+does not load the prior application's `.env` or connect to its databases.
+Local authentication accounts are in this checkout's gitignored `jobs/users.json`.
+Use a fresh local test account; old accounts and projects were not removed.
+
+`VITE_REQUIRE_LOCAL_AUTH=1` opts this preview out of the normal localhost UI bypass
+so Hermes receives a real JWT. This does not weaken backend authentication or
+change other local installations' default behavior. Composio credentials are not
+copied or invented; its configured-status warning is expected until the server
+secret is provided. Reviewed read execution remains default-deny.
+
+The explicit `scripts/check_hermes_local.py` smoke test creates a named local
+verification account and checks frontend-proxied signup/authentication, encrypted
+settings persistence and an actual Persian content check. It prints no secrets
+and makes zero external calls. Do not run it against production. The test passed
+on the preview; both API health checks and the actual browser login page passed.
+
 Reviewed references: [Sessions](https://docs.composio.dev/docs/configuring-sessions),
 [authentication](https://docs.composio.dev/docs/authentication/manually-authenticating),
 official `composio==0.30.0` wheel source and the pinned Hermes source above.
