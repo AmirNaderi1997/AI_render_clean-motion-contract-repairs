@@ -17,7 +17,7 @@ def test_every_catalog_effect_exists_in_the_core_and_is_described_in_persian():
         assert any("؀" <= ch <= "ۿ" for ch in spec["title"] + spec["description"])
         for option in spec["options"]:
             assert option["type"] in {"number", "choice", "color"}
-    assert len(CATALOG) == 10 and len(BY_ID) == 10
+    assert len(CATALOG) == 42 and len(BY_ID) == 42
 
 
 def test_a_plan_keeps_only_known_effects_inside_their_limits():
