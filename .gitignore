@@ -33,11 +33,17 @@ assets/effect_previews/
 
 # Clean distribution repository: keep runtime source only.
 /.claude/
+!/.claude/
+/.claude/*
+!/.claude/skills/
+/.claude/skills/*
+!/.claude/skills/ai-render-motion/
 /.cursor/
 /tests/*
 !/tests/test_studio_agents.py
 !/tests/test_creative_resources.py
 !/tests/test_resource_operations.py
+!/tests/test_narration_alignment.py
 /hermes/tests/
 *.test.ts
 *.test.tsx
@@ -75,3 +81,7 @@ vendor/
 # Isolated Hermes local preview (credentials and test data).
 /.local-hermes-test/
 /web/node_modules
+
+# Motion fixture outputs stay outside source control.
+/docs/motion-caption-fixture/
+/remotion/node_modules

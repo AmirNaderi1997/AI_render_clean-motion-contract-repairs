@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import base64
 import os
 import subprocess
 import uuid
@@ -21,6 +22,23 @@ class TTSResult:
 
 
 _ELEVENLABS_TIMEOUT_SECONDS = 200
+
+
+def _timestamps_unsupported(response) -> bool:
+    """Only capability rejection permits a second, plain request to the same relay."""
+    status = getattr(response, "status_code", None)
+    if status in {404, 405, 501}:
+        return True
+    if status not in {400, 422}:
+        return False
+    try:
+        # Inspect only to classify the response. Never log provider bodies/keys.
+        import json
+        detail = json.dumps(response.json()).lower()
+    except (ValueError, TypeError):
+        detail = str(getattr(response, "text", "")).lower()
+    return ("unsupported" in detail or "not supported" in detail) and any(
+        term in detail for term in ("timestamp", "endpoint", "route"))
 
 
 def _get_audio_duration(path: str) -> float:
@@ -43,7 +61,7 @@ def _configured_provider(provider: str | None = None) -> str:
 @observe_specialized("audio", "elevenlabs-vercel-relay")
 def _generate_elevenlabs(
     text: str, output_path: str, voice_id: str = "", model_id: str = "",
-    *, language: str = "", context: str = "",
+    *, language: str = "", context: str = "", with_timestamps: bool = False,
 ) -> None:
     """Generate one MP3 through ElevenLabs with a bounded network timeout."""
     from . import lm_gateway
@@ -64,19 +82,49 @@ def _generate_elevenlabs(
         import httpx
         from brain.elevenlabs_transport import url as elevenlabs_url
 
-        response = httpx.post(
-            elevenlabs_url(f"v1/text-to-speech/{voice_id}"),
-            headers={"xi-api-key": api_key, "accept": "audio/mpeg"},
-            json={"text": text, "model_id": model_id, **({"language_code": "fa"} if persian(text, language) else {})},
-            # Short connect timeout to fail fast, longer read timeout because
-            # ElevenLabs only responds after synthesizing the whole clip.
-            timeout=httpx.Timeout(
-                max(_ELEVENLABS_TIMEOUT_SECONDS, float(os.environ.get("ELEVENLABS_READ_TIMEOUT", "200")), 60 + len(text)/6),
-                connect=float(os.environ.get("ELEVENLABS_CONNECT_TIMEOUT", "20")),
-            ),
-        )
+        def request(timed: bool):
+            return httpx.post(
+                elevenlabs_url(f"v1/text-to-speech/{voice_id}" + ("/with-timestamps" if timed else "")),
+                headers={"xi-api-key": api_key, "accept": "application/json" if timed else "audio/mpeg"},
+                json={"text": text, "model_id": model_id, **({"language_code": "fa"} if persian(text, language) else {})},
+                # Short connect timeout; synthesis may take the whole read window.
+                timeout=httpx.Timeout(
+                    max(_ELEVENLABS_TIMEOUT_SECONDS, float(os.environ.get("ELEVENLABS_READ_TIMEOUT", "200")), 60 + len(text)/6),
+                    connect=float(os.environ.get("ELEVENLABS_CONNECT_TIMEOUT", "20")),
+                ),
+            )
+        response = request(with_timestamps)
+        timed = with_timestamps
+        if timed and _timestamps_unsupported(response):
+            log.info("Relay timestamps unsupported; requesting plain narration")
+            response, timed = request(False), False
         response.raise_for_status()
-        Path(output_path).write_bytes(response.content)
+        audio = None
+        if timed:
+            try:
+                payload = response.json()
+                audio = base64.b64decode(payload['audio_base64'], validate=True)
+                if not audio:
+                    raise ValueError("Empty timestamp audio")
+            except (ValueError, KeyError, TypeError):
+                # A relay may return plain audio or lack the timestamp response
+                # shape. Preserve returned audio, otherwise use the plain route.
+                if str(getattr(response, "headers", {}).get("content-type", "")).startswith("audio/"):
+                    audio = response.content
+                else:
+                    response = request(False)
+                    response.raise_for_status()
+                    audio = response.content
+                timed = False
+        if audio is None:
+            audio = response.content
+        Path(output_path).write_bytes(audio)
+        if timed:
+            try:
+                from engine.narration_alignment import save_tts_words
+                save_tts_words(Path(output_path), payload.get('alignment') or payload.get('normalized_alignment') or {})
+            except Exception:
+                log.warning('TTS word timing unavailable; narration requires alignment')
     except Exception as exc:
         Path(output_path).unlink(missing_ok=True)
         response = getattr(exc, "response", None)
@@ -104,6 +152,7 @@ def generate_narration(
     fallback_voice_id: str = "",
     language: str = "",
     context: str = "",
+    with_timestamps: bool = False,
 ) -> TTSResult:
     """Generate narration using the requested provider without silent substitution."""
     if not text.strip():
@@ -120,6 +169,8 @@ def generate_narration(
     from .localize import tts_voice, tts_model
     try:
         extra = {"language": language, "context": context} if language or context else {}
+        if with_timestamps:
+            extra['with_timestamps'] = True
         _generate_elevenlabs(text, str(out_file), voice_id=voice_id or tts_voice(), model_id=model_id or tts_model(), **extra)
     except Exception:
         out_file.unlink(missing_ok=True)

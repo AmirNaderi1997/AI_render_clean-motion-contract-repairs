@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def render(config: dict, output: Path, *, job_dir: Path, on_progress=None) -> None:
+def render(config: dict, output: Path, *, job_dir: Path, on_progress=None, captions_prepared: bool = False) -> None:
     from engine.motion_contract import validate_motion_config
     root = job_dir.resolve()
     config = validate_motion_config(config, root)
@@ -23,6 +23,9 @@ def render(config: dict, output: Path, *, job_dir: Path, on_progress=None) -> No
     if config["look"] == "cinematic":
         _enrich(config, root)
     config = validate_motion_config(config, root)
+    if not captions_prepared:
+        from engine.narration_alignment import prepare
+        config, _ = prepare(config, root)
     config["font"] = str(ROOT / "presets/fonts/RAY-EXTRABOLD.TTF")
     config_path = output.with_suffix(".remotion.json")
     output.parent.mkdir(parents=True, exist_ok=True)
