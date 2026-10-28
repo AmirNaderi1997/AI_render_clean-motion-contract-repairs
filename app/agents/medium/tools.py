@@ -25,7 +25,7 @@ class URL(Args):
 
 
 class Talking(Asset):
-    style: Literal["talking_1", "talking_2", "talking_3"] | None = None
+    style: Literal["talking_1", "talking_2", "talking_3", "talking_5"] | None = None
     request: str = Field(default="", max_length=2000)
 
 

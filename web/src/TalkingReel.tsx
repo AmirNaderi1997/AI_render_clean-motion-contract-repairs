@@ -42,7 +42,7 @@ export function TalkingReelCard({ jobId, onChanged }: { jobId: string; onChanged
   }, [jobId, running, paused]);
 
   if (!state || !draft) return null;
-  const enhanced = ["talking_2", "talking_3", "talking_4"].includes(draft.style || "talking_1");
+  const enhanced = ["talking_2", "talking_3", "talking_4", "talking_5"].includes(draft.style || "talking_1");
   const hasVisuals = ["talking_2", "talking_3"].includes(draft.style || "talking_1");
   const SOURCES: Record<string, string> = { upload: "آپلود خودت", library: "کتابخونه", ai: "هوش مصنوعی", card: "کارت متنی" };
 

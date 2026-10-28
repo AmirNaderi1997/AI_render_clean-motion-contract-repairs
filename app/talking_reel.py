@@ -39,6 +39,7 @@ DEFAULTS = {
         "outro_logo": {"enabled": True, "motion": "pop"},
         "disabled_moments": [],
         "dropped_sentences": [], "bottom_shade": 0, "source_cuts": [], "effects": [],
+        "style_pack": "ref-ai-news", "auto_effects": True,
     },
 }
 EDITABLE = {"hook", "hook2", "hook_highlight", "name", "title", "music", "music_chosen", "cta", "style", "captions", "storyboard", "render_settings",
@@ -458,7 +459,7 @@ def _analyze(job_dir: Path, video: Path, *, style: Optional[str], request: str =
 
     _stage(job_dir, "editing text", progress=30)
     state = load(job_dir)
-    if selected == "talking_1":
+    if selected in ("talking_1", "talking_5"):
         decisions = base_brain.decide(transcript["sentences"], guidance)
         state["decisions"] = decisions
         state["hook"] = decisions["hook"]
@@ -610,7 +611,9 @@ def _run(job_dir: Path, video: Path, *, regenerate: bool) -> None:
 
     load_dotenv(PROJECT_ROOT / ".env")
     style = load(job_dir).get("style") or "talking_1"
-    if style in SPLIT_STYLES:
+    if style == "talking_5":
+        _run_style5(job_dir, video, regenerate=regenerate)
+    elif style in SPLIT_STYLES:
         _run_split(job_dir, video, style, regenerate=regenerate)
     else:
         _run_talking_1(job_dir, video, regenerate=regenerate)
@@ -623,6 +626,51 @@ def _faces(job_dir: Path, video: Path, media) -> list:
     faces = media.track_faces(video)
     faces_path.write_text(json.dumps(faces))
     return faces
+
+
+def pack_of(render_settings: dict):
+    """The style pack of a talking_5 reel: a preset id, a pack the director composed or the person saved (a dict), with the person's switches applied."""
+    from creative import style_packs
+    chosen = (render_settings or {}).get("style_pack") or "ref-ai-news"
+    try:
+        pack = style_packs.parse(chosen) if isinstance(chosen, dict) else style_packs.get(str(chosen))
+    except (KeyError, ValueError):
+        pack = style_packs.get("ref-ai-news")
+    if (render_settings or {}).get("auto_effects") is False:
+        pack = pack.model_copy(update={"effects_per_minute": 0.0})
+    return pack
+
+
+def _run_style5(job_dir: Path, video: Path, *, regenerate: bool) -> None:
+    """"صحبتی ۵": a style-pack reel (panels written by the Motion Designer, the speaker as a card with the head over the panel, tscaps hook, face effects)."""
+    from engine.talking_styles import talking_5 as t5
+    _stage(job_dir, "loading transcript" if (job_dir / "transcript.json").is_file() else "transcribing", progress=5)
+    transcript = transcript_for(job_dir, video)
+    state = load(job_dir)
+    decisions = state.get("decisions")
+    if not decisions:
+        raise ValueError("analyze the video before planning the render")
+    settings = state.get("render_settings") or DEFAULTS["render_settings"]
+    pack = pack_of(settings)
+    decisions = _apply_timeline_choices(dict(decisions), "talking_5", settings)
+    decisions = {**decisions, "captions": {int(k): v for k, v in (decisions.get("captions") or {}).items()},
+                 "hook": state.get("hook") or decisions.get("hook"), "hook_highlight": state.get("hook_highlight") or []}
+    _stage(job_dir, "tracking the face", progress=20)
+    faces = _faces(job_dir, video, t5)
+    duration = float(transcript.get("duration") or 0) or t5.probe_video(video)[2]
+    plan_data = state.get("creative_plan")
+    beats = ((plan_data or {}).get("chosen") or {}).get("beats") or []
+    _stage(job_dir, "planning render", progress=35)
+    plan = t5.plan_reel(transcript, decisions, faces, duration, pack, beats, key_moments_of(decisions), plan_data, settings)
+    out = _next_output(job_dir)
+    progress, _stage_cb = _render_reporter(job_dir, 50)
+    _stage(job_dir, "rendering", progress=45)
+    music = state.get("music")
+    t5.render(video, plan, out, work_dir=job_dir / "talking_reel_work" / "style5", music=resolve_music(music), on_progress=progress, pack=pack)
+    _apply_effects(job_dir, out, settings)
+    state = load(job_dir)
+    state.update(status="done", stage="", message="", progress=100, output=f"exports/{out.name}", duration=round(plan.duration, 2), shots=len(plan.shots))
+    save(job_dir, state)
 
 
 def _next_output(job_dir: Path) -> Path:

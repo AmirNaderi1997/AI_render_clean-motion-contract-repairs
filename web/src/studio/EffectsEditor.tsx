@@ -72,7 +72,7 @@ export function EffectsEditor({ jobId, onSaved }: { jobId: string; onSaved: () =
         <label className="field"><span className="field-label">از ثانیه</span><input className="input" type="number" inputMode="decimal" dir="ltr" min={0} step={0.1} value={start} disabled={disabled} onChange={event => setStart(Number(event.target.value))}/></label>
         <label className="field"><span className="field-label">تا ثانیه</span><input className="input" type="number" inputMode="decimal" dir="ltr" min={0} step={0.1} value={end} disabled={disabled} onChange={event => setEnd(Number(event.target.value))}/></label>
       </div>
-      {spec?.text ? <label className="field"><span className="field-label">{spec.text.label}</span><input className="input" type="text" dir="rtl" maxLength={40} value={text} disabled={disabled} onChange={event => setText(event.target.value)}/></label> : null}
+      {spec?.text ? <label className="field"><span className="field-label">{spec.text.label}</span><input className="input" type="text" dir="rtl" maxLength={160} value={text} disabled={disabled} onChange={event => setText(event.target.value)}/></label> : null}
       {spec?.options.map(option => <OptionField key={option.key} option={option} value={options[option.key]} disabled={disabled} onChange={value => setOptions(current => ({ ...current, [option.key]: value }))}/>)}
       {!valid ? <small className="field-hint">مدت هر افکت باید بین ۰٫۴ تا ۸ ثانیه باشد.</small> : null}
       <div className="fx-actions">
