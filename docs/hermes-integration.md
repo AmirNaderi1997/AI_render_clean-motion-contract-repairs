@@ -106,6 +106,40 @@ Seven integration tests cover actual Persian checks, schema validation, activity
 events, persisted results, replay protection and run ownership. Together with
 the pre-existing Studio agent suite and content checks: 61 tests passed.
 
+### Native Hermes bridge (implemented, connection not provisioned)
+
+`integrations/hermes/editor-instagram-tools` is an out-of-tree native Hermes
+plugin. It registers `editorgpt_instagram_check`, which calls the authenticated
+`POST /api/hermes/content-tools/check` endpoint. The endpoint reuses the shared
+Studio tool implementation and limits concurrent checks to two per API process.
+The plugin cannot supply user IDs, paths, shell commands or endpoint URLs in
+tool arguments. It blocks redirects and ambient proxies and sanitizes errors.
+
+The plugin resolves `EDITORGPT_API_ORIGIN` and `EDITORGPT_ACCESS_TOKEN` using
+Hermes' profile-scoped secret API on **each call**, never a global cached token.
+The origin must be HTTPS, or HTTP on loopback only, with no embedded credentials,
+path, query or fragment. The token is an existing EditorGPT access token, not a
+second authentication system. Do not put it in chat, frontend configuration,
+source control or a shared multi-user profile. Expired access returns an explicit
+authentication error; automatic token refresh/provisioning is not yet implemented.
+
+For a trusted single-user setup, install the plugin directory under the isolated
+`HERMES_HOME/plugins/editor-instagram-tools`, run native `hermes plugins validate`
+and enable with `hermes plugins enable editor-instagram-tools --no-allow-tool-override`.
+Provision profile secrets through the deployment's secure credential mechanism.
+For hosted multi-user invocation, the application must bind the authenticated
+user's short-lived credentials per execution; do not configure one shared user's
+bearer token for all web users. This hosted invocation wiring remains pending.
+
+Verified: official Hermes v0.22.5 validator passed every check, including isolated
+registration, declared tools, no core override, safe scan and host-isolation
+compatibility. The plugin is installed and enabled in the isolated local Hermes
+profile. No access token or API origin has been provisioned, and no live agent
+or account call was made. Eight more tests cover the authenticated endpoint,
+profile credential resolution, bad origins, error sanitization and registration;
+combined Studio/content/bridge suite: 69 passed. Local running app and production
+were not restarted or changed.
+
 Dynamic discovery/execution through Hermes, backend-approved mutations, provider
 revocation, per-user skill controls, scoped brand voice, structured Creative
 Director handoff and Composio execution through LangGraph are not yet delivered. Installation alone
