@@ -12,6 +12,7 @@ import shutil
 import subprocess
 from html import escape
 from pathlib import Path
+from engine.persian_text import display_text, display_units
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSITION_ID = "reel"
@@ -76,8 +77,8 @@ def _scene_html(i: int, scene: dict, start: float, dur: float, lead: float, coun
         s0, s1 = min(s0, 1.12), min(s1, 1.12)
         cam = {**cam, "x": (0, 0), "y": (0, -10), "r": (0, 0)}
 
-    title = str(scene.get("title") or "")
-    head_words = title.split()
+    title = display_text(str(scene.get("title") or ""))
+    head_words = display_units(title)
     head_size = 78 if len(title) > 26 else 104
     head = "".join(f'<span class="hw">{escape(w)}</span>' for w in head_words)
 
@@ -96,6 +97,8 @@ def _scene_html(i: int, scene: dict, start: float, dur: float, lead: float, coun
     timed = [(w['w'], start + w['start']) for w in aligned] if aligned else word_times(
         str(scene.get("narration_text") or ""), start + .2, start + dur - .35)
     ends = [start + w['end'] for w in aligned] if aligned else []
+    shown = display_text(' '.join(w for w, _ in timed)).split()
+    timed = [(shown[n], at) for n, (_, at) in enumerate(timed)]
     pages = [timed[p:p + PAGE_WORDS] for p in range(0, len(timed), PAGE_WORDS)]
     caps = []
     for p, page in enumerate(pages):
@@ -139,13 +142,20 @@ def _scene_html(i: int, scene: dict, start: float, dur: float, lead: float, coun
         js.append(f'tl.fromTo("#{sid}wp",{{clipPath:"inset(0% 0% 0% 100%)"}},{{clipPath:"inset(0% 0% 0% 0%)",duration:{_fmt(lead)},ease:"power3.out"}},{_fmt(t0)});')
         js.append(f'tl.fromTo("#{sid}eg",{{x:{WIDTH},opacity:.9}},{{x:0,opacity:0,duration:{_fmt(lead)},ease:"power3.out"}},{_fmt(t0)});')
         js.append(f'tl.fromTo("#{sid}fl",{{opacity:0}},{{opacity:.35,duration:{_fmt(lead / 3)},yoyo:true,repeat:1,ease:"none"}},{_fmt(t0)});')
-    js.append(f'tl.fromTo("#{sid}pr",{{scale:{s0},x:{cam["x"][0]},y:{cam["y"][0]},rotation:{cam["r"][0]}}},'
-              f'{{scale:{s1},x:{cam["x"][1]},y:{cam["y"][1]},rotation:{cam["r"][1]},duration:{_fmt(total)},ease:"sine.inOut"}},{_fmt(t0)});')
+    if i > 0:
+        # One scale owner keeps entrance + hold within the existing photo cap.
+        js.append(f'tl.fromTo("#{sid}pr",{{scale:1}},{{scale:1.06,duration:{_fmt(lead)},ease:"power2.out"}},{_fmt(t0)});')
+        js.append(f'tl.fromTo("#{sid}pr",{{scale:1.06}},{{scale:{max(1.06, s1)},duration:{_fmt(dur)},ease:"sine.inOut",immediateRender:false}},{_fmt(start)});')
+    else:
+        js.append(f'tl.fromTo("#{sid}pr",{{scale:{s0},x:{cam["x"][0]},y:{cam["y"][0]},rotation:{cam["r"][0]}}},'
+                  f'{{scale:{s1},x:{cam["x"][1]},y:{cam["y"][1]},rotation:{cam["r"][1]},duration:{_fmt(total)},ease:"sine.inOut"}},{_fmt(t0)});')
     if i == 0:
         js.append(f'tl.fromTo("#{sid}pw",{{opacity:0,scale:.9}},{{opacity:1,scale:1,duration:.6,ease:"power3.out"}},{_fmt(start)});')
     js.append(f'tl.fromTo("#{sid}gl",{{scale:.92}},{{scale:1.12,duration:{_fmt(total)},ease:"sine.inOut"}},{_fmt(t0)});')
     if head_words and i == 0:
         js.append(f'tl.from("#{sid}hd .hw",{{opacity:0,y:-46,scale:.85,duration:.5,ease:"back.out(1.7)",stagger:.13}},{_fmt(start + .05)});')
+    if head_words and i > 0:
+        js.append(f'tl.fromTo("#{sid}hd .hw",{{opacity:.6,y:16}},{{opacity:1,y:0,duration:{_fmt(lead)},ease:"power2.out"}},{_fmt(t0)});')
     js.append(f'tl.from("#{sid}br",{{scaleX:0,duration:.5,ease:"power3.out"}},{_fmt(start + .1)});')
     js.append(f'tl.fromTo("#{sid}t{i}",{{width:"0%"}},{{width:"100%",duration:{_fmt(dur)},ease:"none"}},{_fmt(start)});')
     if i == count - 1:
@@ -167,7 +177,7 @@ html,body{margin:0;background:#08060b}
 .pr.cut{padding:0;-webkit-mask-image:none;mask-image:none}
 .sp{position:absolute;opacity:0;border-radius:50%;background:#fff}
 .head{position:absolute;left:60px;right:60px;top:104px;display:flex;flex-wrap:wrap;justify-content:center;gap:0 20px;font-weight:900;line-height:1.3;color:#fff;text-shadow:0 8px 28px #000c}
-.hw{display:inline-block}
+.hw{display:inline-block;unicode-bidi:isolate;white-space:nowrap}
 .bar{position:absolute;left:430px;width:220px;height:7px;border-radius:7px}
 .cpage{position:absolute;left:56px;right:56px;bottom:250px;opacity:0;display:flex;flex-wrap:wrap;justify-content:center;gap:6px 22px;font-weight:900;font-size:92px;line-height:1.32;text-align:center;color:#fff}
 .cw{display:inline-block;opacity:0;color:#fff;text-shadow:0 4px 18px #000d,0 0 3px #000d}

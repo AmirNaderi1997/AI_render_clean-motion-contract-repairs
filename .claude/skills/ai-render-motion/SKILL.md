@@ -35,6 +35,12 @@ Do not duplicate or relax those limits in a new adapter.
 candidate, but the renderer failure is recorded and publication is held.
 `REEL_ENGINE` can explicitly select Remotion. Its entry is `remotion/render.mjs`:
 version 2 selects `DirectedReel`, otherwise `ProductReel`.
+Remotion defaults to `classic` for both config versions. `REMOTION_LOOK=cinematic`
+is an explicit opt-in for the slower cinematic look; do not infer it from version 2.
+`<output>.render-evidence.json` records the actual composition and look. Fixture
+wipe references must come from that same React composition, with resolved props
+overridden for the product-hidden reference; a HyperFrames reference is not proof
+of classic Remotion product visibility.
 
 `brain/tts.py` requests ElevenLabs relay timestamps for Content Creator narration.
 Unsupported `/with-timestamps` (404/405/501 or explicit 400/422 unsupported) must
@@ -101,10 +107,35 @@ attribute escaping; never concatenate model text as executable code. See
 
 ## Persian and delivery
 
-Keep RTL containers, joined letters, Persian digits and local Ray fonts. Animate
-whole words or lines; never split Persian letters or add letter spacing. Retain
-the `join_lam_alef` shaping fix. Preserve approved script spelling while mapping
-ASR; digit normalization belongs upstream, not in guessed timing corrections.
+Keep RTL containers, joined letters and local Ray fonts. Animate whole words or
+lines; never split Persian letters or add letter spacing. Retain `join_lam_alef`.
+User/script/storyboard/product/beat content may contain Latin brands and models.
+Apply `engine.persian_text.display_text` / `remotion/src/persian-text.mjs` only at
+template display boundaries, before splitting words or caption pages. Preserve
+source text, caption words and timing evidence. For each whitespace token:
+
+- Preserve a token containing an ASCII Latin letter, including its digits (`A52`, `5G`).
+- Preserve digits in the token immediately after a Latin-bearing token (`iPhone 15`).
+- Otherwise convert ASCII digits to Persian digits, and a numeric token's `%`/`.`
+  to `٪`/`٫`. Thus `کفش Nike Air سایز 42` renders `کفش Nike Air سایز ۴۲`.
+
+This conservative syntactic rule does not guess model names or translate brands.
+Use it on titles, item labels and caption display text in both renderers. Keep
+adjacent Latin/model title tokens in one isolated animation unit (`display_units`
+/ `displayUnits`) so RTL word layout does not reverse `Nike Air` or `iPhone 15`.
+Keep template chrome (badges, counters, eyebrows, UI labels) Persian and mark owned
+nodes `data-qc="chrome"`. Mark reviewed vendored content sinks `data-qc="content"`;
+all other component text remains chrome. Only the nearest ownership marker
+controls language QC. Never let model data choose ownership markers. Check chrome
+even when temporarily invisible, and check visible text overflow for all content.
+Mount vendored `<template>` bodies in standalone QC; inert templates prove nothing.
+
+Later product scenes use a visible product push from 1.0 to 1.06 and headline
+rise of 16px from opacity 0.6, completed within the nine-frame wipe. Keep the
+photo scale cap at 1.12 and verify decoded product pixels with same-engine witnesses.
+Comparison beats need two non-empty labels (or two labels split from an explicit
+`یا` / `در برابر` title). Resolve underspecified comparisons to `kinetic_type`
+at beat-building time and retain the reason in `why`; never pad empty boxes.
 
 Delivery is 1080×1920 at 30 fps. HyperFrames is pinned to 0.8.161 (see
 `engine/hyperframes/cli.py`); Remotion packages are pinned together at 4.0.536.

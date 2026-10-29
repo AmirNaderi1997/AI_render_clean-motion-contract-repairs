@@ -11,9 +11,12 @@ def main():
     shutil.copy2(ensure_gsap(),root/'assets/gsap.min.js');shutil.copy2('presets/fonts/RAY-EXTRABOLD.TTF',root/'assets/fonts/ray-extrabold.ttf')
     results={}
     for name in sorted(lib.SAFE_COMPONENTS):
-        p=lib.install(root,name);shutil.copy2(p,p.parent/'index.html')
+        p=lib.install(root,name)
+        # Standalone browser QC must mount the reviewed template. An inert
+        # <template> would report zero text without executing the component.
+        (p.parent/'index.html').write_text(p.read_text().replace('<template>', '').replace('</template>', ''))
         values=lib.LIBRARY[name].fill({'title':'انتخاب ۱۲ گام روشن','items':['انتخاب نخست','مقایسه دقیق','خرید آسان']},4)
-        request=root/'request.json';request.write_text(json.dumps({'project':str(p.parent),'variables':values,'samples':[.4,1,2,3.8],
+        request=root/'request.json';request.write_text(json.dumps({'project':str(p.parent),'variables':values,'componentUi':True,'samples':[.4,1,2,3.8],
             'width':int(968/lib.LIBRARY[name].zoom),'height':int(888/lib.LIBRARY[name].zoom)}))
         r=subprocess.run(['node',str(Path(__file__).with_name('motion_dom_qc.mjs')),str(request)],text=True,capture_output=True,check=True)
         results[name]=json.loads(r.stdout);print(name,results[name]['findings'],flush=True)

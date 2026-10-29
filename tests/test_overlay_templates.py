@@ -55,7 +55,8 @@ def test_registry_text_is_attribute_escaped_and_never_written_into_source(tmp_pa
     page = entry.read_text()
     assert "<img src=x" not in page
     values = Mounts(page).values
-    assert values[0]["text"] == text.translate(library.PERSIAN_DIGITS)
+    from engine.persian_text import display_text
+    assert values[0]["text"] == display_text(text)
     assert text not in (entry.parent / "compositions/components/headline-slam.html").read_text()
 
 

@@ -1,5 +1,8 @@
 # Five motion acceptance examples
 
+Historical evidence below describes `03440a6`. Current review fixes and freshly
+rendered classic Remotion acceptance are in [motion-polish-review-fixes.md](motion-polish-review-fixes.md).
+
 Branch `motion-polish-v1` starts at fork `motion-captions-and-skills-v2`, `6d4071fbd4d4c85ca8983a4be5113a77667d7d9b`. Fork PRs #1 and #2 were open at branch creation. Upstream is read only. These are local, direct renders; no app UI run or live provider acceptance is claimed.
 
 All evidence is local in `docs/motion-polish-fixture/` (ignored). Maintained fixture runner: `scripts/motion_examples_fixture.py`; adapter scan: `scripts/motion_adapter_scan.py`. HyperFrames is pinned to 0.8.161, Remotion to 4.0.536. Inputs and plans remain data; no model code is executed. No provider requests were made.
@@ -31,9 +34,18 @@ Each sheet contains start + one frame, midpoint and end - one frame for every be
 | promo | `e561b031481e2088f058d335b80302fa0b813b12b93055859ca5d014da865980` | passed | `docs/motion-polish-fixture/promo-sheet.jpg` |
 | promo-remotion | `dc61e3bc65fcbe914d8035adbb5fe1384baaae9dce0686884e8eea3bbe171ebb` | passed | `docs/motion-polish-fixture/promo-remotion-sheet.jpg` |
 
-QC checks the maintained generated DOM for Latin letters/digits (including temporarily invisible copy), and uses browser text ranges and clipped scroll boxes to find panel overflow. Missing browser evidence fails closed. Wipe QC creates normal/product-hidden browser references and requires product-specific pixel differences in the actual encoded video frame. It is sampled evidence, not all-frame semantic vision/OCR. Raster photo branding is outside the DOM language check. Talking_2 invokes DOM QC through `review_render`; product render invokes it before cleanup and holds a candidate on failure. An app regression ensures a QC hold does not trigger a fallback render.
+The original QC checked all generated DOM text for Latin letters/digits, which
+incorrectly held legitimate brands/models. Current QC limits language checks to
+owned chrome and retains overflow checks on all visible text. The original
+Remotion wipe check reused HyperFrames references; it did not establish classic
+Remotion visibility. The follow-up evidence uses references rendered by the
+actual selected Remotion composition. Raster photo branding is outside DOM QC.
 
-The 22 enabled adapters were scanned at four times each, at their actual zoom-adjusted panel dimensions: zero language/layout/runtime findings (`adapter-scan/results.json`). `beat-timeline` and `pan-stations` were already excluded on this base and remain excluded. Vendored bytes and hashes were not changed. Scan exercises representative supplied content, not every possible input. The talking_5 acceptance uses its maintained built-in panel.
+The original 22-adapter scan reported zero findings, but its standalone browser
+pages left component templates inert. That result is invalid as language/layout
+acceptance and is superseded by the mounted scan in the follow-up evidence.
+Vendored bytes/hashes remain unchanged; job-local adapters localize chrome.
+The talking_5 acceptance uses its maintained built-in panel.
 
 Decoded mid-wipe product pixel counts:
 

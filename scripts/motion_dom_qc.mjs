@@ -24,13 +24,14 @@ try {
       for(const tl of Object.values(window.__timelines||{}))tl.seek(t);
       for(const e of document.querySelectorAll('.clip')){const a=Number(e.dataset.start||0),d=Number(e.dataset.duration||1e9);e.style.visibility=t>=a&&t<a+d?'visible':'hidden';}
     },time);
-    const issues=await page.evaluate(()=>{
+    const issues=await page.evaluate(componentUi=>{
       const out=[];const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
       while(walker.nextNode()){
         const n=walker.currentNode,e=n.parentElement;
-        if(!n.textContent.trim()||e.closest('script,style,template,svg'))continue;
+        if(!n.textContent.trim()||e.closest('script,style,template'))continue;
         let visible=true;for(let a=e;a;a=a.parentElement){const c=getComputedStyle(a);if(c.display==='none'||c.visibility==='hidden'||Number(c.opacity)<.05)visible=false;}
-        if(/[A-Za-z0-9]/.test(n.textContent))out.push('non-Persian DOM text: '+n.textContent.trim().slice(0,100));
+        const owner=e.closest('[data-qc]');
+        if((owner ? owner.dataset.qc==='chrome' : componentUi) && /[A-Za-z0-9]/.test(n.textContent))out.push('non-Persian DOM text: '+n.textContent.trim().slice(0,100));
         if(!visible)continue;
         const range=document.createRange();range.selectNodeContents(n);
         const panel=e.closest('.visual-beat,.panel,.panelscene,.scene')||document.body;
@@ -38,7 +39,7 @@ try {
         for(const r of range.getClientRects())if(r.left<box.left-2||r.right>box.right+2||r.top<box.top-2||r.bottom>box.bottom+2)out.push('text outside panel: '+n.textContent.trim().slice(0,70));
         if(e.scrollWidth>e.clientWidth+2||e.scrollHeight>e.clientHeight+2)if(getComputedStyle(e).display!=='inline' && ['hidden','clip','auto','scroll'].includes(getComputedStyle(e).overflow))out.push('text box overflow: '+n.textContent.trim().slice(0,70));
       }return [...new Set(out)];
-    });
+    },Boolean(request.componentUi));
     findings.push(...issues.map(message=>({time,message})));
   }
   for(const wipe of request.wipes||[]){

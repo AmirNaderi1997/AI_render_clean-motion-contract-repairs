@@ -1,4 +1,5 @@
 import React,{useEffect,useState} from 'react';
+import {displayText,displayUnits} from './persian-text.mjs';
 import {AbsoluteFill,Audio,Composition,Easing,Img,Sequence,interpolate,random,spring,staticFile,useCurrentFrame,
   delayRender,continueRender,cancelRender} from 'remotion';
 
@@ -30,7 +31,7 @@ const Sparkles=({accent,frame,seed})=>Array.from({length:9}).map((_,i)=>{
 
 // Caption boundaries are measured against the narration, in scene-local seconds.
 const Captions=({text,timed=[],frame,total,accent,lead})=>{
-  const words=String(text||'').split(/\s+/).filter(Boolean);
+  const words=displayText(text).split(/\s+/).filter(Boolean);
   if(!words.length) return null;
   const weights=words.map(w=>Math.max(2,w.length)+1),sum=weights.reduce((a,b)=>a+b,0);
   const span=Math.max(10,total-lead-14);let at=lead,starts=[];
@@ -47,44 +48,46 @@ const Captions=({text,timed=[],frame,total,accent,lead})=>{
   </div>;
 };
 
-const ClassicScene = ({scene}) => {
+const ClassicScene = ({scene,index,hideProduct}) => {
   const frame=useCurrentFrame();
-  const entry=interpolate(frame,[0,14],[0,1],{extrapolateLeft:'clamp',extrapolateRight:'clamp'});
-  const drift=interpolate(frame,[0,scene.frames],[1.03,1.09]);
+  const entry=interpolate(frame,[0,index>0?OVERLAP:14],[0,1],clamp);
+  const wipe=index>0?ease(entry):1;
+  const title=displayText(scene.title);
+  const drift=index>0?interpolate(frame,[0,OVERLAP,scene.frames+OVERLAP],[1,1.06,1.09],clamp):interpolate(frame,[0,scene.frames],[1.03,1.09]);
   const statement=scene.visual_type==='kinetic_type';
   const detail=['spec_callout','ui_showcase'].includes(scene.visual_type);
   const dark=['contrast','turn','hook'].includes(scene.role);
   return <AbsoluteFill style={{background:dark?'#121813':'#f3f0e7',color:dark?'#f5f1e8':'#121813',
-      fontFamily:'EditorRay, Tahoma, sans-serif',direction:'rtl',overflow:'hidden'}}>
+      fontFamily:'EditorRay, Tahoma, sans-serif',direction:'rtl',overflow:'hidden',clipPath:`inset(0 0 0 ${(1-wipe)*100}%)`}}>
     <div style={{position:'absolute',inset:detail?'100px 64px 620px':'600px 64px 200px',overflow:'hidden',
-        borderRadius:28,opacity:entry,transform:`translateY(${(1-entry)*40}px)`}}>
+        borderRadius:28,visibility:hideProduct?'hidden':'visible',opacity:index>0?1:entry,transform:`translateY(${index>0?0:(1-entry)*40}px)`}}>
       <Img src={staticFile(scene.asset)} style={{width:'100%',height:'100%',objectFit:'contain',
         transform:`scale(${drift})`}}/>
     </div>
     <div style={{position:'absolute',left:72,right:72,top:detail?'auto':100,bottom:detail?210:'auto',
-        fontSize:scene.title.length>45?64:statement?104:80,fontWeight:900,lineHeight:1.45,letterSpacing:0,
-        opacity:entry,transform:`translateX(${(1-entry)*-48}px)`}}>{scene.title}</div>
+        fontSize:title.length>45?64:statement?104:80,fontWeight:900,lineHeight:1.45,letterSpacing:0,
+        opacity:index>0?.6+.4*entry:entry,transform:`translateY(${(1-entry)*(index>0?16:40)}px)`}}>{title}</div>
     <div style={{position:'absolute',width:72,height:5,right:72,bottom:110,background:dark?'#b7db8d':'#36562a',
         transform:`scaleX(${entry})`,transformOrigin:'right'}}/>
   </AbsoluteFill>;
 };
 
 
-const Scene=({scene,index,count,lead,total})=>{
+const Scene=({scene,index,count,lead,total,hideProduct})=>{
   const frame=useCurrentFrame();                         // 0 at the start of the wipe-in; the scene's own time starts at `lead`
   const t=Math.max(0,frame-lead);
   const accent=hex(scene.accent);
   const cam=CAMERAS[(index*2+(scene.visual_type==='spec_callout'?1:0))%CAMERAS.length];
   const progress=interpolate(frame,[0,total],[0,1],clamp);
   const lerp=pair=>pair[0]+(pair[1]-pair[0])*Easing.inOut(Easing.quad)(progress);
-  const zoom=()=>Math.min(cutout?1.45:1.12,lerp(cam.s));      // a cut-out has a hard outline: keep it inside the frame
+  const zoom=()=>index>0?interpolate(frame,[0,OVERLAP,total],[1,1.06,Math.max(1.06,Math.min(cutout?1.45:1.12,cam.s[1]))],clamp):Math.min(cutout?1.45:1.12,lerp(cam.s));      // a cut-out has a hard outline: keep it inside the frame
   const wipe=index===0?1:ease(interpolate(frame,[0,OVERLAP],[0,1],clamp));
-  const enter=index>0?1:spring({frame:t,fps:30,config:{damping:15,stiffness:130}});
+  const enter=index>0?ease(interpolate(frame,[0,OVERLAP],[0,1],clamp)):spring({frame:t,fps:30,config:{damping:15,stiffness:130}});
   const cutout=scene.kind==='cutout';
   const flash=index===0?0:interpolate(frame,[0,3,9],[0,.55,0],clamp);
   const sweep=interpolate(t,[18,60],[-40,140],clamp);
-  const headline=String(scene.title||'');
-  const headWords=headline.split(/\s+/).filter(Boolean);
+  const headline=displayText(scene.title);
+  const headWords=displayUnits(headline);
   const isLast=index===count-1;
   const pulse=isLast?1+Math.sin(t/6)*.035:1;
   return <AbsoluteFill style={{clipPath:`inset(0 0 0 ${(1-wipe)*100}%)`,background:'#08060b',overflow:'hidden',fontFamily:FONT,direction:'rtl'}}>
@@ -94,8 +97,8 @@ const Scene=({scene,index,count,lead,total})=>{
       background:`radial-gradient(circle,${accent}66 0%,${accent}22 38%,transparent 66%)`,transform:`scale(${.92+Math.sin(frame/22)*.06+progress*.12})`}}/>
     {/* the product, filmed with a different camera move in every scene */}
     <div style={{position:'absolute',left:0,right:0,top:245,height:1090,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{width:1080,height:1080,position:'relative',opacity:Math.min(1,enter*1.4),
-        transform:`translate(${cutout?lerp(cam.x):0}px,${cutout?lerp(cam.y):-10*progress}px) rotate(${cutout?lerp(cam.r):0}deg) scale(${zoom()*(.9+.1*enter)})`}}>
+      <div style={{width:1080,height:1080,position:'relative',visibility:hideProduct?'hidden':'visible',opacity:index>0?1:Math.min(1,enter*1.4),
+        transform:`translate(${cutout?lerp(cam.x):0}px,${cutout?lerp(cam.y):-10*progress}px) rotate(${cutout?lerp(cam.r):0}deg) scale(${zoom()*(index>0?1:.9+.1*enter)})`}}>
         <Img src={staticFile(scene.asset)} style={{width:'100%',height:'100%',objectFit:'contain',
           filter:cutout?`drop-shadow(0 40px 50px #000c) drop-shadow(0 0 40px ${accent}55)`:'saturate(1.08) contrast(1.05)',
           padding:cutout?0:72,boxSizing:'border-box',borderRadius:32}}/>
@@ -112,8 +115,8 @@ const Scene=({scene,index,count,lead,total})=>{
     {/* headline: the scene's own overlay text, popping in word by word */}
     <div style={{position:'absolute',left:60,right:60,top:104,display:'flex',flexWrap:'wrap',justifyContent:'center',gap:'0 20px',
         fontSize:headline.length>26?78:104,fontWeight:900,lineHeight:1.3,color:'#fff',textShadow:`0 0 30px ${accent}aa,0 8px 28px #000c`}}>
-      {headWords.map((word,i)=>{const p=index>0?1:spring({frame:t-i*4,fps:30,config:{damping:13,stiffness:170}});
-        return <span key={i} style={{display:'inline-block',opacity:p,transform:`translateY(${(1-p)*-46}px) scale(${.85+.15*p})`,filter:`blur(${(1-p)*8}px)`}}>{word}</span>;})}
+      {headWords.map((word,i)=>{const p=index>0?enter:spring({frame:t-i*4,fps:30,config:{damping:13,stiffness:170}});
+        return <span key={i} style={{display:'inline-block',unicodeBidi:'isolate',whiteSpace:'nowrap',opacity:index>0?.6+.4*p:p,transform:`translateY(${(1-p)*(index>0?16:-46)}px) scale(${index>0?1:.85+.15*p})`,filter:`blur(${index>0?0:(1-p)*8}px)`}}>{word}</span>;})}
     </div>
     <div style={{position:'absolute',top:headline.length>26?236:262,left:'50%',height:7,width:220*enter,marginLeft:-110*enter,borderRadius:7,background:accent,boxShadow:`0 0 22px ${accent}`}}/>
     <Captions text={scene.narration_text} timed={scene.caption_words} frame={frame-lead} total={total-lead} accent={accent} lead={5}/>
@@ -128,7 +131,7 @@ const Scene=({scene,index,count,lead,total})=>{
   </AbsoluteFill>;
 };
 
-const Reel=({scenes=[],music,font,look='classic'})=>{
+const Reel=({scenes=[],music,font,look='classic',hideProductIndex=-1})=>{
   const [handle]=useState(()=>delayRender('Loading approved Persian font'));
   useEffect(()=>{
     if (!font){continueRender(handle);return;}
@@ -141,9 +144,13 @@ const Reel=({scenes=[],music,font,look='classic'})=>{
       {font?<style>{`@font-face{font-family:EditorRay;src:url('${staticFile(font)}');font-weight:900;}`}</style>:null}
       {scenes.map((scene,index)=>{
         const from=at;at+=scene.frames;
-        return <Sequence key={index} from={from} durationInFrames={scene.frames}>
-          <ClassicScene scene={scene}/>{scene.narration?<Audio src={staticFile(scene.narration)}/>:null}
-        </Sequence>;
+        const lead=index>0?OVERLAP:0;
+        return <React.Fragment key={index}>
+          <Sequence from={from-lead} durationInFrames={scene.frames+lead}>
+            <ClassicScene scene={scene} index={index} hideProduct={hideProductIndex===index}/>
+          </Sequence>
+          {scene.narration?<Sequence from={from} durationInFrames={scene.frames}><Audio src={staticFile(scene.narration)}/></Sequence>:null}
+        </React.Fragment>;
       })}
       {music?<Audio src={staticFile(music)} volume={.08} loop/>:null}
     </AbsoluteFill>;
@@ -156,7 +163,7 @@ const Reel=({scenes=[],music,font,look='classic'})=>{
       const lead=index===0?0:OVERLAP;
       return <React.Fragment key={index}>
         <Sequence from={from-lead} durationInFrames={scene.frames+lead} premountFor={20}>
-          <Scene scene={scene} index={index} count={scenes.length} lead={lead} total={scene.frames+lead}/></Sequence>
+          <Scene scene={scene} index={index} count={scenes.length} lead={lead} total={scene.frames+lead} hideProduct={hideProductIndex===index}/></Sequence>
         {scene.narration?<Sequence from={from} durationInFrames={scene.frames}><Audio src={staticFile(scene.narration)}/></Sequence>:null}
       </React.Fragment>;
     })}

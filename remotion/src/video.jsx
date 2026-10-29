@@ -1,3 +1,4 @@
+import {displayText,displayUnits} from './persian-text.mjs';
 const faDigits = value => String(value).replace(/[0-9]/g, digit => "۰۱۲۳۴۵۶۷۸۹"[Number(digit)]);
 import React, {useEffect, useState} from "react";
 import {
@@ -8,6 +9,7 @@ import {
 const font = "EditorRay, Tahoma, Arial, sans-serif";
 
 const ProductScene = ({scene, index, count, resolveAsset = staticFile}) => {
+  scene = {...scene, title: displayText(scene.title)};
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const enter = spring({frame, fps, config: {damping: 16, stiffness: 110}});
@@ -27,17 +29,17 @@ const ProductScene = ({scene, index, count, resolveAsset = staticFile}) => {
     {spotlight ? <div style={{position: "absolute", top: 28, left: 28, right: 28, height: 550, borderRadius: "44px 44px 100px 100px", background: accent, transform: `translateY(${(1-enter)*-100}px)`}}/> : null}
     <div style={{position: "absolute", top: 64, left: 70, right: 70, display: "flex", alignItems: "center", justifyContent: "space-between", direction: "ltr"}}>
       <div style={{width: 72, height: 6, background: accent, borderRadius: 6}}/>
-      <div style={{fontSize: 20, color: "#6b7280"}}>{faDigits(String(index + 1).padStart(2, "0"))} / {faDigits(String(count).padStart(2, "0"))}</div>
+      <div data-qc="chrome" style={{fontSize: 20, color: "#6b7280"}}>{faDigits(String(index + 1).padStart(2, "0"))} / {faDigits(String(count).padStart(2, "0"))}</div>
     </div>
     <div style={{position: "absolute", top: isHero ? 180 : 165, left: 70, right: 70, textAlign: "right", direction: "rtl", transform: `translateY(${(1-enter)*38}px)`, opacity: enter}}>
-      <div style={{display: "inline-block", padding: "10px 20px", borderRadius: 999, background: accent, color: "white", fontSize: 24, fontWeight: 800, marginBottom: 22}}>{isHero ? "انتخاب حرفه‌ای" : isCta ? "همین حالا" : "ویژگی محصول"}</div>
-      <div style={{fontSize: isHero ? 86 : 76, lineHeight: 1.28, fontWeight: 950, color: spotlight ? "white" : "#101827", textWrap: "balance"}}>{scene.title.split(" ").map((word, wordIndex) => <span key={wordIndex} style={{display: "inline-block", whiteSpace: "pre", opacity: interpolate(frame-wordIndex*3, [0, 12], [0, 1], {extrapolateLeft: "clamp", extrapolateRight: "clamp"}), transform: `translateY(${interpolate(frame-wordIndex*3, [0, 16], [24, 0], {extrapolateLeft: "clamp", extrapolateRight: "clamp"})}px)`}}>{word}{" "}</span>)}</div>
+      <div data-qc="chrome" style={{display: "inline-block", padding: "10px 20px", borderRadius: 999, background: accent, color: "white", fontSize: 24, fontWeight: 800, marginBottom: 22}}>{isHero ? "انتخاب حرفه‌ای" : isCta ? "همین حالا" : "ویژگی محصول"}</div>
+      <div style={{fontSize: isHero ? 86 : 76, lineHeight: 1.28, fontWeight: 950, color: spotlight ? "white" : "#101827", textWrap: "balance"}}>{displayUnits(scene.title).map((word, wordIndex) => <span key={wordIndex} style={{display: "inline-block", whiteSpace: "pre", opacity: interpolate(frame-wordIndex*3, [0, 12], [0, 1], {extrapolateLeft: "clamp", extrapolateRight: "clamp"}), transform: `translateY(${interpolate(frame-wordIndex*3, [0, 16], [24, 0], {extrapolateLeft: "clamp", extrapolateRight: "clamp"})}px)`}}>{word}{" "}</span>)}</div>
     </div>
     {heroNumber ? <div style={{position: "absolute", top: 420, left: 70, right: 70, textAlign: "center", fontSize: 300, lineHeight: 1, fontWeight: 950, color: accent, opacity: .13, transform: `scale(${enter})`}}>{heroNumber}</div> : null}
     <div style={{position: "absolute", top: isHero ? 610 : spotlight ? 650 : 440, left: 70, right: 70, bottom: isCta ? 330 : 190, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden"}}>
       {gallery ? <div style={{width: "100%", height: "100%", display: "flex", flexDirection: "column", gap: 22}}>{scene.supporting_assets.slice(0,3).map((asset, assetIndex) => <div key={asset} style={{flex: 1, minHeight: 0, borderRadius: 28, overflow: "hidden", background: "#fff", border: "1px solid #e5e7eb", transform: `translateX(${(1-spring({frame: frame-assetIndex*10, fps, config: {damping: 18}})) * (assetIndex%2 ? -900 : 900)}px)`}}><Img src={resolveAsset(asset)} style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>)}</div> : <Img src={resolveAsset(scene.asset)} style={{width: "100%", height: "100%", objectFit: "contain", transform: `scale(${scale * .93}) translateX(${Math.sin(frame / scene.frames * Math.PI) * (index%2 ? 14 : -14)}px)`, filter: "drop-shadow(0 30px 25px rgba(10,18,32,.18))"}}/>}
     </div>
-    {isCta ? <div style={{position: "absolute", left: 85, right: 85, bottom: 125, borderRadius: 28, padding: "27px 36px", background: accent, color: "white", textAlign: "center", direction: "rtl", fontSize: 50, fontWeight: 900, transform: `scale(${.92 + enter*.08})`}}>مشاهده جزئیات و سفارش</div> : null}
+    {isCta ? <div data-qc="chrome" style={{position: "absolute", left: 85, right: 85, bottom: 125, borderRadius: 28, padding: "27px 36px", background: accent, color: "white", textAlign: "center", direction: "rtl", fontSize: 50, fontWeight: 900, transform: `scale(${.92 + enter*.08})`}}>مشاهده جزئیات و سفارش</div> : null}
     <div style={{position: "absolute", left: 70, right: 70, bottom: 72, height: 5, background: "#e5e7eb", borderRadius: 4}}><div style={{height: "100%", width: `${((index+1)/count)*100}%`, background: accent, borderRadius: 4}}/></div>
   </AbsoluteFill>;
 };

@@ -33,6 +33,12 @@ def evidence(root,name,video,beats,project,windows):
     assert any(s['codec_type']=='audio' for s in probe['streams'])
     save(root/f'{name}-ffprobe.json',probe)
     qc=quality.review_render(video,beats,root/name/'review')
+    render_evidence = None
+    if video.with_name(video.name+'.render-evidence.json').is_file():
+        render_evidence=json.loads(video.with_name(video.name+'.render-evidence.json').read_text())
+        problems=quality.review_wipe_witnesses(render_evidence['witnesses'],root/name/'review',video=video)
+        qc['problems'].extend(problems);qc['passed'] &= not problems
+        qc['status']='passed' if qc['passed'] else 'failed'
     if project:qc['dom']=quality.review_project(project,root/name/'dom',video=video);qc['passed'] &= qc['dom']['passed'];qc['status']='passed' if qc['passed'] else 'failed'
     times=[]
     for a,b in windows:times.extend([a+1/30,(a+b)/2,b-1/30])
@@ -42,14 +48,16 @@ def evidence(root,name,video,beats,project,windows):
         p=root/f'{name}-{i}.jpg';run('ffmpeg','-v','error','-y','-ss',max(0,t),'-i',video,'-frames:v',1,'-vf','scale=360:640',p)
         sheet.paste(Image.open(p),((i%3)*360,(i//3)*670+30));ImageDraw.Draw(sheet).text(((i%3)*360+8,(i//3)*670+8),f'{t:.3f}s',fill='white')
     sheet.save(root/f'{name}-sheet.jpg')
-    result={'video':str(video),'sha256':hashlib.sha256(video.read_bytes()).hexdigest(),'qc':qc,'sheet':str(root/f'{name}-sheet.jpg'),'windows':windows,'app_run':False}
+    result={'video':str(video),'sha256':hashlib.sha256(video.read_bytes()).hexdigest(),'qc':qc,'sheet':str(root/f'{name}-sheet.jpg'),'windows':windows,'app_run':False,'render_evidence':render_evidence}
     save(root/f'{name}-result.json',result);print(name,qc['passed'],flush=True);return result
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--output',required=True,type=Path);args=parser.parse_args();root=args.output.resolve();root.mkdir(parents=True,exist_ok=True)
+    parser=argparse.ArgumentParser();parser.add_argument('--output',required=True,type=Path);parser.add_argument('--cases',nargs='+');args=parser.parse_args();root=args.output.resolve();root.mkdir(parents=True,exist_ok=True)
     results={}
     cases=[('kinetic','انتخاب بهتر در ۳ گام','انتخاب بهتر',[],'kinetic_type'),('comparison','برای ۲ کاربرد سبک برای خانه مناسب برای سفر','برای ۲ کاربرد',['سبک برای خانه','مناسب برای سفر'],'comparison'),('steps','۳ گام برای خرید انتخاب دقیق مقایسه قیمت خرید آسان','۳ گام برای خرید',['انتخاب دقیق','مقایسه قیمت','خرید آسان'],'steps')]
+    cases.append(('comparison-empty','مقایسه برای انتخاب بهتر','مقایسه برای انتخاب بهتر',[],'comparison'))
     for name,text,title,items,kind in cases:
+        if args.cases and name not in args.cases:continue
         job=root/name;job.mkdir(exist_ok=True);audio,words,frames=voice(job,text);dur=frames/30
         # Exact transcript and identity edit: every displayed title/item occurs in this sentence.
         transcript={'words':words,'sentences':[{'start':0,'end':dur,'text':text}]}
@@ -69,14 +77,17 @@ def main():
             layer=job/'panel.webm';render_layer(NS(script=script,pack=REFERENCE_AI_NEWS),layer,work_dir=job/'t5work',part='panel',timeout=900)
             video=job/'talking5.mp4';run('ffmpeg','-v','error','-y','-i',base,'-c:v','libvpx-vp9','-i',layer,'-filter_complex','[0:v][1:v]overlay=0:0:format=auto','-map','0:a','-c:v','libx264','-preset','veryfast','-pix_fmt','yuv420p','-c:a','copy',video)
             results['kinetic-talking5']=evidence(root,'kinetic-talking5',video,beats,project,[(0,dur)])
-    job=root/'product';job.mkdir(exist_ok=True);audio,words,frames=voice(job,'انتخاب بهتر برای ۲ کاربرد')
+    job=root/'product';job.mkdir(exist_ok=True);audio,words,frames=voice(job,'انتخاب بهتر برای 2 کاربرد')
     for name,count in [('hero',1),('promo',3)]:
-        config={'version':2,'scenes':[{'asset':str(root/('product-white.jpg' if i%2==0 else 'product-dark.jpg')),'kind':'photo','accent':'#d9b36c','title':['انتخاب بهتر','برای ۲ کاربرد','همراه هر روز'][i],'frames':frames,'narration':str(audio),'narration_text':'انتخاب بهتر برای ۲ کاربرد','caption_timing':'aligned','caption_words':words} for i in range(count)]}
+        if args.cases and name not in args.cases:continue
+        config={'version':2,'scenes':[{'asset':str(root/('product-white.jpg' if i%2==0 else 'product-dark.jpg')),'kind':'photo','accent':'#d9b36c','title':['کفش Nike Air سایز 42','مدل A52 برای 2 کاربرد','همراه هر روز'][i],'frames':frames,'narration':str(audio),'narration_text':'انتخاب بهتر برای 2 کاربرد','caption_timing':'aligned','caption_words':words} for i in range(count)]}
         save(job/f'{name}-input.json',config);windows=[(i*frames/30,(i+1)*frames/30) for i in range(count)]
         project=job/name;product_reel.build_project(project,config,job_dir=root,captions_prepared=True)
         video=job/f'{name}-hyperframes.mp4';product_reel.render(config,video,job_dir=root,captions_prepared=True,timeout=900)
         results[name]=evidence(root,name,video,[],project,windows)
-        os.environ['REMOTION_LOOK']='cinematic';video=job/f'{name}-remotion.mp4';remotion_renderer.render(config,video,job_dir=root,captions_prepared=True)
-        results[name+'-remotion']=evidence(root,name+'-remotion',video,[],project,windows)
+        os.environ.pop('REMOTION_LOOK',None)
+        os.environ['REMOTION_QC_DIR']=str(job/f'{name}-remotion-wipes')
+        video=job/f'{name}-remotion.mp4';remotion_renderer.render(config,video,job_dir=root,captions_prepared=True)
+        results[name+'-remotion']=evidence(root,name+'-remotion',video,[],None,windows)
     save(root/'results.json',results)
 if __name__=='__main__':main()

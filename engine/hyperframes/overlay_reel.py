@@ -13,6 +13,7 @@ from html import escape
 from pathlib import Path
 
 from creative.style_packs import StylePack
+from engine.persian_text import display_text
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSITION_ID = "overlay"
@@ -35,7 +36,7 @@ def _num_in(text: str) -> str | None:
 
 def _title_html(title: str, pack: StylePack, *, size: int = 92) -> str:
     """The panel headline: the last word in the accent voice (calligraphic in Persian), the rest heavy."""
-    words = title.split()
+    words = display_text(title).split()
     if not words:
         return ""
     head, tail = words[:-1], words[-1]
@@ -47,8 +48,8 @@ def _title_html(title: str, pack: StylePack, *, size: int = 92) -> str:
 def _panel(index: int, beat: dict, pack: StylePack, start: float, end: float) -> tuple[str, list[str]]:
     """(html, js) of one panel scene. beat: {title, items[], visual_type}."""
     pid = f"p{index}"
-    title = str(beat.get("title") or "")
-    items = [str(i) for i in (beat.get("items") or []) if str(i).strip()][:4]
+    title = display_text(str(beat.get("title") or ""))
+    items = [display_text(str(i)) for i in (beat.get("items") or []) if str(i).strip()][:4]
     vtype = str(beat.get("visual_type") or "concept")
     js: list[str] = []
     body = ""
@@ -70,14 +71,14 @@ def _panel(index: int, beat: dict, pack: StylePack, start: float, end: float) ->
         badge = max(52, int(h * .56))
         cards = "".join(
             f'<div class="ci{" last" if n == len(items) - 1 else ""}" id="{pid}i{n}" style="height:{h}px;font-size:{fs}px">'
-            f'<b style="width:{badge}px;height:{badge}px;font-size:{int(badge * .55)}px">{str(n + 1).translate(PERSIAN_DIGITS)}</b><span>{escape(t)}</span></div>' for n, t in enumerate(items))
+            f'<b data-qc="chrome" style="width:{badge}px;height:{badge}px;font-size:{int(badge * .55)}px">{str(n + 1).translate(PERSIAN_DIGITS)}</b><span>{escape(t)}</span></div>' for n, t in enumerate(items))
         body = f'{_title_html(title, pack, size=74)}<div class="stack" style="gap:{gap}px">{cards}</div>'
         js.append(f'tl.from("#{pid} .ptitle .tw",{{opacity:0,y:-40,duration:.45,stagger:.1,ease:"back.out(1.6)"}},{_f(start + .05)});')
         js.append(f'tl.from("#{pid} .ci",{{opacity:0,y:90,scale:.92,duration:.5,stagger:.22,ease:"power3.out"}},{_f(start + .35)});')
     elif kind == "versus":
         a, b = items[0], items[1]
         body = (f'{_title_html(title, pack, size=70)}<div class="versus"><div class="vc" id="{pid}a"><span>{escape(a)}</span></div>'
-                f'<div class="vs" id="{pid}v">در برابر</div><div class="vc dk" id="{pid}b"><span>{escape(b)}</span></div></div>')
+                f'<div class="vs" data-qc="chrome" id="{pid}v">در برابر</div><div class="vc dk" id="{pid}b"><span>{escape(b)}</span></div></div>')
         js.append(f'tl.from("#{pid} .ptitle .tw",{{opacity:0,y:-40,duration:.45,stagger:.1,ease:"back.out(1.6)"}},{_f(start + .05)});')
         js.append(f'tl.from("#{pid}a",{{opacity:0,x:-160,duration:.55,ease:"power3.out"}},{_f(start + .35)});')
         js.append(f'tl.from("#{pid}b",{{opacity:0,x:160,duration:.55,ease:"power3.out"}},{_f(start + .5)});')
@@ -89,12 +90,12 @@ def _panel(index: int, beat: dict, pack: StylePack, start: float, end: float) ->
         js.append(f'tl.from("#{pid}n",{{opacity:0,scale:.4,duration:.6,ease:"back.out(2)"}},{_f(start + .1)});')
         js.append(f'tl.from("#{pid}l",{{opacity:0,y:50,duration:.5,ease:"power3.out"}},{_f(start + .55)});')
     elif kind == "steps":
-        chips = "".join(f'<div class="step" id="{pid}s{n}"><b>{str(n + 1).translate(PERSIAN_DIGITS)}</b><span>{escape(t)}</span></div>' for n, t in enumerate(items))
+        chips = "".join(f'<div class="step" id="{pid}s{n}"><b data-qc="chrome">{str(n + 1).translate(PERSIAN_DIGITS)}</b><span>{escape(t)}</span></div>' for n, t in enumerate(items))
         body = f'{_title_html(title, pack, size=74)}<div class="steps">{chips}</div>'
         js.append(f'tl.from("#{pid} .ptitle .tw",{{opacity:0,y:-40,duration:.45,stagger:.1,ease:"back.out(1.6)"}},{_f(start + .05)});')
         js.append(f'tl.from("#{pid} .step",{{opacity:0,x:140,duration:.5,stagger:.25,ease:"power3.out"}},{_f(start + .4)});')
     else:  # kinetic: the title as a few giant words
-        words = title.split() or [""]
+        words = display_text(title).split() or [""]
         spans = "".join(f'<span class="kw{" acc" if n == len(words) - 1 else ""}" id="{pid}w{n}">{escape(w)}</span>' for n, w in enumerate(words))
         body = f'<div class="kin">{spans}</div>'
         js.append(f'tl.from("#{pid} .kw",{{opacity:0,y:120,scale:.6,duration:.5,stagger:.16,ease:"back.out(1.8)"}},{_f(start + .1)});')
@@ -136,6 +137,8 @@ def _pages(words: list[dict], per_page: int) -> list[list[dict]]:
 def _captions(words: list[dict], pack: StylePack, layout_at, blocked: list[tuple[float, float]] | None = None,
               teaser: list[float] | None = None) -> tuple[str, list[str]]:
     html, js = [], []
+    shown = display_text(" ".join(str(w["w"]) for w in words)).split()
+    words = [{**w, "w": shown[i]} for i, w in enumerate(words)]
     cap = pack.caption
     blocked = blocked or []
     words = [w for w in words if not any(a <= float(w["start"]) < b for a, b in blocked)]
@@ -182,7 +185,7 @@ def _hook(hook: dict | None, pack: StylePack) -> tuple[str, list[str]]:
         return "", []
     start, end = float(hook.get("start", 0.0)), min(float(hook.get("end", 3.0)), float(hook.get("start", 0.0)) + pack.hook.seconds)
     marked = {w for w in str(hook.get("highlight") or "").split()}
-    words = str(hook["text"]).split()
+    words = display_text(str(hook["text"])).split()
     spans = "".join(f'<span class="hw{" hl" if w.strip(".,،…:!؟?") in marked else ""}" >{escape(w)}</span>' for w in words)
     html = (f'<section id="hook" class="clip hookbox {pack.hook.mode}" data-start="{_f(start)}" data-duration="{_f(end - start)}">'
             f'<div class="hookline" style="font-size:{pack.hook.size}px">{spans}</div></section>')
@@ -198,7 +201,7 @@ def _moments(moments: list[dict], pack: StylePack, layout_at) -> tuple[str, list
         if end - start < 0.5:
             continue
         split = layout_at(start) == "split"
-        words = str(m["text"]).split()
+        words = display_text(str(m["text"])).split()
         spans = "".join(f'<span class="mw{" acc" if k == len(words) - 1 else ""}">{escape(w)}</span>' for k, w in enumerate(words))
         html.append(f'<section id="m{n}" class="clip moment{" onpanel" if split else ""}" data-start="{_f(start)}" data-duration="{_f(end - start)}">'
                     f'<div class="mline">{spans}</div></section>')

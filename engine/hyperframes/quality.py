@@ -110,25 +110,33 @@ def review_project(project: Path, work_dir: Path, *, video: Path | None = None) 
                                 capture_output=True, text=True, check=True, timeout=120)
         report = json.loads(result.stdout)
         problems.extend(f"{f['time']}: {f['message']}" for f in report['findings'])
-        for witness in report['witnesses']:
-            normal = Image.open(witness['normal']).convert('RGB')
-            blank = Image.open(witness['blank']).convert('RGB')
-            # Difference against the same scene with ONLY the product hidden.
-            # Count also in the actual encoded frame, tolerating codec noise.
-            observed = normal
-            if video is not None:
-                target = work_dir / f"wipe-{witness['index']}-decoded.png"
-                subprocess.run(['ffmpeg','-v','error','-y','-ss',str(witness['time']),'-i',str(video),
-                                '-frames:v','1',str(target)], capture_output=True, check=True, timeout=40)
-                observed = Image.open(target).convert('RGB')
-            mask = ImageChops.difference(normal, blank).convert('L')
-            actual = ImageChops.difference(observed, blank).convert('L')
-            pixels = sum(m > 24 and a > 18 for m, a in zip(mask.getdata(), actual.getdata()))
-            witness['product_pixels'] = pixels
-            if pixels < 500:
-                problems.append(f"wipe {witness['index']}: no product pixels")
+        problems.extend(review_wipe_witnesses(report['witnesses'], work_dir, video=video))
         report.update(problems=problems, unavailable=unavailable, passed=not problems)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         report = {'passed': False, 'problems': problems, 'unavailable': ['DOM/wipe inspection unavailable: '+str(exc)[:180]]}
     (work_dir / 'dom-qc.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
     return report
+
+
+def review_wipe_witnesses(witnesses: list[dict], work_dir: Path, *, video: Path | None = None) -> list[str]:
+    """Compare same-engine normal/hidden-product references with encoded pixels."""
+    problems = []
+    work_dir.mkdir(parents=True, exist_ok=True)
+    for witness in witnesses:
+        normal = Image.open(witness['normal']).convert('RGB')
+        blank = Image.open(witness['blank']).convert('RGB')
+        # Difference against the same scene with ONLY the product hidden.
+        # Count also in the actual encoded frame, tolerating codec noise.
+        observed = normal
+        if video is not None:
+            target = work_dir / f"wipe-{witness['index']}-decoded.png"
+            subprocess.run(['ffmpeg','-v','error','-y','-ss',str(witness['time']),'-i',str(video),
+                            '-frames:v','1',str(target)], capture_output=True, check=True, timeout=40)
+            observed = Image.open(target).convert('RGB')
+        mask = ImageChops.difference(normal, blank).convert('L')
+        actual = ImageChops.difference(observed, blank).convert('L')
+        pixels = sum(m > 24 and a > 18 for m, a in zip(mask.getdata(), actual.getdata()))
+        witness['product_pixels'] = pixels
+        if pixels < 500:
+            problems.append(f"wipe {witness['index']}: no product pixels")
+    return problems

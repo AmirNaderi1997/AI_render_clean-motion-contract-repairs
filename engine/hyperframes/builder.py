@@ -10,6 +10,7 @@ from pathlib import Path
 from .schema import VisualBeat
 from .catalog import recommend
 from engine.motion_recipes import select_recipe
+from engine.persian_text import display_text, display_units
 
 ROOT = Path(__file__).resolve().parents[2]
 RAY = ROOT / "presets" / "fonts" / "RAY-EXTRABOLD.TTF"
@@ -29,6 +30,23 @@ def _visual_type(title: str, items: list[str], requested: str = "") -> str:
     if any(token in title for token in ("مقایسه", "در برابر", "یا ", "قبل", "بعد")):
         return "comparison"
     return "concept"
+
+
+def _comparison_labels(title: str, items: list[str]) -> list[str]:
+    labels = [value.strip() for value in items if value.strip()][:2]
+    if not labels:
+        parts = [value.strip() for value in re.split(r"(?:در برابر| یا )", title) if value.strip()]
+        labels = parts[:2] if len(parts) >= 2 else []
+    return labels
+
+
+def _resolve_comparison(kind: str, title: str, items: list[str]) -> tuple[str, list[str], str]:
+    if kind != "comparison":
+        return kind, items, ""
+    labels = _comparison_labels(title, items)
+    if len(labels) == 2:
+        return kind, labels, ""
+    return "kinetic_type", items, "comparison requires two non-empty labels; used kinetic_type"
 
 
 def _out_time(plan, source_time: float) -> float | None:
@@ -130,6 +148,7 @@ def build_visual_beats(plan, decisions: dict, transcript: dict | None = None) ->
         # of repeatedly falling back to the same generic world.
         if visual_type == "concept":
             visual_type = recipe.renderer
+        visual_type, values, resolution = _resolve_comparison(visual_type, title, values)
         motion_style = str(item.get("motion_style") or recipe.motion or fallback_motions[n % len(fallback_motions)])
         if beats and motion_style == beats[-1].motion_style:
             motion_style = fallback_motions[n % len(fallback_motions)]
@@ -145,7 +164,7 @@ def build_visual_beats(plan, decisions: dict, transcript: dict | None = None) ->
             narrative_role=str(item.get("narrative_role") or "evidence"),
             motion_style=motion_style,
             recipe_id=recipe.id,
-            why=str(item.get("why") or ""),
+            why="; ".join(filter(None, [str(item.get("why") or ""), resolution])),
             sentence_indices=[sentence] if 0 <= sentence < len(sentences) else [],
             spoken=str(sentences[sentence].get("text") or "") if 0 <= sentence < len(sentences) else "",
         ))
@@ -199,20 +218,26 @@ def _continuous_beats(plan, decisions: dict, transcript: dict) -> list[VisualBea
         if end-start < .65:
             continue
         visual_type = _visual_type(title, idea.get('items') or [], str(idea.get('visual_type') or ''))
+        items = [str(x)[:35] for x in idea.get('items', []) if str(x).strip()][:4]
+        visual_type, items, resolution = _resolve_comparison(visual_type, title, items)
         recipe_id = ''
         if idea.get('resource_id'):
             from creative.resources.planning import resolve_talking_recipe
             recipe_id = resolve_talking_recipe(idea['resource_id'], visual_type).id
         result.append(VisualBeat(id=f'beat-{indices[0]}-group-{n}', start=start, end=end,
-            title=title, items=[str(x)[:35] for x in idea.get('items', [])][:4],
+            title=title, items=items,
             visual_type=visual_type, recipe_id=recipe_id,
             layout='top_panel', narrative_role=str(idea.get('narrative_role') or 'explanation'),
-            why=str(idea.get('visual') or evidence), spoken=evidence, sentence_indices=indices,
+            why='; '.join(filter(None, [str(idea.get('visual') or evidence), resolution])), spoken=evidence, sentence_indices=indices,
             motion_style=str(idea.get('motion_style') or 'assemble')))
     return result
 
 
 def _beat_markup(beat: VisualBeat) -> str:
+    # Display normalization never changes the approved beat or transcript.
+    beat = beat.model_copy(update={"title": display_text(beat.title), "items": [display_text(x) for x in beat.items], "anchor_word": display_text(beat.anchor_word)})
+    kind, labels, _ = _resolve_comparison(beat.visual_type, beat.title, beat.items)
+    beat = beat.model_copy(update={"visual_type": kind, "items": labels})
     title = html.escape(beat.title)
     if beat.registry_refs and beat.registry_refs[0] == "caption-kinetic-slam":
         body = (f'<div class="registry-stage"><div data-composition-id="caption-kinetic-slam" '
@@ -237,12 +262,11 @@ def _beat_markup(beat: VisualBeat) -> str:
                 'data-width="1080" data-height="1920" data-track-index="0"></div></div>')
     elif beat.visual_type == "steps" and beat.items:
         body = "".join(
-            f'<div class="step"><b>{str(i + 1).zfill(2).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))}</b><span>{html.escape(value)}</span></div>'
+            f'<div class="step"><b data-qc="chrome">{str(i + 1).zfill(2).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))}</b><span>{html.escape(value)}</span></div>'
             for i, value in enumerate(beat.items)
         )
     elif beat.visual_type == "comparison":
-        labels = beat.items[:2] or [value.strip() for value in re.split(r"(?:در برابر| یا )", beat.title) if value.strip()][:2]
-        labels = (labels + ["", ""])[:2]
+        labels = beat.items[:2]
         body = (f'<div class="compare"><div><span>{html.escape(labels[0])}</span></div>'
                 f'<i><b>→</b></i><div><span>{html.escape(labels[1])}</span></div></div>')
     elif beat.visual_type == "stat":
@@ -266,21 +290,21 @@ def _beat_markup(beat: VisualBeat) -> str:
         body = '<div class="route"><svg viewBox="0 0 800 260"><path d="M70 190 C220 30 410 245 720 65"/><circle cx="70" cy="190" r="18"/><circle cx="720" cy="65" r="18"/></svg></div>'
     elif beat.visual_type == "spec_callout":
         values = beat.items or []
-        body = '<div class="saas-mark"><b>ن</b><i></i><div>' + ''.join(
+        body = '<div class="saas-mark"><b data-qc="chrome">ن</b><i></i><div>' + ''.join(
             f'<span>{html.escape(value)}</span>' for value in values[:3]
         ) + '</div></div>'
     elif beat.visual_type == "kinetic_type":
-        body = f'<div class="kinetic" dir="rtl" style="font-size:{88 if len(beat.title) > 38 else 112}px">' + " ".join(f'<span class="kinetic-word">{html.escape(w)}</span>' for w in beat.title.split()) + "</div>"
+        body = f'<div class="kinetic" dir="rtl" style="font-size:{88 if len(beat.title) > 38 else 112}px">' + " ".join(f'<span class="kinetic-word">{html.escape(w)}</span>' for w in display_units(beat.title)) + "</div>"
     elif beat.visual_type == "before_after":
         values = [re.sub(r"^(?:قبل|بعد)\s*[:：-]?\s*", "", value).strip() for value in beat.items[:2]]
         values = (values + ["خودت خدمت می‌دهی", "نرم‌افزار می‌فروشد"])[:2]
-        body = f'<div class="before-after"><span><small>وابسته به زمان</small>{html.escape(values[0])}</span><i></i><span><small>مقیاس‌پذیر</small>{html.escape(values[1])}</span></div>'
+        body = f'<div class="before-after"><span><small data-qc="chrome">وابسته به زمان</small>{html.escape(values[0])}</span><i></i><span><small data-qc="chrome">مقیاس‌پذیر</small>{html.escape(values[1])}</span></div>'
     else:
-        body = '<div class="concept"><div><i></i><small>×۱</small></div><div><i></i><i></i><i></i><i></i><small>×۴</small></div><div class="many"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><small>×۱۶</small></div></div>'
+        body = '<div class="concept"><div><i></i><small data-qc="chrome">×۱</small></div><div><i></i><i></i><i></i><i></i><small data-qc="chrome">×۴</small></div><div class="many"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><small data-qc="chrome">×۱۶</small></div></div>'
     return (
         f'<section id="{beat.id}" data-motion="{html.escape(beat.motion_style)}" class="visual-beat {beat.visual_type} {beat.accent} {beat.layout} {"registry-beat" if beat.registry_refs else ""} clip" '
         f'data-start="{beat.start:.3f}" data-duration="{beat.end - beat.start:.3f}" data-track-index="2">'
-        f'<div class="beat-inner"><div class="ghost">{html.escape(beat.anchor_word)}</div><div class="eyebrow">{html.escape({"evidence": "شواهد", "explanation": "توضیح", "hook": "شروع", "cta": "ادامه", "problem": "مسئله", "solution": "راهکار"}.get(beat.narrative_role, ""))}</div><h2 dir="rtl">{title}</h2>{body}</div></section>'
+        f'<div class="beat-inner"><div class="ghost">{html.escape(beat.anchor_word)}</div><div class="eyebrow" data-qc="chrome">{html.escape({"evidence": "شواهد", "explanation": "توضیح", "hook": "شروع", "cta": "ادامه", "problem": "مسئله", "solution": "راهکار"}.get(beat.narrative_role, ""))}</div><h2 dir="rtl">{title}</h2>{body}</div></section>'
     )
 
 

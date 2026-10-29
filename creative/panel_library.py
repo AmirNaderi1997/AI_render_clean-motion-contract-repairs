@@ -256,7 +256,33 @@ SAFE_COMPONENTS = frozenset({
     "cta-lockup",
 })
 LICENSE_SHA256 = "4259155fb06f127687ee7b0a8a3682d45132db0f2da26cbc0b7a2d1e796436b8"
-PERSIAN_DIGITS = str.maketrans("0123456789%", "۰۱۲۳۴۵۶۷۸۹٪")
+# Reviewed content sinks only; everything else in a component is template chrome.
+CONTENT_SELECTORS = {
+    "grid-card-assemble": ".gca-label,.gca-body", "state-chip-rail": ".scr-chip,.scr-badge",
+    "tracing-beam": ".tb-label", "notification-stack": ".ns-title,.ns-body",
+    "kinetic-type-swap": ".kts-prefix,.kts-suffix,.kts-word",
+    "split-tilt-cards": ".stc-label-a,.stc-label-b", "comparison-split": ".cs-label",
+    "before-after-wipe": ".baw-chip-a,.baw-chip-b", "focus-rack": ".fr-label-a,.fr-label-b",
+    "match-cut": ".mc-label-a,.mc-label-b", "headline-slam": ".hs-word",
+    "push-in": ".pi-headline", "text-shimmer": ".ts-headline",
+    "titlecard-calm": ".tc-headline,.tc-kicker", "per-word-rise": ".pwr-unit",
+    "svg-mask-reveal": "#svg-mask-reveal-text,#svg-mask-reveal-outline", "drift-hold": ".dh-label",
+    "constellation-hub": ".ch-hub,.ch-node", "radial-surround": ".rs-card-label,.rs-chip",
+    "overwhelm-surround": ".os-center-label", "avatar-cloud": ".ac-label",
+    "cta-lockup": ".cl-action,.cl-button,.cl-microcopy",
+}
+
+# Adapt job-local copies; the vendored sources and integrity pins stay immutable.
+CHROME_COPY = {
+    "Community": "جامعه", "Workspace": "فضای کار", "Match complete": "تطبیق انجام شد",
+    "Step one": "گام نخست", "Step two": "گام دوم", "Step three": "گام سوم",
+    "Inbox": "پیام‌ها", "99+": "۹۹+", "Due": "موعد", "@you": "برای شما",
+    "ASAP": "فوری", "12": "۱۲", "Review": "بازبینی", "Call": "تماس",
+    "3 pings": "۳ پیام", "Sync": "همگام", "Today": "امروز", "Reply": "پاسخ",
+    "8 tabs": "۸ برگه", "Update": "به‌روزرسانی", "Now": "اکنون", "Draft": "پیش‌نویس",
+    "4 alerts": "۴ هشدار", "Fix": "اصلاح", "Follow up": "پیگیری", "Queue": "صف",
+    "2 min": "۲ دقیقه", "Waiting": "در انتظار", "+7": "+۷",
+}
 
 
 class PanelDataError(ValueError):
@@ -265,8 +291,9 @@ class PanelDataError(ValueError):
 
 def clean_beat(beat: dict) -> dict:
     """Project stored/model data onto bounded fields; discard all legacy code."""
+    from engine.persian_text import display_text
     def text(value, limit):
-        return value[:limit].translate(PERSIAN_DIGITS) if isinstance(value, str) else ""
+        return display_text(value[:limit]) if isinstance(value, str) else ""
     items = beat.get("items")
     return {"title": text(beat.get("title"), 160),
             "items": [text(i, 80) for i in items[:6] if isinstance(i, str)] if isinstance(items, list) else [],
@@ -334,6 +361,15 @@ def validate_values(name: str, values: dict) -> dict:
 def install(project: Path, name: str) -> Path:
     """Adapt verified bytes only; never interpolate user data into source code."""
     source = verified_source(name)
+    for english, persian in CHROME_COPY.items():
+        source = source.replace('>' + english + '<', '>' + persian + '<')
+        source = source.replace(json.dumps(english), json.dumps(persian, ensure_ascii=False))
+    source = re.sub(r'>(0[123]|A|B)<', lambda m: '>' + {'01':'۰۱','02':'۰۲','03':'۰۳','A':'۱','B':'۲'}[m[1]] + '<', source)
+    if name == "avatar-cloud":
+        source = source.replace('avatar.textContent = lettermarks[index];', 'avatar.textContent = ["آ", "ب", "پ", "ت", "ث", "ج", "چ", "ح", "خ", "د"][index % 10];')
+    source = source.replace('<div id="root"', '<div data-qc="chrome" id="root"')
+    selectors = json.dumps(CONTENT_SELECTORS[name])
+    source = source.replace('tl.seek(0);', f'root.querySelectorAll({selectors}).forEach(function(e){{e.dataset.qc="content";}});\n            tl.seek(0);')
     source = source.replace('lang="en"', 'lang="fa" dir="rtl"')
     source = re.sub(r'<script src="https://[^"<>]+"></script>',
                     '<script src="../../assets/gsap.min.js"></script>', source)
