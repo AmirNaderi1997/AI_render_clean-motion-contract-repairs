@@ -19,7 +19,7 @@ def render(config: dict, output: Path, *, job_dir: Path, on_progress=None, capti
     from engine.motion_contract import validate_motion_config
     root = job_dir.resolve()
     config = validate_motion_config(config, root)
-    config["look"] = os.environ.get("REMOTION_LOOK", "classic")
+    config["look"] = os.environ.get("REMOTION_LOOK", "cinematic" if config.get("version") == 2 else "classic")
     if config["look"] == "cinematic":
         _enrich(config, root)
     config = validate_motion_config(config, root)

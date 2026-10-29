@@ -1252,11 +1252,15 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
             rendered = False
             if os.environ.get("REEL_ENGINE", "hyperframes") == "hyperframes":
                 # The HyperFrames engine renders the cinematic reel; Remotion stays as the fallback when it cannot run.
+                from creative.review import QualityReviewRequired
                 try:
                     from engine.hyperframes import product_reel
                     product_reel.render(motion_config, out_path, job_dir=job.dir, on_progress=report, captions_prepared=True)
                     job.render.renderer = "hyperframes"
                     rendered = True
+                except QualityReviewRequired:
+                    job.render.renderer = "hyperframes"
+                    raise  # Preserve the existing candidate and QC evidence for review.
                 except Exception as exc:
                     job.render.renderer_failure = str(exc)[:600]
                     _write_status(job)

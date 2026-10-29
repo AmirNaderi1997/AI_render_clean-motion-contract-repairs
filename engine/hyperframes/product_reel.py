@@ -72,6 +72,9 @@ def _scene_html(i: int, scene: dict, start: float, dur: float, lead: float, coun
     s0, s1 = cam["s"]
     if cutout:
         s0, s1 = min(s0, CUTOUT_MAX_SCALE), min(s1, CUTOUT_MAX_SCALE)
+    else:
+        s0, s1 = min(s0, 1.12), min(s1, 1.12)
+        cam = {**cam, "x": (0, 0), "y": (0, -10), "r": (0, 0)}
 
     title = str(scene.get("title") or "")
     head_words = title.split()
@@ -138,9 +141,10 @@ def _scene_html(i: int, scene: dict, start: float, dur: float, lead: float, coun
         js.append(f'tl.fromTo("#{sid}fl",{{opacity:0}},{{opacity:.35,duration:{_fmt(lead / 3)},yoyo:true,repeat:1,ease:"none"}},{_fmt(t0)});')
     js.append(f'tl.fromTo("#{sid}pr",{{scale:{s0},x:{cam["x"][0]},y:{cam["y"][0]},rotation:{cam["r"][0]}}},'
               f'{{scale:{s1},x:{cam["x"][1]},y:{cam["y"][1]},rotation:{cam["r"][1]},duration:{_fmt(total)},ease:"sine.inOut"}},{_fmt(t0)});')
-    js.append(f'tl.fromTo("#{sid}pw",{{opacity:0,scale:.9}},{{opacity:1,scale:1,duration:.6,ease:"power3.out"}},{_fmt(start)});')
+    if i == 0:
+        js.append(f'tl.fromTo("#{sid}pw",{{opacity:0,scale:.9}},{{opacity:1,scale:1,duration:.6,ease:"power3.out"}},{_fmt(start)});')
     js.append(f'tl.fromTo("#{sid}gl",{{scale:.92}},{{scale:1.12,duration:{_fmt(total)},ease:"sine.inOut"}},{_fmt(t0)});')
-    if head_words:
+    if head_words and i == 0:
         js.append(f'tl.from("#{sid}hd .hw",{{opacity:0,y:-46,scale:.85,duration:.5,ease:"back.out(1.7)",stagger:.13}},{_fmt(start + .05)});')
     js.append(f'tl.from("#{sid}br",{{scaleX:0,duration:.5,ease:"power3.out"}},{_fmt(start + .1)});')
     js.append(f'tl.fromTo("#{sid}t{i}",{{width:"0%"}},{{width:"100%",duration:{_fmt(dur)},ease:"none"}},{_fmt(start)});')
@@ -159,8 +163,8 @@ html,body{margin:0;background:#08060b}
 .glow{position:absolute;left:-110px;top:140px;width:1300px;height:1300px;border-radius:50%}
 .stage{position:absolute;left:0;top:245px;width:1080px;height:1080px}
 .pw{position:absolute;left:0;top:0;width:1080px;height:1080px}
-.pr{position:absolute;left:0;top:0;width:1080px;height:1080px;object-fit:contain;-webkit-mask-image:radial-gradient(circle at 50% 50%,#000 50%,transparent 74%);mask-image:radial-gradient(circle at 50% 50%,#000 50%,transparent 74%)}
-.pr.cut{-webkit-mask-image:none;mask-image:none}
+.pr{position:absolute;left:0;top:0;width:1080px;height:1080px;object-fit:contain;padding:72px;box-sizing:border-box;border-radius:32px}
+.pr.cut{padding:0;-webkit-mask-image:none;mask-image:none}
 .sp{position:absolute;opacity:0;border-radius:50%;background:#fff}
 .head{position:absolute;left:60px;right:60px;top:104px;display:flex;flex-wrap:wrap;justify-content:center;gap:0 20px;font-weight:900;line-height:1.3;color:#fff;text-shadow:0 8px 28px #000c}
 .hw{display:inline-block}
@@ -309,5 +313,10 @@ def render(config: dict, output: Path, *, job_dir: Path, on_progress=None, shoul
     project.mkdir(parents=True)
     build_project(project, config, job_dir=job_dir, captions_prepared=captions_prepared)
     _run_cli(project, output, timeout=timeout, on_progress=on_progress, should_cancel=should_cancel)
+    from .quality import review_project
+    review = review_project(project, job_dir / "product_dom_qc", video=output)
+    if not review['passed']:
+        from creative.review import QualityReviewRequired
+        raise QualityReviewRequired("Product DOM/wipe QC requires review: " + "; ".join(review.get('problems', []) + review.get('unavailable', [])))
     shutil.rmtree(project, ignore_errors=True)         # the page and its copied assets are rebuilt on every render
     return output

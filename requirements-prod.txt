@@ -33,3 +33,6 @@ langgraph==1.2.17
 langgraph-checkpoint-sqlite==3.1.2
 langgraph-checkpoint-postgres==3.2.0
 psycopg[binary]==3.3.6
+
+# Composio tool schema validation (runtime and tests).
+jsonschema>=4.23,<5

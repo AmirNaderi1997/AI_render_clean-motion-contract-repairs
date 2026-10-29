@@ -77,9 +77,9 @@ const Scene=({scene,index,count,lead,total})=>{
   const cam=CAMERAS[(index*2+(scene.visual_type==='spec_callout'?1:0))%CAMERAS.length];
   const progress=interpolate(frame,[0,total],[0,1],clamp);
   const lerp=pair=>pair[0]+(pair[1]-pair[0])*Easing.inOut(Easing.quad)(progress);
-  const zoom=()=>cutout?Math.min(1.45,lerp(cam.s)):lerp(cam.s);      // a cut-out has a hard outline: keep it inside the frame
+  const zoom=()=>Math.min(cutout?1.45:1.12,lerp(cam.s));      // a cut-out has a hard outline: keep it inside the frame
   const wipe=index===0?1:ease(interpolate(frame,[0,OVERLAP],[0,1],clamp));
-  const enter=spring({frame:t,fps:30,config:{damping:15,stiffness:130}});
+  const enter=index>0?1:spring({frame:t,fps:30,config:{damping:15,stiffness:130}});
   const cutout=scene.kind==='cutout';
   const flash=index===0?0:interpolate(frame,[0,3,9],[0,.55,0],clamp);
   const sweep=interpolate(t,[18,60],[-40,140],clamp);
@@ -95,16 +95,15 @@ const Scene=({scene,index,count,lead,total})=>{
     {/* the product, filmed with a different camera move in every scene */}
     <div style={{position:'absolute',left:0,right:0,top:245,height:1090,display:'flex',alignItems:'center',justifyContent:'center'}}>
       <div style={{width:1080,height:1080,position:'relative',opacity:Math.min(1,enter*1.4),
-        transform:`translate(${lerp(cam.x)}px,${lerp(cam.y)}px) rotate(${lerp(cam.r)}deg) scale(${zoom()*(.9+.1*enter)})`}}>
+        transform:`translate(${cutout?lerp(cam.x):0}px,${cutout?lerp(cam.y):-10*progress}px) rotate(${cutout?lerp(cam.r):0}deg) scale(${zoom()*(.9+.1*enter)})`}}>
         <Img src={staticFile(scene.asset)} style={{width:'100%',height:'100%',objectFit:'contain',
           filter:cutout?`drop-shadow(0 40px 50px #000c) drop-shadow(0 0 40px ${accent}55)`:'saturate(1.08) contrast(1.05)',
-          WebkitMaskImage:cutout?undefined:'radial-gradient(circle at 50% 50%,#000 50%,transparent 74%)',
-          maskImage:cutout?undefined:'radial-gradient(circle at 50% 50%,#000 50%,transparent 74%)'}}/>
-        <div style={{position:'absolute',inset:0,mixBlendMode:'screen',pointerEvents:'none',
+          padding:cutout?0:72,boxSizing:'border-box',borderRadius:32}}/>
+        {cutout?<div style={{position:'absolute',inset:0,mixBlendMode:'screen',pointerEvents:'none',
           background:`linear-gradient(105deg,transparent ${sweep-14}%,#ffffffcc ${sweep}%,transparent ${sweep+14}%)`,
           ...(cutout?{WebkitMaskImage:`url(${staticFile(scene.asset)})`,maskImage:`url(${staticFile(scene.asset)})`,WebkitMaskSize:'contain',maskSize:'contain',
                       WebkitMaskRepeat:'no-repeat',maskRepeat:'no-repeat',WebkitMaskPosition:'center',maskPosition:'center'}
-                   :{WebkitMaskImage:'radial-gradient(circle at 50% 50%,#000 38%,transparent 68%)',maskImage:'radial-gradient(circle at 50% 50%,#000 38%,transparent 68%)'})}}/>
+                   :{WebkitMaskImage:'radial-gradient(circle at 50% 50%,#000 38%,transparent 68%)',maskImage:'radial-gradient(circle at 50% 50%,#000 38%,transparent 68%)'})}}/>:null}
       </div>
     </div>
     <Sparkles accent={accent} frame={frame} seed={`${scene.asset}${index}`}/>
@@ -113,7 +112,7 @@ const Scene=({scene,index,count,lead,total})=>{
     {/* headline: the scene's own overlay text, popping in word by word */}
     <div style={{position:'absolute',left:60,right:60,top:104,display:'flex',flexWrap:'wrap',justifyContent:'center',gap:'0 20px',
         fontSize:headline.length>26?78:104,fontWeight:900,lineHeight:1.3,color:'#fff',textShadow:`0 0 30px ${accent}aa,0 8px 28px #000c`}}>
-      {headWords.map((word,i)=>{const p=spring({frame:t-i*4,fps:30,config:{damping:13,stiffness:170}});
+      {headWords.map((word,i)=>{const p=index>0?1:spring({frame:t-i*4,fps:30,config:{damping:13,stiffness:170}});
         return <span key={i} style={{display:'inline-block',opacity:p,transform:`translateY(${(1-p)*-46}px) scale(${.85+.15*p})`,filter:`blur(${(1-p)*8}px)`}}>{word}</span>;})}
     </div>
     <div style={{position:'absolute',top:headline.length>26?236:262,left:'50%',height:7,width:220*enter,marginLeft:-110*enter,borderRadius:7,background:accent,boxShadow:`0 0 22px ${accent}`}}/>

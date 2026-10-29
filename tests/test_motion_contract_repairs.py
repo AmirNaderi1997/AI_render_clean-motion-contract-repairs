@@ -44,6 +44,7 @@ def test_both_renderers_admit_valid_owned_data(tmp_path,monkeypatch,config,entry
     gsap=tmp_path/'gsap.js';gsap.write_text('owned')
     monkeypatch.setattr('engine.hyperframes.assets.ensure_gsap',lambda:gsap)
     monkeypatch.setattr(product_reel,'_run_cli',lambda project,out,**kw:out.write_bytes(b'video'))
+    monkeypatch.setattr('engine.hyperframes.quality.review_project',lambda *a,**kw: {'passed':True})
     class Process:
         stdout=[]
         def poll(self):return 0
@@ -399,3 +400,17 @@ def test_quality_module_does_not_expose_unapproved_board_rewrite():
     # Synced main retains this public compatibility helper; it is a no-op.
     beats = [object()]
     assert quality.improve_beats(beats) is beats
+
+
+def test_product_dom_hold_preserves_candidate_without_fallback(job_gate, monkeypatch):
+    from creative.review import QualityReviewRequired
+    jobs,job,_=job_gate
+    def held(config,out,**kw):
+        out.parent.mkdir(exist_ok=True);out.write_bytes(b'held product')
+        raise QualityReviewRequired('wipe has no product pixels')
+    monkeypatch.setattr(product_reel,'render',held)
+    monkeypatch.setattr(remotion_renderer,'render',lambda *a,**kw:pytest.fail('QC hold must not rerender'))
+    jobs._run_job(job,False)
+    assert job.render.status=='needs_review' and not job.versions
+    assert job.render.renderer=='hyperframes'
+    assert (job.dir/'exports'/job.render.candidate_output).read_bytes()==b'held product'

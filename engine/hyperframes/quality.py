@@ -31,6 +31,11 @@ def review_render(video: Path, beats: list, work_dir: Path) -> dict:
                 problems.append('output ends before an approved visual beat')
     except (subprocess.SubprocessError, OSError, ValueError, TypeError):
         unavailable.append('output metadata could not be inspected')
+    project = work_dir / 'hyperframes'
+    if (project / 'index.html').is_file():
+        dom = review_project(project, work_dir / 'dom_qc', video=video)
+        problems.extend(dom.get('problems', []))
+        unavailable.extend(dom.get('unavailable', []))
     continuous = bool(beats) and all(b.layout == 'top_panel' for b in beats)
     if len(beats) < 4 and not continuous:
         warnings.append("fewer than four visual worlds")
@@ -85,3 +90,45 @@ def improve_beats(beats: list) -> list:
     Repairs require a specific finding and approval through the existing plan flow.
     """
     return beats
+
+
+def review_project(project: Path, work_dir: Path, *, video: Path | None = None) -> dict:
+    """DOM language/layout and decoded wipe pixels. Missing evidence never passes."""
+    import re
+    work_dir.mkdir(parents=True, exist_ok=True)
+    page = (project / 'index.html').read_text()
+    # Product scene starts include the nine-frame overlap.
+    wipes = [{'index': int(i), 'time': float(start) + .15}
+             for i, start in re.findall(r'<section id="s(\d+)" class="clip scene" data-start="([\d.]+)"', page)
+             if int(i) > 0]
+    request = work_dir / 'dom-request.json'
+    request.write_text(json.dumps({'project': str(project.resolve()), 'wipes': wipes,
+                                  'evidence': str(work_dir.resolve())}))
+    problems, unavailable = [], []
+    try:
+        result = subprocess.run(['node', str(Path(__file__).resolve().parents[2] / 'scripts/motion_dom_qc.mjs'), str(request)],
+                                capture_output=True, text=True, check=True, timeout=120)
+        report = json.loads(result.stdout)
+        problems.extend(f"{f['time']}: {f['message']}" for f in report['findings'])
+        for witness in report['witnesses']:
+            normal = Image.open(witness['normal']).convert('RGB')
+            blank = Image.open(witness['blank']).convert('RGB')
+            # Difference against the same scene with ONLY the product hidden.
+            # Count also in the actual encoded frame, tolerating codec noise.
+            observed = normal
+            if video is not None:
+                target = work_dir / f"wipe-{witness['index']}-decoded.png"
+                subprocess.run(['ffmpeg','-v','error','-y','-ss',str(witness['time']),'-i',str(video),
+                                '-frames:v','1',str(target)], capture_output=True, check=True, timeout=40)
+                observed = Image.open(target).convert('RGB')
+            mask = ImageChops.difference(normal, blank).convert('L')
+            actual = ImageChops.difference(observed, blank).convert('L')
+            pixels = sum(m > 24 and a > 18 for m, a in zip(mask.getdata(), actual.getdata()))
+            witness['product_pixels'] = pixels
+            if pixels < 500:
+                problems.append(f"wipe {witness['index']}: no product pixels")
+        report.update(problems=problems, unavailable=unavailable, passed=not problems)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        report = {'passed': False, 'problems': problems, 'unavailable': ['DOM/wipe inspection unavailable: '+str(exc)[:180]]}
+    (work_dir / 'dom-qc.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
+    return report

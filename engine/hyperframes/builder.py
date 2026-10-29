@@ -242,9 +242,9 @@ def _beat_markup(beat: VisualBeat) -> str:
         )
     elif beat.visual_type == "comparison":
         labels = beat.items[:2] or [value.strip() for value in re.split(r"(?:در برابر| یا )", beat.title) if value.strip()][:2]
-        labels = (labels + ["خدمت", "محصول"])[:2]
-        body = (f'<div class="compare"><div><strong>×۱</strong><span>{html.escape(labels[0])}</span></div>'
-                f'<i><b>→</b></i><div><strong>×∞</strong><span>{html.escape(labels[1])}</span></div></div>')
+        labels = (labels + ["", ""])[:2]
+        body = (f'<div class="compare"><div><span>{html.escape(labels[0])}</span></div>'
+                f'<i><b>→</b></i><div><span>{html.escape(labels[1])}</span></div></div>')
     elif beat.visual_type == "stat":
         match = re.search(r"[۰-۹0-9]+(?:[٫.][۰-۹0-9]+)?(?:\s*[٪%×x])?", beat.title)
         value = html.escape(match.group(0) if match else beat.title.split()[0])
@@ -265,12 +265,12 @@ def _beat_markup(beat: VisualBeat) -> str:
     elif beat.visual_type == "map_route":
         body = '<div class="route"><svg viewBox="0 0 800 260"><path d="M70 190 C220 30 410 245 720 65"/><circle cx="70" cy="190" r="18"/><circle cx="720" cy="65" r="18"/></svg></div>'
     elif beat.visual_type == "spec_callout":
-        values = beat.items or ["Software", "as a", "Service"]
-        body = '<div class="saas-mark"><b>S</b><i></i><div>' + ''.join(
+        values = beat.items or []
+        body = '<div class="saas-mark"><b>ن</b><i></i><div>' + ''.join(
             f'<span>{html.escape(value)}</span>' for value in values[:3]
         ) + '</div></div>'
     elif beat.visual_type == "kinetic_type":
-        body = f'<div class="kinetic" dir="rtl">{title}</div>'
+        body = f'<div class="kinetic" dir="rtl" style="font-size:{88 if len(beat.title) > 38 else 112}px">' + " ".join(f'<span class="kinetic-word">{html.escape(w)}</span>' for w in beat.title.split()) + "</div>"
     elif beat.visual_type == "before_after":
         values = [re.sub(r"^(?:قبل|بعد)\s*[:：-]?\s*", "", value).strip() for value in beat.items[:2]]
         values = (values + ["خودت خدمت می‌دهی", "نرم‌افزار می‌فروشد"])[:2]
@@ -328,8 +328,8 @@ def _timeline_script(beats: list[VisualBeat]) -> str:
             )
         elif beat.visual_type == "kinetic_type":
             lines.append(
-                f'tl.fromTo("#{beat.id} .kinetic", {{scale:.72,rotation:-2}}, '
-                f'{{scale:1,rotation:0,duration:.38,ease:"back.out(1.7)"}}, {beat.start + .12:.3f});'
+                f'tl.fromTo("#{beat.id} .kinetic-word", {{opacity:0,y:48,scale:.9}}, '
+                f'{{opacity:1,y:0,scale:1,duration:.3,stagger:.08,ease:"power3.out"}}, {beat.start + .12:.3f});'
             )
         elif beat.visual_type == "before_after":
             lines.append(
@@ -394,13 +394,13 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
 .visual-beat{{--bg:#f3f0e8;--fg:#151a1b;position:absolute;left:42px;right:42px;top:72px;height:720px;padding:62px 58px;border-radius:42px;overflow:hidden;background:var(--bg);color:var(--fg);box-shadow:0 28px 80px #0007;direction:rtl}}
 .visual-beat.full_frame{{inset:0;height:1920px;border-radius:0;display:grid;align-items:center}}
 .visual-beat.full_frame .beat-inner{{padding:240px 86px}}.visual-beat.full_frame h2{{font-size:108px;max-width:920px}}
-.beat-inner{{position:absolute;inset:0;padding:62px 58px;opacity:0}}
+.beat-inner{{position:absolute;inset:0;padding:96px 64px;opacity:0}}
 .visual-beat:after{{content:"";position:absolute;inset:0;border:2px solid color-mix(in srgb,var(--fg) 12%,transparent);border-radius:42px;pointer-events:none}}
 .ghost{{position:absolute;left:-20px;top:8px;font-size:190px;opacity:.045;white-space:nowrap;direction:rtl}}.eyebrow{{font-size:22px;color:color-mix(in srgb,var(--fg) 55%,transparent);margin-bottom:25px;letter-spacing:0}}h2{{font-size:66px;line-height:1.28;margin:0;max-width:870px;letter-spacing:0}}
 .teal{{--accent:#15977f;--bg:#f1efe7;--fg:#14221f}}.amber,.coral,.blue,.ink{{--accent:#d4ff42;--bg:#111513;--fg:#f4f1e8}}.stat{{font-size:150px;color:var(--accent);margin-top:58px;line-height:1}}
 .meter{{height:18px;background:#d8d4ca;border-radius:12px;margin-top:34px;overflow:hidden;direction:ltr}}.meter i{{display:block;width:78%;height:100%;background:var(--accent);transform-origin:left}}
-.step{{display:flex;align-items:center;gap:24px;margin-top:27px;font-size:40px}}.step b{{display:grid;place-items:center;width:72px;height:72px;border-radius:22px;background:var(--accent);color:white;font-size:28px}}.step span{{border-bottom:2px solid #151a1b20;padding:10px 0;flex:1}}
-.compare{{display:grid;grid-template-columns:1fr 120px 1fr;align-items:center;gap:18px;margin-top:70px;text-align:center}}.compare>div{{height:220px;border:3px solid currentColor;border-radius:34px;display:grid;place-items:center;padding:20px}}.compare strong{{display:block;font:900 80px/1 Ray;color:var(--accent)}}.compare span{{font-size:31px}}.compare i{{font-style:normal;color:var(--accent);font-size:74px}}.compare i b{{font-weight:900}}
+.step{{display:flex;align-items:center;gap:24px;margin-top:27px;font-size:48px;line-height:1.35}}.step b{{display:grid;place-items:center;flex-shrink:0;width:72px;height:72px;border-radius:22px;background:var(--accent);color:var(--bg);font-size:44px}}.step span{{border-bottom:2px solid #151a1b20;padding:10px 0;flex:1;min-width:0;overflow-wrap:anywhere}}
+.compare{{display:grid;grid-template-columns:minmax(0,1fr) 70px minmax(0,1fr);align-items:center;gap:18px;margin-top:70px;text-align:center}}.compare>div{{min-height:240px;border:3px solid currentColor;border-radius:34px;display:grid;place-items:center;padding:20px}}.compare strong{{display:block;font:900 80px/1 Ray;color:var(--accent)}}.compare span{{font-size:48px;line-height:1.35;overflow-wrap:anywhere;min-width:0}}.compare i{{font-style:normal;color:var(--accent);font-size:74px}}.compare i b{{font-weight:900}}
 .concept{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:30px;align-items:end;height:300px;margin-top:38px;direction:ltr}}.concept>div{{display:flex;flex-wrap:wrap;align-content:flex-end;justify-content:center;gap:10px;padding:24px;border-bottom:5px solid var(--accent);min-height:130px}}.concept>div:nth-child(2){{min-height:205px}}.concept>div:nth-child(3){{min-height:280px}}.concept i{{display:block;width:45px;height:45px;border-radius:12px;background:var(--accent)}}.concept small{{width:100%;font:900 32px Ray;color:var(--fg);text-align:center}}
 .ui-stage{{position:relative;height:360px;margin-top:28px;perspective:900px}}.ui-stage i{{position:absolute;width:250px;height:300px;border-radius:26px;background:#171c1d;border:4px solid #fff;box-shadow:0 24px 45px #0005}}.ui-stage i:nth-child(1){{right:70px;transform:rotate(7deg)}}.ui-stage i:nth-child(2){{right:320px;top:22px;transform:scale(1.08)}}.ui-stage i:nth-child(3){{right:570px;transform:rotate(-7deg)}}.ui-stage span{{position:absolute;right:365px;top:75px;width:160px;height:16px;background:var(--accent);box-shadow:0 45px #ffffff30,0 90px #ffffff30}}
 .collage{{display:grid;grid-template-columns:1fr 1fr;gap:18px;height:350px;margin-top:28px;direction:rtl}}.collage div{{display:grid;grid-template-columns:74px 1fr;align-items:center;gap:15px;padding:18px 22px;border-radius:24px;background:color-mix(in srgb,var(--fg) 8%,transparent);border:2px solid color-mix(in srgb,var(--fg) 22%,transparent)}}.collage b{{display:grid;place-items:center;width:64px;height:64px;border-radius:18px;background:var(--accent);color:var(--bg);font-size:34px}}.collage span{{font-size:30px}}
@@ -408,7 +408,7 @@ def build_project(project_dir: Path, base_video: Path, beats: list[VisualBeat], 
 .route{{height:300px;margin-top:25px}}.route svg{{width:100%;height:100%;overflow:visible}}.route path{{fill:none;stroke:var(--accent);stroke-width:14;stroke-linecap:round;stroke-dasharray:22 22}}.route circle{{fill:#f3f0e8;stroke:var(--accent);stroke-width:12}}
 .saas-mark{{display:grid;grid-template-columns:190px 80px 1fr;align-items:center;gap:20px;margin-top:46px;direction:ltr}}.saas-mark>b{{display:grid;place-items:center;width:180px;height:180px;border-radius:48px;background:var(--accent);color:var(--bg);font:900 110px Ray}}.saas-mark>i{{height:5px;background:var(--accent);position:relative}}.saas-mark>i:after{{content:"";position:absolute;right:-2px;top:-11px;border:13px solid transparent;border-left-color:var(--accent)}}.saas-mark>div{{display:flex;flex-direction:column;gap:9px}}.saas-mark span{{font:900 35px/1.2 Ray;color:var(--fg)}}
 .kinetic{{font-size:118px;line-height:1.3;margin-top:55px;color:var(--accent);max-width:900px;min-height:190px;padding-bottom:30px;overflow:hidden}}
-.kinetic_type h2{{display:none}}.kinetic_type .kinetic{{font-size:132px;margin-top:160px;max-width:920px}}
+.kinetic-word{{display:inline-block}}.ghost,.eyebrow{{display:none}}.kinetic_type h2{{display:none}}.kinetic_type .beat-inner{{display:flex;align-items:center;justify-content:center}}.kinetic_type .kinetic{{margin:0;max-width:920px;min-height:0;padding:24px;text-align:center;overflow:visible}}
 .before-after{{display:grid;grid-template-columns:1fr 90px 1fr;gap:18px;align-items:center;margin-top:65px;font-size:34px;text-align:center}}.before-after span{{height:210px;border-radius:32px;border:3px solid currentColor;display:flex;flex-direction:column;justify-content:center;padding:24px}}.before-after small{{display:block;color:var(--accent);font-size:23px;margin-bottom:15px}}.before-after i{{height:5px;background:var(--accent);position:relative}}.before-after i:after{{content:"→";position:absolute;left:28px;top:-38px;color:var(--accent);font-style:normal;font-size:60px}}
 .registry-beat .beat-inner{{position:absolute;inset:0;padding:0!important}}.registry-beat .ghost,.registry-beat .eyebrow,.registry-beat h2{{display:none}}
 .registry-beat .registry-stage{{position:absolute;inset:0;width:100%;height:100%;margin:0;overflow:hidden;border-radius:0;background:#080b0c}}
