@@ -1,14 +1,19 @@
 FROM python:3.12-slim AS builder
+# Optional package mirrors, passed only as build args.
+ARG PIP_INDEX_URL
+ARG PIP_TRUSTED_HOST
 WORKDIR /build
 COPY requirements.lock .
 RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requirements.lock
 
 FROM node:22-bookworm-slim AS motion
+ARG npm_config_registry
 WORKDIR /motion
 COPY remotion/package*.json ./
 RUN npm ci
 
 FROM node:22-bookworm-slim AS tscaps
+ARG npm_config_registry
 WORKDIR /tscaps
 COPY tools/tscaps/package*.json ./
 # Captions run in Chromium, not the native Node ONNX backend.
@@ -16,6 +21,7 @@ RUN npm ci --ignore-scripts --no-audit --no-fund && npm cache clean --force \
     && node -e "require('node:fs').rmSync('node_modules/onnxruntime-node/bin', {recursive:true, force:true})"
 
 FROM node:22-bookworm-slim AS hyperframes
+ARG npm_config_registry
 WORKDIR /opt/hyperframes
 ENV PUPPETEER_SKIP_DOWNLOAD=true PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm install --save-exact --omit=dev --no-audit --no-fund hyperframes@0.8.161
