@@ -200,7 +200,7 @@ async def _persist_job(job: Job) -> None:
     async with AsyncSessionLocal() as db:
         record = await db.get(JobRecord, job.id)
         if record is None:
-            record = JobRecord(id=job.id, user_id=int(job.user_id) if job.user_id else None,
+            record = JobRecord(id=job.id, user_id=_db_user_id(job.user_id),
                                title=None, source_path=(f"raw/{job.raw_name}" if job.raw_name else None),
                                status=status, stage=stage, message=message, progress_pct=progress,
                                state={"job": state})
@@ -256,6 +256,12 @@ def _save_local_registry_locked() -> None:
     tmp = LOCAL_REGISTRY.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1))
     tmp.replace(LOCAL_REGISTRY)
+
+
+def _db_user_id(user_id: Optional[str]) -> Optional[int]:
+    """Database owner id; non-numeric ids such as the loopback dev user ("local_dev") are stored unowned."""
+    value = str(user_id) if user_id is not None else ""
+    return int(value) if value.isdecimal() else None
 
 
 def _fallback_user_id() -> Optional[str]:
