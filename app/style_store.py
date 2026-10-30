@@ -30,6 +30,11 @@ def _uid(user_id) -> str:
     return uid
 
 
+def _use_db(user_id) -> bool:
+    """Only numeric account ids live in PostgreSQL; the loopback dev user ("local_dev") uses files."""
+    return DB_AVAILABLE and str(user_id).isdecimal()
+
+
 def user_dir(user_id) -> Path:
     return LEARNED_PROFILES_DIR / "users" / _uid(user_id)
 
@@ -58,7 +63,7 @@ def _write_json(path: Path, data: dict) -> None:
 
 
 def list_references(user_id) -> list[dict]:
-    if DB_AVAILABLE:
+    if _use_db(user_id):
         async def query():
             async with AsyncSessionLocal() as db:
                 rows = (await db.execute(select(StyleReference).where(StyleReference.user_id == int(user_id))
@@ -75,7 +80,7 @@ def list_references(user_id) -> list[dict]:
 
 
 def add_reference(user_id, digest: str, analysis: dict) -> None:
-    if DB_AVAILABLE:
+    if _use_db(user_id):
         async def upsert():
             async with AsyncSessionLocal() as db:
                 row = (await db.execute(select(StyleReference).where(
@@ -95,7 +100,7 @@ def add_reference(user_id, digest: str, analysis: dict) -> None:
 def delete_reference(user_id, digest: str) -> bool:
     if not re.fullmatch(r"[0-9a-f]{1,32}", digest):
         return False
-    if DB_AVAILABLE:
+    if _use_db(user_id):
         async def remove():
             async with AsyncSessionLocal() as db:
                 result = await db.execute(delete(StyleReference).where(
@@ -130,7 +135,7 @@ def reference_video_path(user_id, digest: str) -> Optional[Path]:
 def load_profile(user_id) -> Optional[dict]:
     if user_id is None:
         return None
-    if DB_AVAILABLE:
+    if _use_db(user_id):
         async def query():
             async with AsyncSessionLocal() as db:
                 row = (await db.execute(select(LearnedStyleProfile).where(
@@ -142,7 +147,7 @@ def load_profile(user_id) -> Optional[dict]:
 
 
 def save_profile(user_id, profile: dict) -> None:
-    if DB_AVAILABLE:
+    if _use_db(user_id):
         async def upsert():
             async with AsyncSessionLocal() as db:
                 row = (await db.execute(select(LearnedStyleProfile).where(
@@ -159,7 +164,7 @@ def save_profile(user_id, profile: dict) -> None:
 
 
 def delete_profile(user_id) -> None:
-    if DB_AVAILABLE:
+    if _use_db(user_id):
         async def remove():
             async with AsyncSessionLocal() as db:
                 await db.execute(delete(LearnedStyleProfile).where(LearnedStyleProfile.user_id == int(user_id)))
