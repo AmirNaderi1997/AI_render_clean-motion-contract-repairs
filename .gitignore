@@ -45,6 +45,7 @@ assets/effect_previews/
 !/tests/test_resource_operations.py
 !/tests/test_narration_alignment.py
 !/tests/test_motion_polish.py
+!/tests/test_local_dev_user_id.py
 /hermes/tests/
 *.test.ts
 *.test.tsx
