@@ -24,7 +24,7 @@ Not served by the router (specialist providers, unchanged code paths):
 ## Setup and deployment
 
 1. Give the server at least one provider key, backend only:
-   - `.env`: `DIRECT_JARVIS_API_KEY=` and/or `DIRECT_SAROVI_API_KEY=`, or
+   - `.env`: `DIRECT_JARVIS_API_KEY=` and/or `DIRECT_SAROVI_API_KEY=` (`JARVIS_API_KEY` / `SAROVI_API_KEY` also work; `JARVIS_BASE_URL`, `JARVIS_MODEL`, `SAROVI_BASE_URL`, `SAROVI_LLM_MODEL` set defaults below admin-saved values), or
    - *Settings → AI Models & Logs → Direct providers*: paste the key (write-only, stored in `$JOBS_DIR/ai_gateway/direct_keys.json`, mode 0600) and press **Test**.
 2. Jarvis and Sarovi are on by default. ArvanCloud, OpenAI and Gemini are off by default even when `ARVAN_AI_API_KEY`/`OPENAI_API_KEY`/`GEMINI_API_KEY` exist; switch them on in the same tab to use them as further text providers.
 3. Apply `alembic upgrade head`. The existing gateway tables (models, routes, settings, audit logs) are reused; nothing new is added.

@@ -356,3 +356,14 @@ def test_openai_reasoning_models_get_their_own_parameters(monkeypatch):
         assert ("max_completion_tokens" in body) is reasoning and ("max_tokens" in body) is not reasoning
         assert ("temperature" in body) is not reasoning
         assert body.get("reasoning_effort") == ("low" if reasoning else None)
+
+
+def test_installation_env_names_are_read_below_saved_overrides(monkeypatch):
+    monkeypatch.setenv("JARVIS_API_KEY", "j-env-key-0000000")
+    monkeypatch.setenv("SAROVI_LLM_MODEL", "sarovi/env-model")
+    monkeypatch.setenv("JARVIS_BASE_URL", "https://jarvis.example.com/v1")
+    cfg = {p["id"]: p for p in direct.config()["providers"]}
+    assert direct.key_for("jarvis") == "j-env-key-0000000"
+    assert cfg["sarovi"]["model"] == "sarovi/env-model" and cfg["jarvis"]["base_url"] == "https://jarvis.example.com/v1"
+    direct.save_config(True, [{"id": "sarovi", "model": "saved-model"}])
+    assert next(p for p in direct.config()["providers"] if p["id"] == "sarovi")["model"] == "saved-model"

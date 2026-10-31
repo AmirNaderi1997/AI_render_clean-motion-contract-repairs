@@ -7,7 +7,8 @@ def isolated_ai_gateway(monkeypatch, tmp_path):
     from app.config import settings
     from brain import lm_direct
     for provider in lm_direct.PROVIDERS:
-        monkeypatch.delenv(f"DIRECT_{provider.upper()}_API_KEY", raising=False)
+        for name in ("DIRECT_{}_API_KEY", "{}_API_KEY", "{}_BASE_URL", "{}_MODEL", "{}_LLM_MODEL"):
+            monkeypatch.delenv(name.format(provider.upper()), raising=False)
     monkeypatch.setattr(lm_direct, "_REJECTED", {})
     monkeypatch.setattr(settings, "JOBS_DIR", str(tmp_path / "jobs"))
 

@@ -109,7 +109,8 @@ def config() -> dict:
         base, saved_p = PROVIDERS[pid], overrides.get(pid, {})
         providers.append({
             "id": pid, "title": base["title"], "enabled": bool(saved_p.get("enabled", pid in DEFAULT_ENABLED)),
-            "base_url": saved_p.get("base_url") or base["base_url"], "model": saved_p.get("model") or base["model"],
+            "base_url": saved_p.get("base_url") or _env_default(pid, "BASE_URL") or base["base_url"],
+            "model": saved_p.get("model") or _env_default(pid, "LLM_MODEL") or _env_default(pid, "MODEL") or base["model"],
             "format": saved_p.get("format") if saved_p.get("format") in FORMATS else base["format"],
             "extra_header_name": saved_p.get("extra_header_name", ""),
             "prefer_stream": bool(saved_p.get("prefer_stream", False)),
@@ -118,10 +119,16 @@ def config() -> dict:
             "stt": {"enabled": True, "model": "small", "improve_low_quality": True, **saved.get("stt", {})}}
 
 
+def _env_default(provider: str, name: str) -> str:
+    """`JARVIS_BASE_URL`, `JARVIS_MODEL`, `SAROVI_LLM_MODEL`, ...: installation defaults below saved admin overrides."""
+    return os.environ.get(f"{provider.upper()}_{name}", "").strip()
+
+
 def _env_key(provider: str) -> str:
     """Keys already configured for the legacy single-provider paths are reused, so nothing has to be entered twice."""
     legacy = {"arvan": settings.ARVAN_AI_API_KEY, "openai": settings.OPENAI_API_KEY, "gemini": settings.GEMINI_API_KEY}.get(provider, "")
-    return (os.environ.get(f"DIRECT_{provider.upper()}_API_KEY") or legacy or "").strip()
+    return (os.environ.get(f"DIRECT_{provider.upper()}_API_KEY") or os.environ.get(f"{provider.upper()}_API_KEY")
+            or legacy or "").strip()
 
 
 def key_for(provider: str) -> str:
