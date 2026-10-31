@@ -265,19 +265,24 @@ def _frame_sheet(frames: list[Path], rows: list[tuple[float, int]], first_index:
 def review_frames(path: Path, duration: float, cuts: list[float], work: Path, describe_frames=None) -> tuple[list[dict], list[Path]]:
     """Frame-by-frame review: sampled frames, what each one shows and what changed from the previous one."""
     from concurrent.futures import ThreadPoolExecutor
+    import contextvars
+    from app.studio_cancel import checkpoint, Stopped
     rows = table_frames(cuts, duration)
     frames = _extract(path, [t for t, _ in rows], work, prefix="table")
     rows = rows[:len(frames)]
     chunks = [(i, frames[i:i + TABLE_SHEET], rows[i:i + TABLE_SHEET]) for i in range(0, len(frames), TABLE_SHEET)]
     def one(chunk):
+        checkpoint()
         first, group, group_rows = chunk
         try:
             return (describe_frames or _describe_frames)(_frame_sheet(group, group_rows, first, work))
+        except Stopped:
+            raise
         except Exception as exc:
             log.warning("frame review sheet failed: %s", exc)
             return {}
     with ThreadPoolExecutor(max_workers=1) as pool:      # one at a time: the vision route is a single key
-        results = list(pool.map(one, chunks))
+        results = [pool.submit(contextvars.copy_context().run, one, chunk).result() for chunk in chunks]
         for position, chunk in enumerate(chunks):       # a second pass for sheets the provider failed (upstream errors are frequent)
             if not (isinstance(results[position], dict) and results[position].get("frames")):
                 results[position] = one(chunk)

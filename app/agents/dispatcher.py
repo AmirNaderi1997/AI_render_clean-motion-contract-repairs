@@ -29,7 +29,7 @@ def execute_run(run_id, user):
         process_message(record["conversation_id"], user, record["message_id"],
                         request["text"], request["attachment_ids"], request.get("manual_question_id"))
         # Lite keeps its own workflow/error handling; do not reinterpret it.
-        run(store.update(run_id, user, status="dispatched"))
+        run(store.update(run_id, user, status="dispatched", claim={"running"}))
     except Exception:
         run(store.update(run_id, user, status="failed")); raise
 

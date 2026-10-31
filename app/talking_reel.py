@@ -8,6 +8,7 @@ music) are kept across renders; "regenerate" asks the LLM again.
 from __future__ import annotations
 
 import hashlib
+import contextvars
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 from creative.review import QualityReviewRequired
+from app.studio_cancel import Stopped as TaskCanceled
 
 log = logging.getLogger(__name__)
 
@@ -49,15 +51,15 @@ _running: set[str] = set()
 _cancel_events: dict[str, threading.Event] = {}
 _pause_events: dict[str, threading.Event] = {}
 
-class TaskCanceled(Exception):
-    pass
 
 def _checkpoint(job_dir: Path) -> None:
+    from app.studio_cancel import checkpoint
+    checkpoint()
     key = str(job_dir)
     while True:
         with _lock:
             cancel_event, pause_event = _cancel_events.get(key), _pause_events.get(key)
-        if cancel_event and cancel_event.is_set():
+        if load(job_dir).get("status") == "canceled" or (cancel_event and cancel_event.is_set()):
             raise TaskCanceled()
         if not pause_event or not pause_event.is_set():
             return
@@ -353,7 +355,7 @@ def resolve_music(music: Optional[str]) -> Optional[Path]:
 
 
 def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None, request: str = "",
-            concept: Optional[dict] = None) -> dict:
+            concept: Optional[dict] = None, source_edit: bool = False) -> dict:
     """Transcribe and prepare editable AI decisions without starting a render.
 
     ``concept`` is a concept the user picked from the plan: the director is skipped and only the
@@ -363,13 +365,14 @@ def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None, requ
         if key in _running:
             raise ValueError("talking reel is busy")
         state = load(job_dir)
-        state.update(status="running", stage="transcribing", message="", progress=5, analysis_ready=False)
+        state.update(status="running", stage="transcribing", message="", progress=5, analysis_ready=False, source_edit=source_edit)
         save(job_dir, state)
         _running.add(key)
         _cancel_events[key], _pause_events[key] = threading.Event(), threading.Event()
 
     def run() -> None:
         try:
+            _install_cancel_guard(job_dir)
             _analyze(job_dir, raw_video, style=style, request=request, concept=concept)
         except TaskCanceled:
             current = load(job_dir); current.update(status="canceled", stage="", message="Canceled by user"); save(job_dir, current)
@@ -387,8 +390,17 @@ def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None, requ
                 _running.discard(key)
                 _cancel_events.pop(key, None); _pause_events.pop(key, None)
 
-    threading.Thread(target=run, daemon=True).start()
+    context = contextvars.copy_context()
+    threading.Thread(target=lambda: context.run(run), daemon=True).start()
     return state
+
+
+def _install_cancel_guard(job_dir):
+    from app.studio_cancel import engine_guard, Stopped
+    def guard():
+        if load(job_dir).get("status") == "canceled":
+            raise Stopped("Stopped by user")
+    engine_guard.set(guard)
 
 
 def _concept_plan(previous: Optional[dict], concept: dict, style: Optional[str]) -> dict:
@@ -421,7 +433,16 @@ def _analyze(job_dir: Path, video: Path, *, style: Optional[str], request: str =
     import creative
 
     load_dotenv(PROJECT_ROOT / ".env")
+    _checkpoint(job_dir)
     transcript = transcript_for(job_dir, video)
+    _checkpoint(job_dir)
+    if load(job_dir).get("source_edit"):
+        from app.studio_source_edit import analyze
+        _stage(job_dir, "planning source edit", progress=30)
+        state = analyze(load(job_dir), transcript, request)
+        _checkpoint(job_dir)
+        save(job_dir, state)
+        return
 
     # Creative direction first: understand the talk, explore concepts, critique, then let the
     # existing engines execute the chosen one. This stage can only improve a result: if the
@@ -512,6 +533,8 @@ def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False, cached_on
 
     def run() -> None:
         try:
+            _install_cancel_guard(job_dir)
+            _checkpoint(job_dir)
             started = time.time()
             _run(job_dir, raw_video, regenerate=regenerate)
             _record_render_time(job_dir, raw_video, time.time() - started)
@@ -532,7 +555,8 @@ def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False, cached_on
                 _running.discard(key)
                 _cancel_events.pop(key, None); _pause_events.pop(key, None)
 
-    threading.Thread(target=run, daemon=True).start()
+    context = contextvars.copy_context()
+    threading.Thread(target=lambda: context.run(run), daemon=True).start()
     return state
 
 
@@ -610,7 +634,15 @@ def transcript_for(job_dir: Path, video: Path) -> dict:
         transcript = json.loads((job_dir / 'transcript.json').read_text())
         if not transcript.get('words'): raise ValueError('متن ذخیره‌شده معتبر نیست.')
         return transcript
-    transcript = transcribe(video, job_dir, language="fa", engine="elevenlabs")
+    from app.studio_cancel import checkpoint
+    checkpoint()
+    # Explicit source edits never require a hosted speech call.
+    if load(job_dir).get("source_edit"):
+        from brain.lm_direct import config as direct_config
+        transcript = transcribe(video, job_dir, language="fa", engine="whisper", model_size=direct_config()["stt"]["model"])
+    else:
+        transcript = transcribe(video, job_dir, language="fa", engine="elevenlabs")
+    checkpoint()
     if not transcript.get("words"):
         raise RuntimeError("no speech found in the video")
     return transcript
@@ -786,6 +818,13 @@ def _review_creative_output(job_dir: Path, output: Path, moments: list[float] | 
     from engine.technical_qc import inspect_talking_export
     _stage(job_dir, 'checking export', candidate_output=f'exports/{output.name}')
     duration=float(probe(output)['format']['duration'])
+    if state.get("source_edit"):
+        technical = inspect_talking_export(output, duration=duration)
+        _checkpoint(job_dir)
+        current = load(job_dir)
+        current["technical_qc"] = technical
+        save(job_dir, current)
+        return
     _stage(job_dir,'reviewing creative output',progress=99)
     technical=inspect_talking_export(output,duration=duration)
     _stage(job_dir, 'checking export', technical_qc=technical)
@@ -1048,6 +1087,9 @@ def _plan_talking_1(job_dir: Path, video: Path, *, prepare_media: bool) -> Plann
     decisions = _apply_timeline_choices(decisions, "talking_1", settings)
     from engine.revision_timing import prepare_transcript
     transcript, decisions = prepare_transcript(transcript, decisions)
+    if state.get("source_edit"):
+        from app.studio_source_edit import plan
+        return PlannedReel("talking_1", media, transcript, decisions, settings, plan(media, transcript, decisions, state))
     if prepare_media:
         _stage(job_dir, "tracking the face", progress=35)
     faces = _faces(job_dir, video, media) if prepare_media else _cached_faces(job_dir)

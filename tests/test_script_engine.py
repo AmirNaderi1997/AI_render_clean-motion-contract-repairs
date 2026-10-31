@@ -61,15 +61,15 @@ def test_overlong_script_is_rewritten_even_if_the_critic_says_ship(monkeypatch):
     assert any("ظرفیت" in item for item in report.history[0]["must_fix"])
 
 
-def test_the_tightened_script_is_reviewed_itself_not_judged_by_the_verdict_on_its_longer_version(monkeypatch):
+def test_timing_repairs_cannot_escape_the_round_cap(monkeypatch):
     longer = draft(*["متن کاملاً متفاوت و بسیار طولانی شمارهٔ دو است که برای این ویدیوی کوتاه باز هم زیادی توضیح می‌دهد و ظرفیت را پر می‌کند، " * 2] * 6)
     bad = scores(4, verdict="rewrite", must_fix=["هوک ضعیف است"], change=["hook"])
     monkeypatch.setattr(script, "DEPTH_REWRITES", {"fast": 1})
     fake = Fake([TOO_LONG, longer, GOOD], [bad, bad, scores()])
     result, report = run(fake, monkeypatch, depth="fast")
-    assert result is GOOD and report.timing_ok
-    assert fake.calls == {"write": 3, "review": 3}
-    assert report.review.verdict == "ship" and report.history[-1].get("after_tightening") is True
+    assert not report.timing_ok and not script.passes(report)
+    assert fake.calls == {"write": 2, "review": 2}
+    assert report.stopped == "cap" and not any(r.get("after_tightening") for r in report.history)
 
 
 def test_loop_is_bounded_by_depth_and_stops_when_it_stalls(monkeypatch):
@@ -202,14 +202,15 @@ def test_unresolved_critic_objections_stay_in_the_report(monkeypatch):
     assert report.review.verdict == "rewrite" and "پایان مبهم است" in report.review.must_fix and report.stopped == "cap"
 
 
-def test_a_script_still_over_budget_after_the_critic_rounds_is_tightened_and_then_reviewed_once(monkeypatch):
+def test_zero_rewrite_budget_holds_overlong_script_without_extra_paid_calls(monkeypatch):
     shorter = draft("ابزار برش می‌زند؛ چشم انتخاب می‌کند.", "ماشین سریع‌تر است، اما سلیقه ندارد.", "تدوینگر خوب هنوز کارگردان لحظه‌هاست.")
     ok = scores()
-    fake = Fake([TOO_LONG, shorter], [ok, ok])    # critic says ship, but the script is too long; no rewrite rounds remain at depth 0: tighten, then one final review
+    fake = Fake([TOO_LONG, shorter], [ok, ok])    # A timing failure at depth zero must be held without another paid call.
     monkeypatch.setattr(script, "DEPTH_REWRITES", {"fast": 0})
     result, report = run(fake, monkeypatch)
-    assert result is shorter and report.timing_ok and fake.calls == {"write": 2, "review": 2} and report.history[-1].get("after_tightening") is True
-    assert any(item.get("tighten") for item in report.history)
+    assert result is TOO_LONG and not report.timing_ok and not script.passes(report)
+    assert fake.calls == {"write": 1, "review": 1} and report.stopped == "cap"
+    assert not any(item.get("tighten") for item in report.history)
 
 
 def test_beat_weights_stay_within_the_schema_for_long_videos():

@@ -17,6 +17,7 @@ Security and operations:
 from __future__ import annotations
 
 import ipaddress
+import contextvars
 import json
 import re
 import logging
@@ -30,6 +31,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import settings
+from app.studio_cancel import checkpoint
 from . import lm_adapters as adapters
 
 log = logging.getLogger(__name__)
@@ -241,6 +243,7 @@ def _from_gemini(data: dict, model: str) -> dict:
 
 def _post(url: str, headers: dict, body: dict, timeout: float) -> httpx.Response:
     from .http_ssl import ssl_context
+    checkpoint()
     with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(timeout, 10)), verify=ssl_context(), follow_redirects=False) as client:
         return client.post(url, headers=headers, json=body)
 
@@ -288,6 +291,7 @@ def _prepare(provider: dict, messages: list[dict], *, model: str, tokens: int, t
 
 def call(provider: dict, messages: list[dict], *, model: str, tokens: int, temperature=None, timeout: float = 90, extra=None) -> dict:
     """One request to one provider. Returns an OpenAI-shaped chat response or raises DirectError."""
+    checkpoint()
     if provider.get("prefer_stream") and provider["format"] == "openai" and not any((extra or {}).get(k) for k in ("tools", "tool_choice", "functions", "function_call")):
         # Jarvis's tested transport accepts SSE while synchronous responses can
         # disconnect before headers. Collect SSE without replaying the request or
@@ -325,6 +329,7 @@ def stream_call(provider: dict, messages: list[dict], *, model: str, tokens: int
     key, url, headers, body = _prepare(provider, messages, model=model, tokens=tokens, temperature=temperature, extra=extra, stream=True)
     started = time.monotonic()
     try:
+        checkpoint()
         with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(timeout, 10)), verify=ssl_context(), follow_redirects=False) as client:
             with client.stream("POST", url, headers=headers, json=body) as response:
                 if not response.is_success:
@@ -415,6 +420,7 @@ def complete_routed(messages: list[dict], *, candidates: list[str], tokens: int,
                     deadline: float | None = None) -> tuple[dict, str, str] | None:
     """Try the route's (provider, model) pairs in order. Returns (response, provider_id, model) or None. Appends to `attempts`."""
     for provider, model in route_pairs(candidates, only_candidates=only_candidates):
+        checkpoint()
         if deadline is not None and time.monotonic() >= deadline:
             break
         if _REJECTED.get(provider["id"], 0) > time.monotonic():
@@ -426,6 +432,7 @@ def complete_routed(messages: list[dict], *, candidates: list[str], tokens: int,
             if validate is not None and (provider['format']=='gemini' or provider['id']=='openai') and not (extra or {}).get('response_format'):
                 provider_extra={**(extra or {}),'response_format':{'type':'json_object'}}
             response = call(provider, messages, model=model, tokens=tokens, temperature=temperature, timeout=min(timeout, 120), extra=provider_extra)
+            checkpoint()
             if validate is not None:
                 # Structured callers (JSON plans): an answer that does not parse is no answer; ask the next provider instead.
                 try:
@@ -494,8 +501,8 @@ def stream_fallback(messages: list[dict], *, candidates: list[str], tokens: int,
                     return                                            # another attempt already won: let go of this stream
                 events.put((index, "piece", piece))
             events.put((index, "done", None))
-        except DirectError as exc:
-            _note_failure(provider, exc)
+        except Exception as exc:
+            if isinstance(exc, DirectError): _note_failure(provider, exc)
             log.warning("direct stream %s (%s) failed: %s", provider["id"], model, str(exc)[:160])
             events.put((index, "error", exc))
 
@@ -506,14 +513,16 @@ def stream_fallback(messages: list[dict], *, candidates: list[str], tokens: int,
 
     def launch() -> None:
         nonlocal started, last_start
+        checkpoint()
         provider, model = attempts[started]
         alive.add(started)
-        threading.Thread(target=work, args=(started, provider, model), daemon=True, name=f"direct-stream-{provider['id']}").start()
+        threading.Thread(target=contextvars.copy_context().run, args=(work, started, provider, model), daemon=True, name=f"direct-stream-{provider['id']}").start()
         started += 1
         last_start = time.monotonic()
 
     launch()
     while True:
+        checkpoint()
         if state["winner"] is None and started < len(attempts) and (not alive or time.monotonic() - last_start >= hedge_after):
             launch()
         try:
@@ -540,6 +549,7 @@ def stream_fallback(messages: list[dict], *, candidates: list[str], tokens: int,
                 last_error = DirectError("provider answered with no text", 200)
         else:
             alive.discard(index)
+            if not isinstance(value, DirectError): raise value
             last_error = value
             if state["winner"] == index:
                 raise value                                           # failed after it started speaking: the answer cannot be completed elsewhere
@@ -598,6 +608,7 @@ def _audio_post(provider: dict, path: str, *, body=None, data=None, file: Path |
     if name and header_value_for(provider["id"]):
         headers[name] = header_value_for(provider["id"])
     try:
+        checkpoint()
         with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(timeout, 10)), verify=ssl_context(), follow_redirects=False) as client:
             if file is None:
                 response = client.post(f"{base}/{path}", headers=headers, json=body)

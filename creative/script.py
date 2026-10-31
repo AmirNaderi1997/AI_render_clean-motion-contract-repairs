@@ -262,6 +262,8 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
     previous_review: ScriptReview | None = None
     best, stale = -1.0, 0
     for attempt in range(rewrites + 1):
+        from app.studio_cancel import checkpoint
+        checkpoint()
         measured = measure(draft, duration_s, outro_s=outro_s, must_name=brief.must_name)
         try:
             review = critique(draft, brief, concept, reference, measured, used=used, previous=previous_review)
@@ -292,36 +294,8 @@ def run(brief: ContentBrief, concept: Concept, caps: str, source: str, *, durati
             continue
         draft = candidate
     final = measure(draft, duration_s, outro_s=outro_s, must_name=brief.must_name)
-    # Fitting the video is not a matter of taste: if the script still overruns, tighten it (at most twice), then the result is reviewed once more.
-    tightened = False
-    for _ in range(2):
-        if final["total_speech_s"] <= final["budget_s"] or time.monotonic() - started > budget_s * 1.25:
-            break
-        over = final["total_speech_s"] - final["budget_s"]
-        order = sorted(final["line_seconds"].items(), key=lambda item: -item[1])[:3]
-        ask = ScriptReview(verdict="rewrite", change=["cut"], must_fix=[
-            f"نریشن {final['total_speech_s']:.1f} ثانیه است و باید حداکثر {final['budget_s']:.1f} ثانیه شود: {over + 0.3:.1f} ثانیه کم کن. "
-            f"ایده، هوک و پایان را نگه دار و طولانی‌ترین خط‌ها را کوتاه کن ({', '.join(f'{k}: {v:.1f}s' for k, v in order)})."])
-        try:
-            tighter = rewrite(draft, ask, brief, concept, reference, source, caps, duration_s, final, outro_s=outro_s, used=used)
-        except CreativeUnavailable as exc:
-            log.warning("script tightening unavailable: %s", exc)
-            break
-        after = measure(tighter, duration_s, outro_s=outro_s, must_name=brief.must_name)
-        report.history.append({"attempt": report.attempts, "tighten": True, "speech_s_before": final["total_speech_s"], "speech_s_after": after["total_speech_s"]})
-        if after["total_speech_s"] < final["total_speech_s"]:
-            draft, final = tighter, after
-            tightened = True
-    if tightened and review is not None and review.verdict != "ship" and time.monotonic() - started <= budget_s * 1.6:
-        # The verdict was about the draft BEFORE it was tightened to fit: the draft that would ship must be judged itself.
-        try:
-            second = critique(draft, brief, concept, reference, final, used=used, previous=previous_review or review)
-        except CreativeUnavailable as exc:
-            log.warning("final script review unavailable: %s", exc)
-        else:
-            review = second
-            report.history.append({"attempt": report.attempts + 1, "verdict": review.verdict, "must_fix": review.must_fix[:6], "change": review.change,
-                                   "speech_s": final["total_speech_s"], "structure": draft.structure, "after_tightening": True})
+    # The rewrite cap includes all timing fixes. A rejected/overlong draft is held
+    # for review; no extra writer or critic calls may escape the round budget.
     report.review = review
     report.structure = draft.structure
     report.speech_seconds = final["total_speech_s"]

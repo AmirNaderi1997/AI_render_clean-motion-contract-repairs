@@ -121,10 +121,13 @@ def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, 
         concepts.append({"id": alt.get("id"), "name": alt.get("name", ""), "angle": alt.get("angle", ""),
                          "hook": alt.get("hook", ""), "style": alt_style, "selected": False,
                          "why": alt.get("why_it_works", "")})
+    if status.get("source_edit"):
+        info = {**info, "label": "تدوین ویدیوی ارسالی", "summary": "حفظ تصویر و صدای اصلی؛ زیرنویس و برش‌های برنامهٔ تأییدشده",
+                "motion": "بدون موشن جدید", "sfx": "بدون موسیقی یا صدای جدید"}
     logo = settings.get("outro_logo") or {}
     return {
         "kind": "talking",
-        "goal": brief.get("goal") or "ریلز حرفه‌ای اینستاگرام از ویدیوی صحبتی",
+        "goal": status.get("edit_request") or brief.get("goal") or "ریلز حرفه‌ای اینستاگرام از ویدیوی صحبتی",
         "audience": brief.get("audience", ""),
         "message": brief.get("core_message") or brief.get("topic", ""),
         "tone": brief.get("tone", ""),
@@ -153,7 +156,7 @@ def build_talking(status: dict, *, sentences: list[dict], video_seconds: float, 
                   "logo": {"enabled": bool(logo.get("enabled", True)), "motion": logo.get("motion", "pop"),
                            "has_logo": has_logo}},
         "format": {"aspect": "9:16", "resolution": "1080×1920", "fps": 30},
-        "engines": ["تحلیل گفتار و کارگردان خلاق", f"موتور تدوین «{info['label']}»"] +
+        "engines": (["تبدیل گفتار به متن", "تدوین منبع اصلی"] if status.get("source_edit") else ["تحلیل گفتار و کارگردان خلاق", f"موتور تدوین «{info['label']}»"]) +
                    (["تصویرسازی برای بخش‌ها"] if info["pictures"] else []),
         "estimate": {"render": estimate, "paid_media": info["pictures"], "new_images": sum(1 for p in pictures if p["new"]),
                      "note": ("تصاویر بخش‌هایی که فایل یا تصویر کتابخانه ندارند با هوش مصنوعی ساخته می‌شوند و ممکن است هزینه داشته باشند."

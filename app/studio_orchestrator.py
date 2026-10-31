@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import contextvars
 import os
 import asyncio
 import logging
@@ -15,6 +16,7 @@ from app import brand_profile, creative_plan
 from app import jobs as jobstore
 from app.studio_store import repo, run
 from app import studio_flags
+from app.studio_cancel import generation as _generation, Stopped as _Stopped, checkpoint as _checkpoint
 from app.studio_manual import SelectionRequired
 from app.studio_tools import execute, idempotency_key
 from brain.lm_gateway import conversation_scope
@@ -69,8 +71,25 @@ def _wants_discovery(lower: str) -> bool:
     return any(a in lower for a in asks) and any(b in lower for b in about)
 
 
+def _explicit_reference(text: str) -> bool:
+    lower = text.lower().replace("\u200c", " ")
+    return bool(re.search(r"\b(reference|inspired by|in the style of|something like this|make .*like this)\b|رفرنس|مرجع|به سبک|مشابه این|مثل این.*(?:بساز|تولید)", lower))
+
+
+def _explicit_source_edit(text: str, attachments: list[dict]) -> bool:
+    """The user's edit verbs decide the upload's role, independently of faces or a model."""
+    if not any(a.get("kind") == "video" for a in attachments) or _explicit_reference(text):
+        return False
+    lower = text.lower().replace("\u200c", " ").replace("ي", "ی").replace("ك", "ک")
+    return bool(re.search(r"\b(captions?|subtitles?|trim|cut|remove (?:the )?(?:pauses?|silences?|mistakes?))\b|زیر\s*نویس|کپشن|برش|کوتاه کن|حذف.*(?:مکث|سکوت|اشتباه)|(?:مکث|سکوت|اشتباه).*حذف", lower))
+
+
 def _intent(text: str, attachments: list[dict], current: dict | None, motion: dict | None = None) -> str:
     lower = text.lower()
+    if _explicit_source_edit(text, attachments) and not _style(text):
+        return "source_edit"
+    if _explicit_reference(text) and any(a.get("kind") == "video" for a in attachments):
+        return "motion"
     if motion and not attachments:
         # Offline routing only (the classifier is unavailable): a text-only message in a chat that already holds a motion graphic continues it.
         return "motion_graphic_answer" if motion["status"] == "needs_input" else "motion_graphic_revision"
@@ -96,6 +115,11 @@ def _resolved_intent(text, attachments, current, on_title=None, motion=None, his
     # Resolve revisions before style selection, which otherwise starts a fresh job.
     if current and current.get('external_ref') and not any(a.get('kind') == 'video' for a in attachments):
         return 'modify'
+    if _explicit_source_edit(text, attachments) and not _style(text):
+        if on_title: on_title("زیرنویس و تدوین ویدیوی ارسالی")
+        return "source_edit"
+    if _explicit_reference(text) and any(a.get("kind") == "video" for a in attachments):
+        return "motion"
     explicit_style = _style(text)
     if explicit_style and any(a.get('kind') == 'video' for a in attachments):
         if on_title: on_title(f'تدوین صحبتی {explicit_style[-1]} برای اینستاگرام')
@@ -143,7 +167,8 @@ def _resolved_intent(text, attachments, current, on_title=None, motion=None, his
         title = re.sub(r'https?://\S+|[\r\n]+', ' ', decision.title).strip(' "«»')[:100]
         if title:
             on_title(title)
-    return decision.intent
+    # A new upload cannot modify a project that does not exist.
+    return "source_edit" if decision.intent == "modify" and not current and any(a.get("kind") == "video" for a in attachments) else decision.intent
 
 
 def _provider() -> str:
@@ -158,18 +183,6 @@ def _provider() -> str:
     return "arvan_image"
 
 
-_generation = __import__("contextvars").ContextVar("studio_generation", default=None)
-
-
-class _Stopped(Exception):
-    """The person pressed Stop: unwinds the message being processed."""
-
-
-def _checkpoint(conversation_id: str) -> None:
-    """Raise when Stop was pressed (in ANY process: the number lives in a file next to the conversation) after this message started."""
-    mine = _generation.get()          # (conversation, user, generation) of the message being processed in this thread
-    if mine and mine[0] == conversation_id and studio_flags.generation(mine[1], conversation_id) != mine[2]:
-        raise _Stopped()
 
 
 def conversation_busy(conversation: dict, user_key: str) -> bool:
@@ -190,6 +203,10 @@ def conversation_busy(conversation: dict, user_key: str) -> bool:
 def request_stop(conversation_id: str, user_key: str) -> dict:
     """Stop everything in flight for this chat: the message being understood, a running project, a motion graphic, a discovery run."""
     studio_flags.bump_generation(user_key, conversation_id)
+    from app.agents import store as agent_store
+    for record in run(agent_store.runs(conversation_id, user_key)):
+        run(agent_store.update(record["id"], user_key, status="cancelled",
+                               claim={"queued", "running", "dispatched", "waiting_job", "waiting_approval"}))
     state = (run(repo.get_conversation(conversation_id, user_key)).get("state") or {})
     stopped: list[str] = ["message"]
     stopped_ids: dict = {}
@@ -219,7 +236,7 @@ def request_stop(conversation_id: str, user_key: str) -> dict:
     project_id = state.get("current_project_id")
     if project_id:
         try:
-            if run(repo.get_project(project_id, user_key)).get("status") == "running":
+            if run(repo.get_project(project_id, user_key)).get("status") in {"running", "awaiting_confirmation"}:
                 cancel_project(project_id, user_key)
                 stopped.append("project")
         except Exception:
@@ -349,11 +366,13 @@ def _page_screenshots(cid, user, page):
 
 
 def _emit(conversation_id: str, event_type: str, **data: Any) -> None:
+    if event_type in {"tool.started", "render.started", "storyboard.ready"}:
+        _checkpoint(conversation_id)
     event = run(repo.emit(conversation_id, event_type, data))
     if event_type in {"tool.started", "storyboard.ready", "render.started", "render.completed"} and data.get("message"):
         try:
             if run(repo.voice_enabled(conversation_id)):
-                threading.Thread(target=_status_voice, args=(conversation_id, event["seq"], str(data["message"])), daemon=True).start()
+                threading.Thread(target=contextvars.copy_context().run, args=(_status_voice, conversation_id, event["seq"], str(data["message"])), daemon=True).start()
         except Exception:
             pass
 
@@ -549,15 +568,31 @@ def _answer_manual_checkpoint(cid, user, project, text, question_id):
 def process_message(conversation_id: str, user_key: str, message_id: int | str,
                     text: str, attachment_ids: list[str], manual_question_id: str | None = None) -> None:
     """Every message runs under a "working" mark visible to every process, and stops at its next checkpoint when Stop was pressed."""
-    _generation.set((conversation_id, user_key, studio_flags.generation(user_key, conversation_id)))
-    # A worker thread is reused between messages: the previous request's topic must not appear in this one's steps.
+    from app.agents import store as agent_store
+    records = run(agent_store.runs(conversation_id, user_key))
+    record = next((r for r in records if str(r["message_id"]) == str(message_id) and r["agent_mode"] == "lite"), None)
+    initial_generation = record["data"].get("stop_generation", 0) if record else studio_flags.generation(user_key, conversation_id)
+    token = _generation.set((conversation_id, user_key, initial_generation))
     from app import studio_activity
     studio_activity.subject.set(_short(re.sub(r"https?://\S+", "", text).strip(), 56))
-    _emit(conversation_id, "work.state", busy=True)
+    cancelled = False
     try:
+        _checkpoint(conversation_id)
+        if record:
+            if record["status"] == "cancelled": raise _Stopped()
+            run(agent_store.update(record["id"], user_key, status="running", claim={"queued", "dispatched", "running"}))
+        _emit(conversation_id, "work.state", busy=True)
         with studio_flags.working(user_key, conversation_id):
             _process_message(conversation_id, user_key, message_id, text, attachment_ids, manual_question_id)
+            _checkpoint(conversation_id)
+    except _Stopped:
+        cancelled = True
+        _emit(conversation_id, "message.stopped", stopped=["message"])
     finally:
+        if record:
+            run(agent_store.update(record["id"], user_key, status="cancelled" if cancelled else "dispatched",
+                                   claim={"queued", "dispatched", "running"}))
+        _generation.reset(token)
         _emit(conversation_id, "work.state", busy=conversation_busy(run(repo.get_conversation(conversation_id, user_key)), user_key))
 
 
@@ -657,7 +692,7 @@ def _process_message(conversation_id: str, user_key: str, message_id: int | str,
         history = [{"role": m["role"], "text": m["content"][:300]} for m in conversation.get("messages", [])[-5:-1]]
         intent = completed_manual['engine'] if completed_manual else (forced or _resolved_intent(text, attachments, current, on_title=set_title if first_turn and automatic_title else None, motion=motion_context, history=history))
         _checkpoint(conversation_id)
-        intent = _long_video_intent(intent, attachments)
+        intent = "source_edit" if not completed_manual and _explicit_source_edit(text, attachments) and not _style(text) else _long_video_intent(intent, attachments)
         if completed_manual and completed_manual['engine'] == 'talking':
             _remember_brand_answers(conversation_id, user_key, completed_manual)
         if not completed_manual and ((manual_mode and intent in {'talking', 'localize', 'motion'}) or intent == 'talking'):
@@ -734,14 +769,13 @@ def _process_message(conversation_id: str, user_key: str, message_id: int | str,
                                     "next": "the studio transcribes the speech, translates it, locates the on-screen subtitles, and then builds the Persian version"},
                                     fallback="ویدیو دریافت شد. گفتار، ترجمه و محل دقیق زیرنویس‌های اصلی را بررسی می‌کنم و سپس نسخه فارسی را می‌سازم.")
             return
-        if intent == "talking":
+        if intent in {"talking", "source_edit"}:
             source = next((item for item in attachments if item["kind"] == "video"), None)
             if source is None: raise ValueError("برای تدوین Talking Reel یک فایل ویدیو بفرستید")
-            # No style question: the creative director chooses from the content (an explicit style in the
-            # message still wins). Asking is reserved for real ambiguity, not for decisions the system can make.
-            _emit(conversation_id, "tool.started", tool="analyze_talking_reel", message="تحلیل ویدیوی صحبتی و طراحی ایدهٔ ادیت شروع شد.")
+            _emit(conversation_id, "tool.started", tool="analyze_talking_reel", message="تبدیل گفتار به متن و برنامهٔ تدوین ویدیوی ارسالی شروع شد." if intent == "source_edit" else "تحلیل ویدیوی صحبتی و طراحی ایدهٔ ادیت شروع شد.")
             payload = {"source_path": source["path"], "filename": source["filename"], "user_key": user_key,
-                       "style": selected_style, "request": text[:2000]}
+                       "style": "talking_1" if intent == "source_edit" else selected_style, "request": text[:2000],
+                       "source_edit": intent == "source_edit"}
             seed = (conversation.get('state') or {}).get('seed_transcript_path')
             if seed and Path(seed).is_file():
                 payload["transcript"] = json.loads(Path(seed).read_text())      # a clip from a long video: its transcript is already known
@@ -752,10 +786,13 @@ def _process_message(conversation_id: str, user_key: str, message_id: int | str,
                  "manual_mode": manual_mode, "manual_answers": (completed_manual or {}).get('answers', {}),
                  "manual_logo_attachment_id": (completed_manual or {}).get('logo_attachment_id'), "last_observed": {}}, result["external_ref"]))
             run(repo.update_project(project["id"], user_key, status="running"))
-            from app import studio_narrator
-            studio_narrator.narrate(conversation_id, user_key, "talking_started", {"video_file": source["filename"], "request": _short(text, 160),
-                                    "next": "the studio transcribes and analyses the speech, weighs several edit ideas, and sends an edit plan for approval; nothing renders before the person approves"},
-                                    fallback="ویدیو را گرفتم. محتوا را تحلیل می‌کنم و چند ایدهٔ ادیت را می‌سنجم، بعد برنامهٔ تدوین را برای تأیید شما می‌فرستم. رندر قبل از تأیید شما شروع نمی‌شود.")
+            if intent == "source_edit":
+                _assistant(conversation_id, user_key, "گفتار همین فایل به متن زمان‌بندی‌شده تبدیل می‌شود. برنامهٔ زیرنویس و برش‌های درخواستی را پیش از رندر برای تأیید نشان می‌دهم؛ تصویر و صدای اصلی حفظ می‌شوند.")
+            else:
+                from app import studio_narrator
+                studio_narrator.narrate(conversation_id, user_key, "talking_started", {"video_file": source["filename"], "request": _short(text, 160),
+                                        "next": "the studio transcribes and analyses the speech, weighs several edit ideas, and sends an edit plan for approval; nothing renders before the person approves"},
+                                        fallback="ویدیو را گرفتم. محتوا را تحلیل می‌کنم و چند ایدهٔ ادیت را می‌سنجم، بعد برنامهٔ تدوین را برای تأیید شما می‌فرستم. رندر قبل از تأیید شما شروع نمی‌شود.")
             return
         _create_motion(conversation_id, user_key, message_id, text, attachments, sources)
         if manual_mode:
@@ -910,7 +947,7 @@ def _read_page(conversation_id: str, user_key: str, url: str, *, brief: bool = F
 
 
 def _gather_sources(conversation_id: str, user_key: str, text: str, attachments: list[dict], *, brief: bool = False, max_pages: int = 2,
-                    video_role: str = "reference") -> Sources:
+                    video_role: str = "source") -> Sources:
     """The one intake for every flow: a reference video (uploaded or linked) is analysed as STYLE, the other links are read as CONTENT. Each is narrated."""
     references, pages = _link_hosts(text)
     result = Sources()
@@ -927,7 +964,7 @@ def _gather_sources(conversation_id: str, user_key: str, text: str, attachments:
         result.ok = False
         return result
     # A video that is the footage to edit (talking, localize, discover) is not a reference; only a LINKED reference is analysed then.
-    uploaded = next((item for item in attachments if item.get("kind") == "video"), None) if video_role == "reference" else None
+    uploaded = next((item for item in attachments if item.get("kind") == "video"), None) if video_role == "reference" and _explicit_reference(text) else None
     if uploaded or references:
         # An uploaded video is the most reliable reference (no network, no login wall); a link is the fallback.
         result.reference = _analyze_reference(conversation_id, user_key, uploaded["path"] if uploaded else references[0])
@@ -1640,7 +1677,8 @@ async def _refresh_plan(conversation_id: str, user_key: str, project: dict, job,
     project = await repo.update_project(project["id"], user_key, state=state, source="plan" if created else None,
                                         status="awaiting_confirmation" if waiting else project["status"])
     version = creative_plan.current(state)
-    _schedule_plan_frames(project, user_key, job, video, content, sentences, version["id"])
+    if not status.get("source_edit"):
+        _schedule_plan_frames(project, user_key, job, video, content, sentences, version["id"])
     if created and announce:
         await repo.emit(conversation_id, "plan.ready", {"project_id": project["id"], "version_id": version["id"],
                                                         "version": version["n"], "message": "برنامهٔ تدوین آماده است"})
@@ -1655,6 +1693,8 @@ async def approve_plan(project_id: str, user_key: str, version_id: str) -> dict:
     project = await repo.get_project(project_id, user_key)
     if project["engine"] != "talking":
         raise creative_plan.PlanError("تأیید برنامه برای این نوع پروژه از کارت تأیید همان پروژه انجام می‌شود.")
+    if project["status"] == "canceled":
+        raise creative_plan.PlanError("این اجرا متوقف شده است؛ برنامهٔ لغوشده رندر نمی‌شود.")
     _require_server_render(project)
     state = creative_plan.approve(project["state"], version_id)
     job = jobstore.get(project["external_ref"])
@@ -2075,7 +2115,7 @@ async def _sync_conversation_once(conversation_id: str, user_key: str) -> None:
                         from app.studio_manual import apply_talking_preferences
                         await asyncio.to_thread(apply_talking_preferences, conversation_id, user_key, project, job, status)
                         project['state'] = {**project['state'], 'manual_preferences_applied': True}
-                    if not legacy_plan and not project['state'].get('brand_applied'):
+                    if not legacy_plan and not status.get('source_edit') and not project['state'].get('brand_applied'):
                         await asyncio.to_thread(_apply_brand_defaults, user_key, job)
                         project['state'] = {**project['state'], 'brand_applied': True}
                     if legacy_plan and (status.get('candidate_output') or status.get('output')):

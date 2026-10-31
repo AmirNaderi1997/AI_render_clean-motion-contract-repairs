@@ -44,6 +44,8 @@ def phase_message(stage):
 
 @contextmanager
 def describe(stage, message):
+    from app.studio_cancel import checkpoint
+    checkpoint()
     token = description.set((stage, message))
     try:
         yield
@@ -64,6 +66,8 @@ def report(conversation_id, kind, **data):
 def observe_request(function):
     @functools.wraps(function)
     def wrapped(route, *args, **kwargs):
+        from app.studio_cancel import checkpoint
+        checkpoint()
         from brain.lm_gateway import conversation_context
         cid = conversation_context.get()
         if not cid or kwargs.get('probe'):
@@ -87,6 +91,7 @@ def observe_request(function):
         worker.start()
         try:
             result = function(route, *args, **kwargs)
+            checkpoint()
         except Exception:
             stopped.set()
             worker.join(timeout=1)

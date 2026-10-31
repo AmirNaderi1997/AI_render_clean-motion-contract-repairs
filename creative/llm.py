@@ -15,6 +15,7 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 
 from .schemas import CreativeUnavailable
+from app.studio_cancel import Stopped, checkpoint
 
 log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -87,6 +88,7 @@ def _ask(schema: type[T], system: str, user: str, *, route: str, tokens: int = 6
     last = "no response"
     budget = tokens
     for attempt in range(attempts):
+        checkpoint()
         try:
             data, usage = gateway_json(system, prompt, route, budget)
         except json.JSONDecodeError as exc:
@@ -97,6 +99,8 @@ def _ask(schema: type[T], system: str, user: str, *, route: str, tokens: int = 6
             budget = min(int(budget * 1.8), 16000)
             prompt = user + "\n\nYour previous reply was cut off or malformed. Return one COMPLETE, more compact JSON object only."
             continue
+        except Stopped:
+            raise
         except Exception as exc:  # timeouts, 429/503 bursts, disabled routes: never fatal for the job
             if _transient_network(exc) and attempt < attempts - 1:
                 # A connection the proxy dropped mid-answer (long generations) says nothing about the request: ask again.

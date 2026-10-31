@@ -72,7 +72,9 @@ def _execute(cid, user, record):
     nodes.event(record, "message.started", message_id=record["message_id"])
     try:
         with studio_flags.working(user, cid), saver() as checkpoint:
+            guard()
             nodes.opening(record)
+            guard()
             graph = build(record, checkpoint, guard)
             cfg = config(record)
             previous = graph.get_state(cfg)
@@ -85,12 +87,13 @@ def _execute(cid, user, record):
             # Do not export private Studio state to an unrelated tracing service.
             with tracing_context(enabled=False):
                 graph.invoke(payload, cfg, durability="sync")
+            guard()
             snapshot = graph.get_state(cfg)
             interruptions = [i.value for task in snapshot.tasks for i in task.interrupts]
             if interruptions:
                 waiting = interruptions[0]
                 status = "waiting_approval" if waiting["kind"] == "approval" else "waiting_job"
-                run(store.update(rid, user, status=status, patch={"waiting": waiting, "resume": None}))
+                run(store.update(rid, user, status=status, patch={"waiting": waiting, "resume": None}, claim={"running"}))
                 if status == "waiting_approval":
                     nodes.event(record, "question.required", kind="medium_approval", question=waiting["summary"])
                     run(repo.add_message(cid, user, "assistant", waiting["summary"], agent_mode="medium"))
@@ -98,7 +101,7 @@ def _execute(cid, user, record):
                     nodes.event(record, "tool.progress", tool="medium_job", project_id=waiting["project_id"],
                                 message="کار به موتور پروژه تحویل شد؛ ادامهٔ برنامه پس از پایان این مرحله انجام می‌شود.")
             else:
-                run(store.update(rid, user, status="completed", patch={"waiting": None, "resume": None}))
+                run(store.update(rid, user, status="completed", patch={"waiting": None, "resume": None}, claim={"running"}))
     except Exception as exc:
         stopped = isinstance(exc, InterruptedError) or studio_flags.generation(user, cid) != generation
         log.exception("Medium execution stopped run=%s", rid)
