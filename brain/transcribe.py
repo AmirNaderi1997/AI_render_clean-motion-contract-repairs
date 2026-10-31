@@ -77,7 +77,8 @@ def choose_engine(language: Optional[str] = None, explicit: Optional[str] = None
     if env in ("elevenlabs", "whisper"):
         return env
     if (os.environ.get("ELEVENLABS_PROXY_URL", "").strip() or
-            os.environ.get("SAROVI_STT_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}):
+            # Enable only once Sarovi returns word timestamps.
+            os.environ.get("SAROVI_STT_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}):
         return "elevenlabs"
     return "whisper"
 
@@ -490,7 +491,8 @@ def transcribe(
         providers = []
         if os.environ.get("ELEVENLABS_PROXY_URL", "").strip():
             providers.append(("elevenlabs_own_vercel", transcribe_elevenlabs))
-        if os.environ.get("SAROVI_STT_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}:
+        # Enable only once Sarovi returns word timestamps.
+        if os.environ.get("SAROVI_STT_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}:
             providers.append(("sarovi_whisper", transcribe_sarovi))
         for name, run in providers:
             try:

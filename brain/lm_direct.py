@@ -560,8 +560,8 @@ def probe(provider_id: str) -> dict:
         return {"ok": False, "model": model, "latency_ms": round((time.monotonic() - started) * 1000), "error": str(exc)[:240]}
 # ── single-attempt audio transport ──────────────────────────────────────────
 
-DEFAULT_NARRATION_TTS_ORDER = "jarvis:TTS_ELEVEN_V3,sarovi:elevenlabs/eleven-v4"
-# Sarovi's model page documents Persian input for v4; no v2 family supports fa.
+DEFAULT_NARRATION_TTS_ORDER = "sarovi:elevenlabs/eleven-v4,jarvis:TTS_ELEVEN_V3"
+# Sarovi Eleven v4 was verified live to speak Persian; no v2 family supports fa.
 PERSIAN_SPEECH_MODELS = {"jarvis": {"TTS_ELEVEN_V3"}, "sarovi": {"elevenlabs/eleven-v4"}}
 SAROVI_ELEVEN_VOICES = frozenset("george sarah adam alice bella bill brian callum charlie chris daniel eric harry jessica laura liam lily matilda river roger will".split())
 

@@ -16,7 +16,8 @@ WORDS = [{'word': 'سلام', 'start': 0.0, 'end': 0.8}]
 @pytest.fixture(autouse=True)
 def isolated_audio(monkeypatch):
     monkeypatch.setenv('ELEVENLABS_PROXY_URL', '')
-    monkeypatch.setenv('SAROVI_STT_ENABLED', 'true')
+    monkeypatch.delenv('SAROVI_STT_ENABLED', raising=False)
+    monkeypatch.delenv('ASR_ENGINE', raising=False)
     monkeypatch.delenv('NARRATION_TTS_ORDER', raising=False)
     monkeypatch.delenv('SAROVI_STT_FORMAT', raising=False)
     monkeypatch.delenv('SAROVI_ELEVENLABS_VOICE', raising=False)
@@ -39,7 +40,7 @@ def response(pid, data=None):
 @pytest.mark.parametrize('failure', ['timeout', '500', 'bad_audio'])
 def test_tts_order_one_attempt_per_provider_and_audit(monkeypatch, failure):
     seen, rows = [], []
-    monkeypatch.setenv('NARRATION_TTS_ORDER', direct.DEFAULT_NARRATION_TTS_ORDER + ',jarvis:TTS_ELEVEN_V4')
+    monkeypatch.setenv('NARRATION_TTS_ORDER', direct.DEFAULT_NARRATION_TTS_ORDER + ',sarovi:elevenlabs/eleven-v4')
     monkeypatch.setattr(gateway, '_audit', rows.append)
     def post(request):
         pid = 'jarvis' if request.url.host == 'api.jarvis.you' else 'sarovi'
@@ -48,31 +49,37 @@ def test_tts_order_one_attempt_per_provider_and_audit(monkeypatch, failure):
         if pid == 'jarvis':
             assert payload['voice'] == 'configured-voice-id'
             assert payload['input'] == 'این آزمایش است' and payload['response_format'] == 'mp3'
-            if failure == 'timeout':
-                raise httpx.ReadTimeout('secret-jarvis')
-            if failure == '500':
-                return httpx.Response(500, text='secret-jarvis')
-            return httpx.Response(200, text='secret-jarvis')
+            return response(pid)
         assert request.url.path == '/v1/studio/audio'
         assert payload['voice'] == 'george' and payload['format'] == 'mp3'
-        return response(pid)
+        if failure == 'timeout':
+            raise httpx.ReadTimeout('secret-sarovi')
+        if failure == '500':
+            return httpx.Response(500, text='secret-sarovi')
+        return httpx.Response(200, json={'output': {'mediaType': 'text/plain', 'data': base64.b64encode(AUDIO).decode()}})
     original = httpx.Client
     monkeypatch.setattr(direct.httpx, 'Client', lambda **kw: original(transport=httpx.MockTransport(post), **kw))
     result = direct.narration('این آزمایش است', voice='configured-voice-id', language='fa')
-    assert result[0] == AUDIO and result[2:] == ('sarovi', 'elevenlabs/eleven-v4')
-    assert seen == ['jarvis', 'sarovi']
+    assert result[0] == AUDIO and result[2:] == ('jarvis', 'TTS_ELEVEN_V3')
+    assert seen == ['sarovi', 'jarvis']
     assert [r['status'] for r in rows] == ['failed', 'success']
     assert all(r['route'] == 'narration' and r['retry_count'] == 0 and r['latency_ms'] >= 0 for r in rows)
     assert 'secret-' not in json.dumps(rows) and 'ID3' not in json.dumps(rows)
 
 
-@pytest.mark.parametrize('model', ['TTS_ELEVEN_MULTILINGUAL_V2', 'TTS_ELEVEN_FLASH_V2_5', 'TTS_ELEVEN_TURBO_V2_5', 'TTS_ELEVEN_V4'])
-def test_persian_model_guard_before_any_post(monkeypatch, model):
-    monkeypatch.setenv('NARRATION_TTS_ORDER', f'jarvis:{model}')
+@pytest.mark.parametrize('pid,model', [
+    ('jarvis', 'TTS_ELEVEN_MULTILINGUAL_V2'), ('jarvis', 'TTS_ELEVEN_FLASH_V2_5'),
+    ('jarvis', 'TTS_ELEVEN_TURBO_V2_5'), ('jarvis', 'TTS_ELEVEN_V4'),
+    ('sarovi', 'elevenlabs/eleven_multilingual_v2'), ('sarovi', 'elevenlabs/eleven_flash_v2'),
+    ('sarovi', 'elevenlabs/eleven_flash_v2_5'), ('sarovi', 'elevenlabs/eleven_turbo_v2'),
+    ('sarovi', 'elevenlabs/eleven_turbo_v2_5'),
+])
+def test_persian_model_guard_before_any_post(monkeypatch, pid, model):
+    monkeypatch.setenv('NARRATION_TTS_ORDER', f'{pid}:{model}')
     monkeypatch.setattr(direct, '_audio_post', lambda *a, **k: pytest.fail('Unsafe model made a paid call'))
     assert direct.narration_pairs('این فارسی است') == []
     with pytest.raises(direct.DirectError, match='Persian'):
-        direct.speech(providers()['jarvis'], model=model, text='این فارسی است', voice='v', language='fa')
+        direct.speech(providers()[pid], model=model, text='این فارسی است', voice='v', language='fa')
 
 
 def test_direct_plain_tts_no_relay_or_elevenlabs_key(monkeypatch, tmp_path):
@@ -85,7 +92,10 @@ def test_direct_plain_tts_no_relay_or_elevenlabs_key(monkeypatch, tmp_path):
     output = tmp_path / 'voice.mp3'
     tts._generate_elevenlabs('این آزمایش است', str(output), language='fa', with_timestamps=True)
     assert output.read_bytes() == AUDIO
-    assert len(seen) == 1 and seen[0][2]['voice'] == 'persian-id'
+    assert [(p['id'], model) for p, model in direct.narration_pairs('این آزمایش است', 'fa')] == [
+        ('sarovi', 'elevenlabs/eleven-v4'), ('jarvis', 'TTS_ELEVEN_V3')]
+    assert len(seen) == 1 and seen[0][:2] == ('sarovi', 'studio/audio')
+    assert seen[0][2]['voice'] == 'george' and seen[0][2]['model'] == 'elevenlabs/eleven-v4'
     assert not Path(str(output) + '.words.json').exists()
 
 
@@ -140,6 +150,7 @@ def test_stt_requires_real_word_timestamps(monkeypatch, tmp_path, payload):
 
 
 def test_chain_relay_sarovi_local_and_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv('SAROVI_STT_ENABLED', 'true')
     video = tmp_path / 'input.mp4'; video.write_bytes(b'fixture')
     calls = []
     monkeypatch.setenv('ELEVENLABS_PROXY_URL', 'https://relay.example')
@@ -165,6 +176,7 @@ def test_chain_relay_sarovi_local_and_cache(monkeypatch, tmp_path):
 
 
 def test_sarovi_success_skips_local_and_is_cached(monkeypatch, tmp_path):
+    monkeypatch.setenv('SAROVI_STT_ENABLED', 'true')
     video = tmp_path / 'input.mp4'; video.write_bytes(b'fixture')
     calls = []
     def extract(v, root):
@@ -218,11 +230,21 @@ def test_audio_type_and_size_validation(monkeypatch, mime, size):
         direct.speech(providers()['jarvis'], model='TTS_ELEVEN_V3', text='text', voice='id')
 
 
-def test_disabled_sarovi_and_explicit_local_do_not_call_hosted(monkeypatch, tmp_path):
+@pytest.mark.parametrize('enabled', [None, 'false'])
+@pytest.mark.parametrize('relay', [False, True])
+def test_disabled_sarovi_and_explicit_local_do_not_call_hosted(monkeypatch, tmp_path, enabled, relay):
     video = tmp_path / 'input.mp4'; video.write_bytes(b'fixture')
-    monkeypatch.setenv('SAROVI_STT_ENABLED', 'false')
+    if enabled is not None:
+        monkeypatch.setenv('SAROVI_STT_ENABLED', enabled)
     monkeypatch.setattr(stt, 'transcribe_sarovi', lambda *a, **k: pytest.fail('Disabled Sarovi'))
     calls = []
+    def own(*a, **k):
+        calls.append('relay')
+        raise RuntimeError('Relay unavailable')
+    monkeypatch.setattr(stt, 'transcribe_elevenlabs', own)
+    if relay:
+        monkeypatch.setenv('ELEVENLABS_PROXY_URL', 'https://relay.example')
+    assert transcribe.choose_engine() == ('elevenlabs' if relay else 'whisper')
     def local(video, root, digest, *args):
         calls.append('local')
         value = {'engine': 'whisper', 'words': [{'w': 'سلام', 'start': 0, 'end': 1, 'prob': 1}], 'sentences': []}
@@ -231,7 +253,7 @@ def test_disabled_sarovi_and_explicit_local_do_not_call_hosted(monkeypatch, tmp_
     transcribe.transcribe(video, tmp_path / 'disabled', language='fa')
     monkeypatch.setenv('SAROVI_STT_ENABLED', 'true')
     transcribe.transcribe(video, tmp_path / 'explicit', language='fa', engine='whisper')
-    assert calls == ['local', 'local']
+    assert calls == (['relay'] if relay else []) + ['local', 'local']
 
 
 def test_relay_each_timestamp_fallback_post_is_audited(monkeypatch, tmp_path):
