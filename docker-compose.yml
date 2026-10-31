@@ -27,7 +27,10 @@ services:
 
   frontend:
     build:
-      context: ./web
+      # Repo root: the Studio preview imports ../remotion/src (web/vite.config.ts "@editor-reel").
+      # web/Dockerfile.dockerignore keeps the context to web/ and remotion/src.
+      context: .
+      dockerfile: web/Dockerfile
       target: build
     volumes:
       - frontend_dist:/usr/share/nginx/html

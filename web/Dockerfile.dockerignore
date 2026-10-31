@@ -1,0 +1,7 @@
+# Build context is the repo root (see docker-compose.yml); send only what the web build reads.
+*
+!web/
+!remotion/src/
+web/node_modules/
+web/dist/
+**/.DS_Store
