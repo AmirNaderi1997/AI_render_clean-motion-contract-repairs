@@ -59,7 +59,7 @@ def _checkpoint(job_dir: Path) -> None:
     while True:
         with _lock:
             cancel_event, pause_event = _cancel_events.get(key), _pause_events.get(key)
-        if load(job_dir).get("status") == "canceled" or (cancel_event and cancel_event.is_set()):
+        if (job_dir / ".talking-cancel").exists() or load(job_dir).get("status") == "canceled" or (cancel_event and cancel_event.is_set()):
             raise TaskCanceled()
         if not pause_event or not pause_event.is_set():
             return
@@ -365,6 +365,7 @@ def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None, requ
         if key in _running:
             raise ValueError("talking reel is busy")
         state = load(job_dir)
+        (job_dir / ".talking-cancel").unlink(missing_ok=True)
         state.update(status="running", stage="transcribing", message="", progress=5, analysis_ready=False, source_edit=source_edit)
         save(job_dir, state)
         _running.add(key)
@@ -398,7 +399,7 @@ def analyze(job_dir: Path, raw_video: Path, *, style: Optional[str] = None, requ
 def _install_cancel_guard(job_dir):
     from app.studio_cancel import engine_guard, Stopped
     def guard():
-        if load(job_dir).get("status") == "canceled":
+        if (job_dir / ".talking-cancel").exists() or load(job_dir).get("status") == "canceled":
             raise Stopped("Stopped by user")
     engine_guard.set(guard)
 
@@ -520,6 +521,7 @@ def start(job_dir: Path, raw_video: Path, *, regenerate: bool = False, cached_on
                 raise ValueError('متن ذخیره‌شده موجود نیست؛ ادامهٔ رندر بدون تولید مجدد ممکن نیست.')
             decision_key = SPLIT_STYLES[state['style']][1] if state['style'] in SPLIT_STYLES else 'decisions'
             if not state.get(decision_key): raise ValueError('برنامهٔ تدوین ذخیره‌شده موجود نیست.')
+        (job_dir / ".talking-cancel").unlink(missing_ok=True)
         state["published_outputs"] = published_outputs(state)
         state["candidate_output"] = None
         state["output"] = None
@@ -614,11 +616,13 @@ def resume(job_dir: Path) -> dict:
     state = load(job_dir); state.update(status="running", message=""); return save(job_dir, state)
 
 def cancel(job_dir: Path) -> dict:
+    # The API and Celery worker are different processes/containers. Persist first:
+    # the worker's in-memory event is only a fast path, never a prerequisite.
+    (job_dir / ".talking-cancel").touch()
     key = str(job_dir)
     with _lock:
         event, pause_event = _cancel_events.get(key), _pause_events.get(key)
-        if event is None: raise ValueError("talking reel is not running")
-        event.set()
+        if event: event.set()
         if pause_event: pause_event.clear()
     state = load(job_dir); state.update(status="canceled", message="Canceling…"); return save(job_dir, state)
 

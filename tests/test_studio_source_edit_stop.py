@@ -154,3 +154,23 @@ def test_source_export_qc_never_starts_creative_review(monkeypatch,tmp_path):
     monkeypatch.setattr('creative.review.review_export',lambda *a,**k:pytest.fail('creative review'))
     t._review_creative_output(tmp_path,tmp_path/'output.mp4')
     assert t.load(tmp_path)['technical_qc']=={'passed':True}
+
+
+def test_stop_cancels_project_owned_by_another_worker(monkeypatch,tmp_path):
+    from app import talking_reel as t
+    cid,msg,record=seed()
+    job=SimpleNamespace(id='worker-job',dir=tmp_path)
+    state=t.load(tmp_path);state.update(status='running',stage='transcribing');t.save(tmp_path,state)
+    monkeypatch.setattr(o.jobstore,'get',lambda _:job)
+    project=run(repo.create_project(cid,'u','talking','Source',{},job.id))
+    run(repo.update_project(project['id'],'u',status='running'))
+    assert str(tmp_path) not in t._cancel_events  # API process has no worker event.
+    result=o.request_stop(cid,'u')
+    assert result['stopped']==['message','project']
+    assert t.load(tmp_path)['status']=='canceled'
+    assert run(repo.get_project(project['id'],'u'))['status']=='canceled'
+    # A stale write by an in-flight operation cannot erase the durable flag.
+    t.save(tmp_path,state)
+    t._install_cancel_guard(tmp_path)
+    with pytest.raises(Stopped):checkpoint()
+    with pytest.raises(Stopped):t._checkpoint(tmp_path)
