@@ -425,11 +425,12 @@ def build_ass(plan: ReelPlan, hook: str, highlight: list[str], name: str, title:
     bottom = anchors[-1] + inks[-1][2] + BOX_PAD_Y * hook_size
     half = widest / 2 + BOX_PAD_X * hook_size
 
-    # The hook pops in (scale bounce) at the start and then stays.
+    # Keep the caption anchor stable even when the source edit has no hook.
+    # Empty text must not leave its background (a small dark pill) on screen.
     events = [_rounded_rect(1, 0, end, W / 2 - half, top, W / 2 + half, bottom, "#000000", 18,
-                            extra=f"\\1a{BOX_ALPHA}\\fad(200,0)")]
+                            extra=f"\\1a{BOX_ALPHA}\\fad(200,0)")] if hook.strip() else []
     pop = "\\fscx140\\fscy140\\t(0,260,\\fscx92\\fscy92)\\t(260,420,\\fscx100\\fscy100)\\fad(120,0)"
-    for line, y in zip(lines, anchors):
+    for line, y in zip(lines if hook.strip() else [], anchors):
         events.append(f"Dialogue: 2,{_ass_time(0)},{_ass_time(end)},hook,,0,0,0,,"
                       f"{{\\an5\\q2\\pos({W / 2:.0f},{y:.1f}){pop}}}{hook_line(line, highlight)}")
 
@@ -1062,9 +1063,16 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
         # clock first so picture and sound keep identical duration.
         vf.append("[cpad]aresample=48000,loudnorm=I=-16:TP=-1:LRA=9,"
                   "aresample=48000[aout]")
+    # Matroska shot clocks and concat offsets may be rounded to milliseconds.
+    # Resample timestamps after all joins/overlays; never retime the audio.
+    # Hold at most one tail frame for EOF rounding, then cap to the planned
+    # frame count so delivery duration stays within one frame of the edit.
+    vf.append(f"[vout]fps={fps},tpad=stop_mode=clone:stop_duration={1 / fps_value:.9f},"
+              f"trim=end_frame={max(1, round(total * fps_value))},settb=expr=1/{fps}[vfinal]")
     cmd = [ffmpeg, "-hide_banner", "-y", "-filter_complex_threads", "2", "-filter_threads", "2", *inputs, "-filter_complex", ";".join(vf),
-           "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-threads", "2", "-crf", "17", "-preset", "ultrafast",
+           "-map", "[vfinal]", "-map", "[aout]", "-c:v", "libx264", "-threads", "2", "-crf", "17", "-preset", "ultrafast",
            "-profile:v", "high", "-pix_fmt", "yuv420p",
+           "-r", fps, "-fps_mode", "cfr", "-video_track_timescale", "30000",
            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
            "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.3f}", "-movflags", "+faststart",
            "-progress", "pipe:1", "-nostats", str(out)]
