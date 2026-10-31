@@ -76,7 +76,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - "curl -fsS -H 'Host: editor.rafiei.co' http://127.0.0.1:8001/health >/dev/null"
+        - "curl -fsS http://127.0.0.1:8001/health >/dev/null"
 
   db:
     mem_limit: 768m
