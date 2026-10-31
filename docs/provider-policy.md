@@ -15,3 +15,16 @@ Plain narration uses cached STT alignment when character timestamps are unavaila
 Chat/vision order: **Jarvis → Sarovi → ArvanCloud → OpenAI**; Gemini/Google models are asked of Google itself first. Each route's own models are tried first (`custom:<model>#jarvis-all-models` → Jarvis `<model>`), then each enabled provider's default model, in the same order (*Direct providers* tab, master switch on).
 
 New AI stages have their own route card at the end of *AI Models & Logs → Routing*: Long Video (Transcript Enhancement, Topic Outline, Clip Finder, Clip Validator), Social Reference (Frame Review, Style Analysis) and Script Engine (Writer, Critic). New routes are seeded in priority order; **Apply priority to all routes** reorders existing chat/vision routes the same way (order only; nothing is added, enabled or removed). Sarovi text-model ids are not in the shared catalog: add them in the routing tab and press the button again.
+
+### Persian transcription
+
+Sarovi Gemini (`google/gemini-4-argon`) receives WAV audio via the OpenAI-shaped
+`chat/completions` input_audio request, temperature zero, requesting only a
+verbatim Persian transcript with colloquial forms and spoken-word numbers.
+There is one metadata-only audit row per hosted call, no automatic retry, and
+no audio or transcript in the audit. Word timestamps come from local quantized
+MMS ONNX CTC alignment with uroman, never LCS interpolation. Local Whisper
+provides an offline sanity reference and the fallback transcript. Failed
+alignment must not publish Gemini text with fabricated timings. MMS weights
+are provisioned separately through the deployment proxy, not fetched at request
+time. The MMS model license must be considered when distributing model weights.

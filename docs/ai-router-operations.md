@@ -92,3 +92,43 @@ Exactly two TTS POSTs and two STT POSTs were submitted; no acceptance examples w
 The JSON transcription recognized the fixed Persian phrase with spelling errors. This confirms Persian speech from Jarvis but is not an ear-quality score. Sarovi's v4 returned playable Persian audio; the user subsequently listened to both samples and chose Sarovi `george` as the primary voice. The current Sarovi API cannot yet be relied on for word alignment: Sarovi STT is therefore disabled by default, and transcription goes directly to local Whisper after the optional own relay until the reseller supplies word timings. Do not substitute invented timing or repeat a billed request to obtain a different response shape. No further paid checks were made.
 
 Offline verification on the same checkout: baseline `752 passed, 10 skipped`; after the change `778 passed, 10 skipped` with `DATABASE_URL= REDIS_URL= python -m pytest -q tests` (the installed `/private/tmp/pr4-review-venv` interpreter). The previously reported environmental failures did not reproduce in that environment. Mocked tests cover provider ordering, one-attempt behavior on timeout/5xx, Persian guards, actual HTTP request formats, missing/invalid word times, relay preservation, caches/local fallback, and secret-free error/audit output.
+
+### Persian Gemini transcription with offline alignment
+
+Set `SAROVI_TRANSCRIBE_ENABLED=true` and
+`SAROVI_TRANSCRIBE_MODEL=google/gemini-4-argon`. The default when the enable
+variable is absent is disabled, allowing a controlled rollout. The chain is
+configured own ElevenLabs relay, Gemini plus MMS, then local Whisper. Explicit
+Whisper selection remains local. Accepted results use engine `gemini_aligned`.
+
+Provision `model_quantized.onnx` and `vocab.json` from
+`onnx-community/mms-300m-1130-forced-aligner-ONNX`, pinned revision
+`2100fb247d8e43962eef24491597fbeb8b469531`, into each app/worker mounted cache at
+`/root/.cache/mms-align` (override `MMS_ALIGN_CACHE_DIR`). Download once through
+the existing sing-box proxy; never download models during requests. Model SHA256:
+`dc79e3bd48bffa9b4fb850d6195710d4eeb13e2fdf1f521eccbca512ab530254`.
+Missing files cause an explicit `aligner_cache_missing` fallback. Provision the
+small Whisper model under `WHISPER_LOCAL_MODELS_DIR` for the offline reference.
+The image installs pinned uroman/regex; it does not use cache-installed Python packages.
+
+MMS uses CPU ONNX Runtime, blank ID 0, and 15-second inference windows. The
+quantized model occupies 303 MiB outside the image. The 60.5-second Persian
+preflight took 30.14 seconds with 995.6 MiB peak process RSS; this is a probe,
+not a production concurrency guarantee. No torch dependency is added. The
+Viterbi allocation is capped at 100 million cells. Audio longer than five
+minutes is cut at detected silence midpoints, with no chunk exceeding five
+minutes. Continuous speech without a safe cut falls back locally.
+
+Safety gates require Persian-script text, at least 90% word placement, finite
+monotonic in-range timings no longer than three seconds, rough per-minute
+Whisper word-count agreement, and no uncovered speech interval over five
+seconds. Arabic-script detection alone cannot distinguish every language;
+the source and Whisper reference are explicitly Persian. Pauses alone are not
+speech gaps. Rejection codes appear in `asr_attempts.json`. Successful hosted
+chunk responses are retained in the job's private transcript archive to avoid
+paying again after a later alignment failure. Costs remain in
+`asr_gemini_cost.json` and `asr_cost.json`, including rejected hosted results.
+
+Run `DATABASE_URL= REDIS_URL= python -m pytest -q tests`. The real alignment
+integration test is opt-in through `MMS_ALIGNMENT_TEST_AUDIO`,
+`MMS_ALIGNMENT_TEST_TEXT`, and `MMS_ALIGN_CACHE_DIR`; no large fixture is committed.

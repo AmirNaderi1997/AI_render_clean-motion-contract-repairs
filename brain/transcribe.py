@@ -76,7 +76,8 @@ def choose_engine(language: Optional[str] = None, explicit: Optional[str] = None
     env = os.environ.get("ASR_ENGINE", "").lower()
     if env in ("elevenlabs", "whisper"):
         return env
-    if (os.environ.get("ELEVENLABS_PROXY_URL", "").strip() or
+    from brain.transcribe_gemini import enabled
+    if (enabled() or os.environ.get("ELEVENLABS_PROXY_URL", "").strip() or
             # Enable only once Sarovi returns word timestamps.
             os.environ.get("SAROVI_STT_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}):
         return "elevenlabs"
@@ -474,9 +475,14 @@ def transcribe(
     if transcript_path.exists() and selected_engine=='elevenlabs':
         cached=json.loads(transcript_path.read_text())
         if (cached.get('file_hash')==fhash and cached.get('requested_language')==language
-                and cached.get('words') and cached.get('engine') in {'elevenlabs','elevenlabs_jarvis','elevenlabs_sarovi','sarovi_whisper','whisper'}):
+                and cached.get('words') and cached.get('engine') in {'elevenlabs','elevenlabs_jarvis','elevenlabs_sarovi','sarovi_whisper','whisper','gemini_aligned'}):
             from brain.lm_direct import timed_words, DirectError
             try:
+                from brain.transcribe_gemini import enabled, cache_key
+                if enabled() and cached.get('engine') not in {'elevenlabs', 'elevenlabs_jarvis', 'gemini_aligned'}:
+                    raise DirectError('Preferred engine changed')
+                if cached.get('engine') == 'gemini_aligned' and (not enabled() or cached.get('cache_key') != cache_key(fhash, language)):
+                    raise DirectError('Gemini settings changed')
                 timed_words(cached)
                 if cached.get('engine') != 'sarovi_whisper' or cached.get('model_id') == os.environ.get('SAROVI_STT_MODEL', 'openai/whisper-large-v3').strip():
                     return effective_transcript(out_dir)
@@ -491,8 +497,10 @@ def transcribe(
         providers = []
         if os.environ.get("ELEVENLABS_PROXY_URL", "").strip():
             providers.append(("elevenlabs_own_vercel", transcribe_elevenlabs))
-        # Enable only once Sarovi returns word timestamps.
-        if os.environ.get("SAROVI_STT_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}:
+        from brain.transcribe_gemini import enabled, transcribe_gemini
+        if enabled():
+            providers.append(("gemini_aligned", transcribe_gemini))
+        elif os.environ.get("SAROVI_STT_ENABLED", "false").lower() not in {"0", "false", "no", "off"}:
             providers.append(("sarovi_whisper", transcribe_sarovi))
         for name, run in providers:
             try:
@@ -513,7 +521,9 @@ def transcribe(
                 # Provider exception bodies may contain secrets or audio. Only
                 # retain the type in transcript and attempts artifacts.
                 elevenlabs_error = RuntimeError(f"{name}: {type(exc).__name__}")
-                attempts.append({"provider": name, "status": "failed", "error_type": type(exc).__name__})
+                from brain.transcribe_gemini import RejectedTranscript
+                attempts.append({"provider": name, "status": "failed", "error_type": type(exc).__name__,
+                                 **({"reason": exc.reason} if isinstance(exc, RejectedTranscript) else {})})
         if elevenlabs_error is None:
             elevenlabs_error = RuntimeError("Hosted transcription is not configured")
         (out_dir / "asr_attempts.json").write_text(json.dumps(attempts))
@@ -581,13 +591,16 @@ def transcribe(
         attempts.append({"provider": "whisper", "status": "success" if result.get("words") else "empty"})
         (out_dir / "asr_attempts.json").write_text(json.dumps(attempts))
     cost_path = out_dir / "asr_cost.json"
+    gemini_cost_path = out_dir / "asr_gemini_cost.json"
+    hosted_cost = json.loads(gemini_cost_path.read_text()) if gemini_cost_path.exists() else None
     cost_path.write_text(json.dumps({
         "engine": result.get("engine", "whisper"),
         "audio_seconds": result.get("duration", 0),
-        "cost_usd": 0.0,
+        "cost_usd": hosted_cost["cost_usd"] if hosted_cost else 0.0,
+        "hosted_attempt": hosted_cost,
     }, indent=2))
 
-    if elevenlabs_error is not None and local_stt['improve_low_quality']:
+    if elevenlabs_error is not None and local_stt['improve_low_quality'] and not any(a['provider'] == 'gemini_aligned' for a in attempts):
         result = improve_local_transcript(result, out_dir)
     return result
 
