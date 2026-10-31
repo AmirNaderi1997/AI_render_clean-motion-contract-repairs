@@ -17,7 +17,7 @@ Verified against the installation's live model list: text completion, image anal
 ## Direct providers (text only)
 
 There is no remote LM API. `brain/lm_gateway.py` answers every **chat** request (chat, vision, structured JSON,
-streaming) from a directly configured provider: Jarvis and Sarovi are on by default; ArvanCloud (`aiapi.rafiei.co`,
+streaming) from a directly configured provider: Jarvis and Sarovi are on by default; ArvanCloud (`api.arvancloudai.ir`,
 `Authorization: apikey`), OpenAI and Gemini through a Vercel proxy are opt-in. The transport is `brain/lm_direct.py`.
 Keys are entered in *AI Models & Logs → Direct providers* (write-only, stored 0600) or via `DIRECT_<PROVIDER>_API_KEY`;
 Arvan/OpenAI/Gemini keys already in `.env` are reused once that provider is switched on. A master switch and

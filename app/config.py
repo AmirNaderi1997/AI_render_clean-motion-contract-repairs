@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     AZURE_SPEECH_KEY: str = ""
     AZURE_SPEECH_REGION: str = ""
     ARVAN_AI_API_KEY: str = ""
-    ARVAN_AI_API_BASE: str = "https://aiapi.rafiei.co/v1"
+    ARVAN_AI_API_BASE: str = "https://api.arvancloudai.ir/v1"
     ARVAN_AI_MODEL: str = "GPT-5.6-Sol"
     GEMINI_API_KEY: str = ""
     GEMINI_API_BASE: str = "https://generativelanguage.googleapis.com"

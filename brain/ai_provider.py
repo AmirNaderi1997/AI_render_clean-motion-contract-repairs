@@ -23,7 +23,7 @@ from .llm import LLMUsage, _extract_json
 log = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
-_DEFAULT_ARVAN_URL = "https://aiapi.rafiei.co/v1"
+_DEFAULT_ARVAN_URL = "https://api.arvancloudai.ir/v1"
 
 
 def _config(name: str, *legacy_names: str, default: str = "") -> str:

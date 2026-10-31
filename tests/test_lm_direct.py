@@ -80,7 +80,7 @@ def test_auth_schemes_and_paths(monkeypatch):
     cfg = {p["id"]: p for p in direct.config()["providers"]}
     direct.call(cfg["arvan"], [{"role": "user", "content": "x"}], model="GPT-5.6-Sol", tokens=50)
     direct.call(cfg["jarvis"], [{"role": "user", "content": "x"}], model="CLAUDE_SONNET_5_5", tokens=50)
-    assert seen[0][0] == "https://aiapi.rafiei.co/v1/chat/completions" and seen[0][1]["Authorization"] == "apikey arvan-key-0000"
+    assert seen[0][0] == "https://api.arvancloudai.ir/v1/chat/completions" and seen[0][1]["Authorization"] == "apikey arvan-key-0000"
     assert seen[1][1]["Authorization"] == "Bearer jarvis-key-0000" and seen[1][2]["model"] == "CLAUDE_SONNET_5_5"
 
 
