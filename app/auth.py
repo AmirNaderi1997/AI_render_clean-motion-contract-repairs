@@ -274,6 +274,8 @@ def get_current_user_from_token(token: str) -> User:
     user = _find_by_id(user_id)
     if not user:
         raise ValueError("USER_NOT_FOUND")
+    if not user.is_active:
+        raise ValueError("ACCOUNT_DISABLED")          # an access token issued before disabling must stop working at once
     return user
 
 
@@ -415,4 +417,6 @@ async def db_get_current_user_from_token(token: str) -> User:
     user = await db_get_user_by_id(verify_token(token))
     if not user:
         raise ValueError("USER_NOT_FOUND")
+    if not user.is_active:
+        raise ValueError("ACCOUNT_DISABLED")
     return user
