@@ -1065,9 +1065,9 @@ def render(video: Path, plan: ReelPlan, out: Path, *, hook: str, highlight: list
                   "aresample=48000[aout]")
     # Matroska shot clocks and concat offsets may be rounded to milliseconds.
     # Resample timestamps after all joins/overlays; never retime the audio.
-    # Hold at most one tail frame for EOF rounding, then cap to the planned
-    # frame count so delivery duration stays within one frame of the edit.
-    vf.append(f"[vout]fps={fps},tpad=stop_mode=clone:stop_duration={1 / fps_value:.9f},"
+    # Cover concat/EOF rounding at the tail, then cap to the planned frame
+    # count so delivery duration stays within one frame of the edit.
+    vf.append(f"[vout]fps={fps},tpad=stop_mode=clone:stop_duration={2 / fps_value:.9f},"
               f"trim=end_frame={max(1, round(total * fps_value))},settb=expr=1/{fps}[vfinal]")
     cmd = [ffmpeg, "-hide_banner", "-y", "-filter_complex_threads", "2", "-filter_threads", "2", *inputs, "-filter_complex", ";".join(vf),
            "-map", "[vfinal]", "-map", "[aout]", "-c:v", "libx264", "-threads", "2", "-crf", "17", "-preset", "ultrafast",

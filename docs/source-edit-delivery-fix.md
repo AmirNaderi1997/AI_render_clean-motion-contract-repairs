@@ -2,7 +2,7 @@
 
 Scope: the Talking 1 renderer used by Studio source edits. Owner: Codex. Baseline: `9afcf0a`; affected job: `21506adc1a34`.
 
-The final composition inherited the millisecond-rounded Matroska/concat clock. Delivery now applies `fps=30` after joins and overlays, holds at most one tail frame for EOF rounding, caps the planned frame count, and encodes CFR at 30 fps with a 30000 Hz MP4 video timescale. Audio timestamps and cuts are unchanged. The existing technical QC tolerance is unchanged.
+The final composition inherited the millisecond-rounded Matroska/concat clock. Delivery now applies `fps=30` after joins and overlays, pads up to two tail frames for concat/EOF rounding, caps the planned frame count, and encodes CFR at 30 fps with a 30000 Hz MP4 video timescale. Audio timestamps and cuts are unchanged. The existing technical QC tolerance is unchanged.
 
 The empty dark pill was the permanent hook background emitted for an empty hook. Empty or whitespace-only hooks now emit neither background nor text. Caption anchors and populated hook behavior are preserved.
 

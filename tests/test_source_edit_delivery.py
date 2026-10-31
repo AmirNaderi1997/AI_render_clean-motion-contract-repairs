@@ -25,7 +25,16 @@ def test_empty_hook_has_no_background_or_text(monkeypatch, hook):
     assert 'Dialogue: 1,' in control and ',hook,,' in control
 
 
-def test_cut_join_delivery_is_exact_cfr_with_audio_sync(monkeypatch, tmp_path):
+@pytest.mark.parametrize('ranges,source_duration,pulse', [
+    ([(.127, 1.144), (1.724, 2.743)], 3, 1.9),
+    # The deployed 13-segment pause-removal pattern exposes concat EOF rounding.
+    ([(.571, .951), (2.453, 4.376), (5.057, 6.619), (9.282, 10.244),
+      (17.834, 20.277), (25.023, 30.611), (30.611, 35.357), (35.357, 40.063),
+      (40.304, 41.565), (41.846, 43.147), (43.508, 50.858),
+      (51.659, 55.284), (56.305, 60.5)], 61, 39.73),
+])
+def test_cut_join_delivery_is_exact_cfr_with_audio_sync(monkeypatch, tmp_path,
+                                                       ranges, source_duration, pulse):
     ffmpeg = shutil.which('ffmpeg')
     if not ffmpeg or not shutil.which('ffprobe'):
         pytest.skip('FFmpeg/ffprobe required for real encoding regression')
@@ -39,13 +48,17 @@ def test_cut_join_delivery_is_exact_cfr_with_audio_sync(monkeypatch, tmp_path):
     monkeypatch.setattr(reel, 'W', 180)
     monkeypatch.setattr(reel, 'H', 320)
     source = tmp_path / 'source.mp4'
-    # A pulse at source 1.9s exposes any audio shift across the pause cut.
+    # A pulse inside a retained shot exposes audio shifts across pause cuts.
     subprocess.run([ffmpeg, '-v', 'error', '-y', '-f', 'lavfi', '-i',
-                    'testsrc2=size=180x320:rate=60:duration=3', '-f', 'lavfi', '-i',
-                    r'aevalsrc=if(between(t\,1.9\,2.0)\,0.5*sin(2*PI*500*t)\,0):s=48000:d=3',
+                    f'testsrc2=size=180x320:rate=60:duration={source_duration}', '-f', 'lavfi', '-i',
+                    fr'aevalsrc=if(between(t\,{pulse}\,{pulse+.1})\,0.5*sin(2*PI*500*t)\,0):s=48000:d={source_duration}',
                     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
                     '-c:a', 'aac', str(source)], check=True, capture_output=True)
-    shots = [reel.Shot(0.127, 1.144), reel.Shot(1.724, 2.743, out_start=1.017)]
+    shots = []
+    elapsed = 0.
+    for start, end in ranges:
+        shots.append(reel.Shot(start, end, out_start=elapsed))
+        elapsed += end - start
     duration = sum(s.length for s in shots)
     plan = reel.ReelPlan(shots=shots, duration=duration)
     out = tmp_path / 'delivery.mp4'
@@ -66,8 +79,8 @@ def test_cut_join_delivery_is_exact_cfr_with_audio_sync(monkeypatch, tmp_path):
     import array
     pcm = array.array('f', subprocess.check_output([ffmpeg, '-v', 'error', '-i', str(out),
                           '-vn', '-ac', '1', '-ar', '48000', '-f', 'f32le', '-']))
-    # Whole-source initial trim also removes 0.127s. Peak window begins at 1.193s.
-    expected = 1.017 + (1.9 - 1.724)
+    shot = next(s for s in shots if s.src_in <= pulse < s.src_out)
+    expected = shot.out_start + pulse - shot.src_in
     bins = [sum(x*x for x in pcm[i:i+480]) for i in range(0, len(pcm), 480)]
     active = [i / 100 for i, energy in enumerate(bins) if energy > max(bins) * .25]
     assert abs(active[0] - expected) <= 1 / 30
