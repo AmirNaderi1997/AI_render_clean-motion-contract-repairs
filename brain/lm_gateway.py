@@ -202,12 +202,12 @@ def stream_chat(route, messages, model_override=None, probe=False, *, tokens=Non
     if not cfg["enabled"] or not gateway_settings()["enabled"]: raise GatewayError("Route disabled", 503)
     candidates = [model_override] if model_override else cfg["models"]
     from . import lm_direct
-    started = time.monotonic(); text = []
+    started = time.monotonic(); text = []; info = {}
     budget = min(300, max(1, timeout_seconds)) if timeout_seconds is not None else 120
     limit = 256 if probe else min(max((tokens or 0) * 3, 1500), cfg["max_tokens"])
     try:
         for piece in lm_direct.stream_fallback(messages, candidates=list(candidates), tokens=limit,
-                                               temperature=cfg["temperature"], timeout=budget, only_candidates=probe):
+                                               temperature=cfg["temperature"], timeout=budget, only_candidates=probe, info=info):
             text.append(piece)
             yield piece
     except lm_direct.DirectError as exc:
@@ -226,9 +226,11 @@ def stream_chat(route, messages, model_override=None, probe=False, *, tokens=Non
         except Exception:
             pass
         raise error from exc
-    record = _record(route, "chat", candidates[0] if candidates else "", started, [{"model": "direct:stream", "http_status": 200}],
-                     {"output_text": "".join(text)}, request=messages)
-    record.update(routed_via="direct:stream")
+    provider = info.get("provider")
+    record = _record(route, "chat", candidates[0] if candidates else "", started,
+                     [{"model": f"direct:{provider}:{info.get('model')}" if provider else "direct:stream", "http_status": 200}],
+                     {"output_text": "".join(text), "model": info.get("model"), "usage": info.get("usage")}, request=messages)
+    record.update(provider=provider, routed_via=f"direct:{provider}" if provider else "direct:stream")
     _audit(record)
 
 

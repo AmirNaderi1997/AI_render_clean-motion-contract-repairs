@@ -169,3 +169,15 @@ def test_sync_registers_task_models_without_any_network(monkeypatch,catalog):
     assert result["paths"]==[] and result["models"]>0
     rows=store.records("models").values()
     assert all(r["status"]=="Untested" and r["verified"]==[] for r in rows if r.get("scope_registered"))
+
+
+def test_streamed_answer_is_audited_with_the_provider_and_model_that_spoke(monkeypatch,catalog):
+    def stream_call(provider,messages,*,model,_metadata=None,**kwargs):
+        if provider["id"]=="jarvis": raise d.DirectError("HTTP 503: busy",503)
+        _metadata.update(model="actual-sarovi-model",usage={"prompt_tokens":4,"completion_tokens":2})
+        yield "سلام"
+    monkeypatch.setattr(d,"stream_call",stream_call)
+    assert "".join(g.stream_chat("editing_agent",[])) == "سلام"
+    row=store.logs()["items"][0]
+    assert row["provider"]=="sarovi" and row["routed_via"]=="direct:sarovi"
+    assert row["actual_model"]=="actual-sarovi-model" and row["input_tokens"]==4

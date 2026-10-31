@@ -472,20 +472,23 @@ def route_pairs(candidates: list[str], *, only_candidates: bool = False) -> list
 
 
 def stream_fallback(messages: list[dict], *, candidates: list[str], tokens: int, temperature=None, timeout: float = 60, hedge_after: float = 2.5,
-                    only_candidates: bool = False):
+                    only_candidates: bool = False, info: dict | None = None):
     """Stream the answer from the direct providers, fast: the first attempt starts at once, the next one joins when no text has arrived after
     ``hedge_after`` seconds (the slow one keeps running), and the first attempt to produce text wins; the others are dropped. A winner is never mixed
-    with another provider. Raises DirectError when no attempt produced anything."""
+    with another provider. Raises DirectError when no attempt produced anything. ``info``, when given, receives the winner's provider, model
+    (as reported by the stream when it says) and usage."""
     import queue
     attempts = route_pairs(candidates, only_candidates=only_candidates)
     if not attempts:
         raise DirectError("no direct provider is configured")
     events: "queue.Queue" = queue.Queue()
     state = {"winner": None}
+    metas: dict[int, dict] = {}
 
     def work(index: int, provider: dict, model: str) -> None:
+        extra = {"_metadata": metas.setdefault(index, {})} if info is not None else {}
         try:
-            for piece in stream_call(provider, messages, model=model, tokens=tokens, temperature=temperature, timeout=timeout):
+            for piece in stream_call(provider, messages, model=model, tokens=tokens, temperature=temperature, timeout=timeout, **extra):
                 if state["winner"] not in (None, index):
                     return                                            # another attempt already won: let go of this stream
                 events.put((index, "piece", piece))
@@ -521,11 +524,16 @@ def stream_fallback(messages: list[dict], *, candidates: list[str], tokens: int,
         if kind == "piece":
             if state["winner"] is None:
                 state["winner"] = index
+                if info is not None:
+                    info.update(provider=attempts[index][0]["id"], model=attempts[index][1])
             if state["winner"] == index:
                 yield value
         elif kind == "done":
             alive.discard(index)
             if state["winner"] == index:
+                if info is not None:
+                    reported = metas.get(index, {})
+                    info.update({k: reported[k] for k in ("model", "usage") if reported.get(k)})
                 return
             if state["winner"] is None:
                 last_error = DirectError("provider answered with no text", 200)
