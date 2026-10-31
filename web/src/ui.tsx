@@ -62,6 +62,12 @@ export function friendlyError(error: unknown, action = "complete this action"): 
   if (/^503 EditorGPT Medium/.test(message)) return "EditorGPT Medium در این نصب در دسترس نیست. برای ادامه، خودتان EditorGPT Lite را از منوی کنار + انتخاب کنید؛ موتور خودکار تغییر نکرده است.";
   if (/^409 Medium در همین گفتگو/.test(message)) return "Medium در این گفتگو اجرای ناتمام دارد. برنامهٔ قبلی را تأیید، ادامه یا لغو کنید؛ انتخاب موتور پیام بعدی محفوظ است.";
   if (/^409 (حداکثر چهار اجرای|درخواست‌های Medium)/.test(message)) return "تعداد درخواست‌های Medium به حد مجاز رسیده است؛ یکی از اجراهای قبلی را تمام کنید یا کمی بعد دوباره تلاش کنید.";
+  if (/^Upload failed: network timeout$/.test(message)) return "Upload timed out. Check your connection and try again.";
+  if (/^Upload failed: network error$/.test(message)) return "Upload failed because of a network error. Check your connection and try again.";
+  const uploadStatus = /^Upload failed: HTTP (\d{3})$/.exec(message)?.[1];
+  if (uploadStatus) return `Upload failed (HTTP ${uploadStatus}). ${uploadStatus === "413" ? "Choose a smaller file and try again." : "Please try again. If it keeps happening, contact support."}`;
+  const invalidUploadStatus = /^Upload failed: invalid response \(HTTP (\d{3})\)$/.exec(message)?.[1];
+  if (invalidUploadStatus) return `The upload received an unreadable response (HTTP ${invalidUploadStatus}). Please try again.`;
   if (/401|unauthori[sz]ed|session expired/i.test(message)) return "Your session has expired. Sign in again and retry.";
   if (/403|forbidden/i.test(message)) return "You do not have access to this item. Check your account and try again.";
   if (/413|too large|file size/i.test(message)) return "This file is too large. Choose a smaller file and try again.";

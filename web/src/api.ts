@@ -350,6 +350,7 @@ async function uploadWithProgress<T>(url: string, body: FormData,
       }
     };
     xhr.onerror = () => { cleanup(); reject(new Error("Upload failed: network error")); };
+    xhr.ontimeout = () => { cleanup(); reject(new Error("Upload failed: network timeout")); };
     xhr.onabort = () => { cleanup(); reject(new Error("Upload was cancelled")); };
     xhr.onload = () => {
       cleanup();
@@ -357,15 +358,16 @@ async function uploadWithProgress<T>(url: string, body: FormData,
         try { handleUnauthorized(); } catch (error) { reject(error); }
         return;
       }
+      // Proxies can return HTML or plain text. Preserve the HTTP failure even
+      // when its response body is not JSON, without exposing that body to users.
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(`Upload failed: HTTP ${xhr.status}`));
+        return;
+      }
       let data: any;
       try { data = JSON.parse(xhr.responseText); }
       catch {
-        reject(new Error(`Server returned an invalid JSON response (${xhr.status} ${xhr.statusText})`));
-        return;
-      }
-      if (xhr.status < 200 || xhr.status >= 300) {
-        const detail = data?.detail;
-        reject(new Error(`${xhr.status} ${typeof detail === "string" ? detail : JSON.stringify(detail ?? xhr.statusText)}`));
+        reject(new Error(`Upload failed: invalid response (HTTP ${xhr.status})`));
         return;
       }
       resolve(data as T);
