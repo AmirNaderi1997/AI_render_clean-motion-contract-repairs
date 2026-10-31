@@ -1,14 +1,15 @@
-"""Direct provider fallbacks for when LM API (the gateway) fails.
+"""Direct AI providers: the transport behind `lm_gateway` (there is no remote LM API).
 
-Order of operations in `lm_gateway.complete()`: the gateway tries the route's models first. Only if that
-fails does it call `try_fallback`, which walks the configured providers in priority order and returns the first
-answer. Text (chat) only: media routes keep their own provider paths.
+`lm_gateway.complete()` calls `complete_routed`, which turns a route's models into (provider, model) pairs
+(`custom:<model>#jarvis-all-models` → Jarvis `<model>`, and so on), tries them in order, then each enabled
+provider's default model, and returns the first answer. Text (chat, vision, structured JSON) only: media
+routes keep their own provider paths. Jarvis and Sarovi are enabled by default; the others are opt-in.
 
 Security and operations:
 * API keys are write-only through the admin API: stored in `direct_keys.json` (mode 0600) next to the gateway
   state, never returned, never logged. `DIRECT_<PROVIDER>_API_KEY` environment variables also work.
 * Base URLs must be https, without credentials/query, and must not point at loopback/private addresses.
-* The master switch (and each provider's switch) is in *AI Models & Logs → Direct fallbacks*.
+* The master switch (and each provider's switch) is in *AI Models & Logs → Direct providers*.
 * Gemini is reached through a proxy (Vercel AI Gateway by default, OpenAI-compatible; switch the format to
   "gemini" for a reverse proxy of the native Google API such as a Vercel-hosted relay).
 """
@@ -42,6 +43,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
     "gemini": {"title": "Gemini (via Vercel proxy)", "base_url": "https://ai-gateway.vercel.sh/v1", "model": "gemini-3.5-flash", "format": "openai", "group": None},
 }
 FORMATS = ("openai", "gemini")
+DEFAULT_ENABLED = {"jarvis", "sarovi"}      # the others carry legacy keys (e.g. ARVAN_AI_API_KEY) and are opt-in
 
 
 class DirectError(RuntimeError):
@@ -106,7 +108,7 @@ def config() -> dict:
     for pid in order:
         base, saved_p = PROVIDERS[pid], overrides.get(pid, {})
         providers.append({
-            "id": pid, "title": base["title"], "enabled": bool(saved_p.get("enabled", True)),
+            "id": pid, "title": base["title"], "enabled": bool(saved_p.get("enabled", pid in DEFAULT_ENABLED)),
             "base_url": saved_p.get("base_url") or base["base_url"], "model": saved_p.get("model") or base["model"],
             "format": saved_p.get("format") if saved_p.get("format") in FORMATS else base["format"],
             "extra_header_name": saved_p.get("extra_header_name", ""),
@@ -400,11 +402,15 @@ def usable(providers: list[dict] | None = None, *, google_first: bool = False) -
     return found
 
 
-def try_fallback(messages: list[dict], *, candidates: list[str], tokens: int, temperature, timeout: float, extra,
-                 attempts: list[dict], validate=None) -> tuple[dict, str, str] | None:
-    """Walk enabled providers with keys, in order. Returns (response, provider_id, model) or None. Appends to `attempts`."""
-    for provider in usable(google_first=any(str(c).startswith("google:") for c in candidates[:1])):
-        model = model_for(provider, candidates)
+def complete_routed(messages: list[dict], *, candidates: list[str], tokens: int, temperature, timeout: float, extra,
+                    attempts: list[dict], validate=None, only_candidates: bool = False,
+                    deadline: float | None = None) -> tuple[dict, str, str] | None:
+    """Try the route's (provider, model) pairs in order. Returns (response, provider_id, model) or None. Appends to `attempts`."""
+    for provider, model in route_pairs(candidates, only_candidates=only_candidates):
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        if _REJECTED.get(provider["id"], 0) > time.monotonic():
+            continue                                                  # its key was just refused for an earlier model
         started = time.monotonic()
         try:
             provider_extra = extra
@@ -424,14 +430,15 @@ def try_fallback(messages: list[dict], *, candidates: list[str], tokens: int, te
             return response, provider["id"], model
         except DirectError as exc:
             _note_failure(provider, exc)
-            log.warning("direct fallback %s failed: %s", provider["id"], str(exc)[:160])
+            log.warning("direct provider %s (%s) failed: %s", provider["id"], model, str(exc)[:160])
             attempts.append({"model": f"direct:{provider['id']}:{model}", "http_status": exc.status, "error": str(exc)[:240],
                              "latency_ms": round((time.monotonic() - started) * 1000)})
     return None
 
 
-def _stream_attempts(candidates: list[str]) -> list[tuple[dict, str]]:
-    """(provider, model) pairs in priority order: the route's own models first (as the route lists them), then each usable provider's default."""
+def route_pairs(candidates: list[str], *, only_candidates: bool = False) -> list[tuple[dict, str]]:
+    """(provider, model) pairs in priority order: the route's own models first (as the route lists them), then each usable
+    provider's default unless ``only_candidates`` (probes and routes without automatic fallback)."""
     providers = {p["id"]: p for p in usable(google_first=any(str(c).startswith("google:") for c in candidates[:1]))}
     by_group = {PROVIDERS[pid]["group"]: pid for pid in PROVIDERS if PROVIDERS[pid].get("group")}
     pairs: list[tuple[dict, str]] = []
@@ -446,8 +453,9 @@ def _stream_attempts(candidates: list[str]) -> list[tuple[dict, str]]:
             provider = providers["gemini"]
             raw = candidate.partition(":")[2]
             pairs.append((provider, raw if provider["format"] == "gemini" else f"google/{raw}"))
-    for provider in providers.values():
-        pairs.append((provider, model_for(provider, [])))
+    if not only_candidates:
+        for provider in providers.values():
+            pairs.append((provider, model_for(provider, [])))
     seen, unique = set(), []
     for provider, model in pairs:
         if (provider["id"], model) not in seen:
@@ -456,12 +464,13 @@ def _stream_attempts(candidates: list[str]) -> list[tuple[dict, str]]:
     return unique
 
 
-def stream_fallback(messages: list[dict], *, candidates: list[str], tokens: int, temperature=None, timeout: float = 60, hedge_after: float = 2.5):
+def stream_fallback(messages: list[dict], *, candidates: list[str], tokens: int, temperature=None, timeout: float = 60, hedge_after: float = 2.5,
+                    only_candidates: bool = False):
     """Stream the answer from the direct providers, fast: the first attempt starts at once, the next one joins when no text has arrived after
     ``hedge_after`` seconds (the slow one keeps running), and the first attempt to produce text wins; the others are dropped. A winner is never mixed
     with another provider. Raises DirectError when no attempt produced anything."""
     import queue
-    attempts = _stream_attempts(candidates)
+    attempts = route_pairs(candidates, only_candidates=only_candidates)
     if not attempts:
         raise DirectError("no direct provider is configured")
     events: "queue.Queue" = queue.Queue()

@@ -14,18 +14,19 @@ Old saved provider names are normalized at execution time, while historical mess
 Verified against the installation's live model list: text completion, image analysis, inline generated image and a short playable ElevenLabs voice clip through the relay. Unit tests additionally guard against retired provider names in runtime source and silent provider substitution.
 
 
-## Direct fallbacks (text only)
+## Direct providers (text only)
 
-When LM API fails (timeout, 429/5xx, no usable model), `brain/lm_gateway.py` may answer a **chat** request from a
-directly configured provider: Sarovi, Jarvis, ArvanCloud (`aiapi.rafiei.co`, `Authorization: apikey`), OpenAI, and
-Gemini through a Vercel proxy. Implemented in `brain/lm_direct.py` only. Keys are entered in *AI Models & Logs →
-Direct fallbacks* (write-only, stored 0600) or via `DIRECT_<PROVIDER>_API_KEY`; Arvan/OpenAI/Gemini keys already in
-`.env` are reused. A master switch and per-provider switches live in the same tab. Media routes (images, speech,
-video) keep their own provider paths; direct fallback never applies to them.
+There is no remote LM API. `brain/lm_gateway.py` answers every **chat** request (chat, vision, structured JSON,
+streaming) from a directly configured provider: Jarvis and Sarovi are on by default; ArvanCloud (`aiapi.rafiei.co`,
+`Authorization: apikey`), OpenAI and Gemini through a Vercel proxy are opt-in. The transport is `brain/lm_direct.py`.
+Keys are entered in *AI Models & Logs → Direct providers* (write-only, stored 0600) or via `DIRECT_<PROVIDER>_API_KEY`;
+Arvan/OpenAI/Gemini keys already in `.env` are reused once that provider is switched on. A master switch and
+per-provider switches live in the same tab. Media routes (images, speech, video, transcription) keep their own
+providers: Arvan images, ElevenLabs speech through the Vercel relay, ElevenLabs Scribe then local Whisper.
 
 
 ## Priority and per-feature routes
 
-Order everywhere: **Jarvis → Sarovi → ArvanCloud → OpenAI**; Gemini/Google models are asked of Google itself first. LM API (`lmapi.rafiei.co`) is tried first, then the direct fallbacks in the same order (*Direct fallbacks* tab, master switch on).
+Order everywhere: **Jarvis → Sarovi → ArvanCloud → OpenAI**; Gemini/Google models are asked of Google itself first. Each route's own models are tried first (`custom:<model>#jarvis-all-models` → Jarvis `<model>`), then each enabled provider's default model, in the same order (*Direct providers* tab, master switch on).
 
 New AI stages have their own route card at the end of *AI Models & Logs → Routing*: Long Video (Transcript Enhancement, Topic Outline, Clip Finder, Clip Validator), Social Reference (Frame Review, Style Analysis) and Script Engine (Writer, Critic). New routes are seeded in priority order; **Apply priority to all routes** reorders existing chat/vision routes the same way (order only; nothing is added, enabled or removed). Sarovi text-model ids are not in the shared catalog: add them in the routing tab and press the button again.

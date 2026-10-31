@@ -203,11 +203,11 @@ def test_medium_gateway_configuration_error_is_actionable(monkeypatch):
     from brain.lm_gateway import GatewayError
     record = seed()
     monkeypatch.setattr(brain.lm_gateway, "complete", lambda *a, **kw: (_ for _ in ()).throw(
-        GatewayError("No enabled, capability-verified model for this route")))
+        GatewayError("No direct AI provider is configured for this route", 503)))
     execute(record)
     result = call(store.get_run(record["id"], "alice"))
     assert result["status"] == "failed"
-    assert "همگام‌سازی" in result["data"]["error"]
+    assert "Direct providers" in result["data"]["error"]
 
 
 def test_medium_completed_tool_narration_not_repeated_on_retry(monkeypatch):
@@ -222,25 +222,57 @@ def test_medium_completed_tool_narration_not_repeated_on_retry(monkeypatch):
     assert narrated == [{"duration": 30}]
 
 
+def _direct_keys(monkeypatch, *providers):
+    for provider in providers:
+        monkeypatch.setenv(f"DIRECT_{provider.upper()}_API_KEY", f"unit-test-{provider}-only")
+
+
 def test_protocol_disconnect_uses_configured_stream_fallback(monkeypatch):
     import httpx
     import json
-    from brain import lm_gateway as gateway
+    from brain import lm_gateway as gateway, lm_direct
     from app import lm_store
-    from app.config import settings
-    monkeypatch.setattr(settings, "LMAPI_API_KEY", "unit-test-only")
+    _direct_keys(monkeypatch, "jarvis", "sarovi")
     route = gateway.defaults()["conversation_response"]
-    lm_store.save("routes", {"conversation_response": {**route, "models": ["one", "two"], "streaming": True}})
-    lm_store.save("models", {name: {"enabled": True, "verified": ["chat", "streaming"]} for name in ("one", "two")})
+    lm_store.save("routes", {"conversation_response": {**route, "streaming": True,
+                  "models": ["custom:one#jarvis-all-models", "custom:two#sarovi-all-models"]}})
     seen = []
     def respond(request):
-        seen.append(json.loads(request.content)["model"])
+        seen.append((request.url.host, json.loads(request.content)["model"]))
         if len(seen) == 1: raise httpx.RemoteProtocolError("disconnected")
         data = {"choices": [{"delta": {"content": "سلام"}, "finish_reason": "stop"}]}
         return httpx.Response(200, text="data: " + json.dumps(data) + "\n\ndata: [DONE]\n\n")
-    monkeypatch.setattr(gateway, "_client", lambda timeout: httpx.Client(transport=httpx.MockTransport(respond)))
+    real = httpx.Client
+    monkeypatch.setattr(lm_direct.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(respond)))
     assert "".join(gateway.stream_chat("conversation_response", [])) == "سلام"
-    assert seen == ["one", "two"]
+    assert seen == [("api.jarvis.you", "one"), ("api.sarovi.ir", "two")]
+
+
+def test_router_tries_route_models_then_provider_defaults_without_lmapi(monkeypatch):
+    from brain import lm_gateway as gateway, lm_direct
+    from app import lm_store
+    _direct_keys(monkeypatch, "jarvis", "sarovi")
+    route = gateway.defaults()["general_chat"]
+    lm_store.save("routes", {"general_chat": {**route, "models": ["custom:first#jarvis-all-models"]}})
+    seen = []
+    def call(provider, messages, *, model, **kwargs):
+        seen.append((provider["id"], model))
+        if len(seen) < 3: raise lm_direct.DirectError("HTTP 503: busy", 503)
+        return {"model": model, "choices": [{"message": {"content": "ok"}}]}
+    monkeypatch.setattr(lm_direct, "call", call)
+    response, record = gateway.complete("general_chat", [{"role": "user", "content": "hi"}])
+    assert seen == [("jarvis", "first"), ("jarvis", "CLAUDE_SONNET_5_5"), ("sarovi", "gpt-4.1-mini")]
+    assert record["provider"] == "sarovi" and record["routed_via"] == "direct:sarovi"
+    assert gateway.configured()
+
+
+def test_router_without_keys_reports_missing_direct_provider(monkeypatch):
+    from brain import lm_gateway as gateway
+    for provider in ("jarvis", "sarovi"):
+        monkeypatch.delenv(f"DIRECT_{provider.upper()}_API_KEY", raising=False)
+    assert not gateway.configured()
+    with pytest.raises(gateway.GatewayError, match="No direct AI provider is configured"):
+        gateway.complete("general_chat", [{"role": "user", "content": "hi"}])
 
 
 def test_narration_keeps_gateway_owner_and_medium_message(monkeypatch):
@@ -304,16 +336,14 @@ def test_online_ai_sync_preserves_local_data_and_hides_secrets(monkeypatch, caps
     import sys
     from pathlib import Path
     from app import lm_store
-    from app.config import settings
-    from brain import lm_direct, lm_gateway
+    from brain import lm_direct
     record = seed()
     lm_store.save("models", {"local-only": {"id": "local-only"}})
     lm_store.save("routes", {"local-route": {"id": "local-route"}})
     source = {"models": {"online": {"id": "online", "verified": ["image"]}},
               "routes": {"image": {"id": "image", "enabled": True, "models": ["online"]}},
               "direct": lm_direct.config(), "keys": {"jarvis": "unit-test-secret-only"},
-              "headers": {}, "settings": {}, "gateway_key": lm_gateway.secret(),
-              "gateway_base": settings.LMAPI_BASE_URL}
+              "headers": {}, "settings": {}}
     monkeypatch.setattr("subprocess.run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout=json.dumps(source).encode()))
     monkeypatch.setattr(sys, "argv", ["sync_online_ai.py", "--identity", "test-key", "--host", "test-host", "--apply"])
     script = Path(__file__).resolve().parents[1] / "scripts/sync_online_ai.py"
@@ -374,20 +404,22 @@ def test_real_gateway_rejects_invalid_streamed_plan_before_fallback(monkeypatch,
     from app import lm_store
     record = seed()
     route = gateway.defaults()["editing_agent"]
-    lm_store.save("routes", {"editing_agent": {**route, "streaming": True, "models": ["bad", "good"], "max_retries": 0}})
-    lm_store.save("models", {m: {"enabled": True, "verified": ["chat", "streaming"]} for m in ("bad", "good")})
+    from brain import lm_direct
+    _direct_keys(monkeypatch, "jarvis", "sarovi")
+    lm_store.save("routes", {"editing_agent": {**route, "streaming": True, "max_retries": 0,
+                  "models": ["custom:bad#jarvis-all-models", "custom:good#sarovi-all-models"]}})
     seen = []
-    def wire(endpoint, body, timeout):
-        seen.append(body["model"])
-        content = bad if body["model"] == "bad" else '{"summary":"اطلاعات لازم دریافت شد","steps":[]}'
-        return {"choices": [{"message": {"content": content}}]}, {}, 200
-    monkeypatch.setattr(gateway, "_wire_chat_stream", wire)
+    def wire(provider, messages, *, model, **kwargs):
+        seen.append(model)
+        content = bad if model == "bad" else '{"summary":"اطلاعات لازم دریافت شد","steps":[]}'
+        return {"choices": [{"message": {"content": content}}]}
+    monkeypatch.setattr(lm_direct, "call", wire)
     monkeypatch.setattr(tools, "execute", lambda *a: pytest.fail("unapproved execution"))
     assert nodes.plan(record, {})["plan"]["steps"] == []
     assert seen == ["bad", "good"]
     audit = lm_store.logs()["items"][0]
     assert audit["fallback_count"] == 1
-    assert audit["fallback_history"][0]["error"] == "Model returned invalid structured output"
+    assert audit["fallback_history"][0]["error"] == "invalid structured output"
 
 
 def test_invalid_plan_has_one_bounded_repair_and_no_tool_execution(monkeypatch):
@@ -395,14 +427,15 @@ def test_invalid_plan_has_one_bounded_repair_and_no_tool_execution(monkeypatch):
     from app import lm_store
     record = seed()
     route = gateway.defaults()["editing_agent"]
-    lm_store.save("routes", {"editing_agent": {**route, "streaming": True, "models": ["one"], "max_retries": 0}})
-    lm_store.save("models", {"one": {"enabled": True, "verified": ["chat", "streaming"]}})
+    from brain import lm_direct
+    _direct_keys(monkeypatch, "jarvis")
+    lm_store.save("routes", {"editing_agent": {**route, "streaming": True, "models": ["custom:one#jarvis-all-models"],
+                  "max_retries": 0, "automatic_fallback": False}})
     requests = []
-    def wire(endpoint, body, timeout):
-        requests.append(body)
-        return {"choices": [{"message": {"content": '{"summary":"برنامه","steps":[]} trailing'}}]}, {}, 200
-    monkeypatch.setattr(gateway, "_wire_chat_stream", wire)
-    monkeypatch.setattr(gateway, "_direct_fallback", lambda *a, **kw: None)
+    def wire(provider, messages, *, model, **kwargs):
+        requests.append({"model": model, "messages": messages})
+        return {"choices": [{"message": {"content": '{"summary":"برنامه","steps":[]} trailing'}}]}
+    monkeypatch.setattr(lm_direct, "call", wire)
     monkeypatch.setattr(tools, "execute", lambda *a: pytest.fail("invalid plan executed"))
     with pytest.raises(ValueError, match="پس از تلاش اصلاحی"):
         nodes.plan(record, {})

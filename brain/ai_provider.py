@@ -379,7 +379,7 @@ def get_provider(provider_name: str | None = None) -> AIProvider:
     provider = ArvanProvider()
     from .lm_gateway import configured
     if configured():
-        provider.name = "lmapi"
+        provider.name = "direct-router"
         provider.model = "route-managed"
     return provider
 

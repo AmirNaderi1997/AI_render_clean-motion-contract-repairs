@@ -102,61 +102,9 @@ def eleven_cast(text: str, voice: str = "", model: str = "", *, language: str = 
     return choose_voice(eleven_voices(), context, preferred), model
 
 
-def gateway_cast(item: dict, text: str, voice: str, context: str = "", language: str = "") -> dict:
-    """Return a provider-compatible voice only with explicit Persian evidence."""
-    if not persian(text, language):
-        return {"voice": voice}
-    metadata = {**(item.get("metadata") or {}), **{k:v for k,v in item.items() if k != "metadata"}}
-    provider = str(metadata.get("speech_provider", metadata.get("provider", ""))).lower()
-    raw = str(metadata.get("id", "")).lower()
-    raw_model = raw.removeprefix("custom:").split("#", 1)[0]
-    if raw_model in {"tts_eleven_multilingual_v2", "eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_turbo_v2_5"}:
-        raise ValueError("این مدل ElevenLabs از فارسی پشتیبانی نمی‌کند؛ نسخهٔ فارسیِ تأییدشده را انتخاب کنید.")
-    # Execution IDs are not capability evidence. Both provider and supported
-    # language must come from registered metadata, except documented v3 IDs.
-    eleven = provider == "elevenlabs" or raw in {"eleven_v3", "custom:eleven_v3#jarvis-all-models"}
-    google = provider in {"google", "google_ai_studio", "gemini"}
-    if not (eleven or google) or not (languages(metadata) & FA or raw in {"eleven_v3", "custom:eleven_v3#jarvis-all-models"}):
-        raise ValueError("مدل صدا پشتیبانی تأییدشدهٔ فارسی از ElevenLabs یا Google ندارد؛ Routing نریشن را اصلاح کنید.")
-    voices = metadata.get("voices") or []
-    if not voices and eleven:
-        voices = eleven_voices()
-    if google:
-        # Google prebuilt voices inherit the model's supported languages.
-        voices = [{**v, "languages": ["fa"]} for v in voices if isinstance(v, dict)]
-    selected = choose_voice(voices, context, voice)
-    return {"voice": selected}
-
-
-def gateway_choice(cfg: dict, catalog: dict, text: str, voice: str, context: str = "", language: str = "") -> tuple[str, dict]:
-    """Filter incompatible routes BEFORE submission. This is not media fallback."""
-    from .lm_gateway import capabilities, model_allowed
-    from app import lm_store
-    profiles = lm_store.records("settings").get("speech_casting", {})
-    for mid in cfg.get("models", []):
-        item = catalog.get(mid, {})
-        if not model_allowed(mid) or not item.get("enabled") or not item.get("available", True) or "speech" not in capabilities(item):
-            continue
-        if persian(text, language) and "speech" not in item.get("verified", []):
-            continue
-        item = {**item, **profiles.get("models", {}).get(mid, {}), "id": mid}
-        try:
-            casting = gateway_cast(item, text, voice, context, language)
-        except ValueError:
-            continue
-        return mid, {"model": mid, "input": text, **casting, "response_format": "mp3"}
-    raise ValueError("در Routing نریشن، مدل و گویندهٔ فارسیِ تأییدشده از ElevenLabs یا Google موجود نیست؛ قبل از تولید، تنظیمات صدا را تکمیل کنید.")
-
-
 def identity(text: str, voice: str, model: str, *, language: str = "", context: str = "") -> str:
     """Actual casting belongs in the cache key, not the old English default."""
     if not persian(text, language):
         return f"{voice}|{model}"
-    from . import lm_gateway
-    if lm_gateway.configured():
-        from app import lm_store
-        cfg = lm_gateway.defaults().get("narration", {})
-        mid, body = gateway_choice(cfg, lm_store.records("models"), text, voice, context, language)
-        return json.dumps(["casting-v1", mid, body["voice"], "fa"], ensure_ascii=False)
     selected, model = eleven_cast(text, voice, model, language=language, context=context)
     return json.dumps(["casting-v1", model, selected, "fa"], ensure_ascii=False)

@@ -18,13 +18,12 @@ EXPORT = '''
 import json
 from app import lm_store
 from app.config import settings
-from brain import lm_direct, lm_gateway
+from brain import lm_direct
 cfg = lm_direct.config()
 keys = {p['id']: lm_direct.key_for(p['id']) for p in cfg['providers']}
 headers = {p['id']: lm_direct.header_value_for(p['id']) for p in cfg['providers']}
 print(json.dumps({'models': lm_store.records('models'), 'routes': lm_store.records('routes'),
- 'direct': cfg, 'keys': keys, 'headers': headers, 'gateway_key': lm_gateway.secret(),
- 'gateway_base': settings.LMAPI_BASE_URL,
+ 'direct': cfg, 'keys': keys, 'headers': headers,
  'settings': {k:v for k,v in lm_store.records('settings').items() if k in ('global','discovery')}}))
 '''
 
@@ -42,7 +41,7 @@ def main():
     sys.path.insert(0, str(Path.cwd()))
     from app import lm_store
     from app.config import settings
-    from brain import lm_direct, lm_gateway
+    from brain import lm_direct
     command = ['ssh', '-i', args.identity, '-p', str(args.port), '-o', 'IdentitiesOnly=yes',
                '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10',
                args.host, shlex.join(['docker', 'exec', args.container, 'python', '-c', EXPORT])]
@@ -54,20 +53,15 @@ def main():
         assert isinstance(source['models'], dict) and source['models']
         assert isinstance(source['routes'], dict) and source['routes']
         assert all(v.get('id') == k for k, v in source['models'].items())
-        assert source['gateway_base'] == settings.LMAPI_BASE_URL
         cfg = source['direct']
         assert isinstance(cfg['providers'], list)
         assert all(p['id'] in lm_direct.PROVIDERS for p in cfg['providers'])
         for p in cfg['providers']:
             lm_direct.validate_base_url(p['base_url'])
-        # Do not silently leave an environment key overriding the imported key.
-        if settings.LMAPI_API_KEY and source['gateway_key'] != lm_gateway.secret():
-            raise ValueError('Environment Gateway key differs')
     except (ValueError, KeyError, TypeError, AssertionError):
         raise SystemExit('Source validation failed; no configuration was imported') from None
     report = {'models': len(source['models']), 'routes': len(source['routes']),
               'direct_keys_available': [k for k,v in source['keys'].items() if v],
-              'gateway_key_matches': source['gateway_key'] == lm_gateway.secret(),
               'applied': False}
     if not args.apply:
         print(json.dumps(report))
@@ -76,10 +70,7 @@ def main():
     backups = root / 'backups'
     backups.mkdir(parents=True, exist_ok=True, mode=0o700)
     backup = Path(tempfile.mkdtemp(prefix='before-online-sync-', dir=backups))
-    keyfile = Path(settings.LMAPI_API_KEY_FILE)
-    if not keyfile.is_absolute(): keyfile = Path.cwd() / keyfile
-    for src, name in ((root/'state.json', 'state.json'), (root/'direct_keys.json', 'direct_keys.json'),
-                      (keyfile, 'gateway-key')):
+    for src, name in ((root/'state.json', 'state.json'), (root/'direct_keys.json', 'direct_keys.json')):
         if src.is_file():
             shutil.copy2(src, backup/name)
             os.chmod(backup/name, 0o600)
@@ -93,10 +84,6 @@ def main():
         if key: lm_direct.set_secret(provider, key)
     for provider, header in source['headers'].items():
         if header: lm_direct.set_secret(provider+':header', header)
-    if source['gateway_key'] and source['gateway_key'] != lm_gateway.secret():
-        descriptor = os.open(keyfile, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(descriptor, 'w') as out: out.write(source['gateway_key'])
-        os.chmod(keyfile, 0o600)
     actual_models, actual_routes = lm_store.records('models'), lm_store.records('routes')
     report.update(applied=True, backup=str(backup),
                   models_match=all(actual_models.get(k)==v for k,v in source['models'].items()),

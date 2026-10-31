@@ -212,7 +212,7 @@ def update_route(route_id: str, body: RouteUpdate):
 
 @router.get("/settings")
 def get_settings():
-    return {**gateway.gateway_settings(), "configured":gateway.configured(), "base_url":settings.LMAPI_BASE_URL,
+    return {**gateway.gateway_settings(), "configured":gateway.configured(), "base_url":None,
             "discovery":store.records("settings").get("discovery"), "concurrency_per_worker":4}
 
 

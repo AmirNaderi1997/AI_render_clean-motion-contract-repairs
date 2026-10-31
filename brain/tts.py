@@ -64,11 +64,6 @@ def _generate_elevenlabs(
     *, language: str = "", context: str = "", with_timestamps: bool = False,
 ) -> None:
     """Generate one MP3 through ElevenLabs with a bounded network timeout."""
-    from . import lm_gateway
-    if lm_gateway.configured():
-        extra = {"language": language, "context": context} if language or context else {}
-        Path(output_path).write_bytes(lm_gateway.speech('narration',text,voice_id or os.environ.get('ELEVENLABS_VOICE_ID',''), **extra))
-        return
     api_key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
     voice_id = voice_id.strip() or os.environ.get("ELEVENLABS_VOICE_ID", "").strip()
     model_id = model_id.strip() or os.environ.get(

@@ -54,8 +54,8 @@ export default function DirectFallbacks() {
 
   if (!state) return <section>{error ? <p role="alert" className="ai-alert">{error}</p> : <p role="status">Loading…</p>}</section>;
   return <section className="ai-direct">
-    <h2>Direct fallbacks</h2>
-    <p className="eg-muted">When LM API fails (timeout, rate limit, server error, no usable model), a text request is sent straight to the providers below, in this order, until one answers. Images, speech and video are not affected. Keys are write-only: they are stored privately on the server and never shown again.</p>
+    <h2>Direct providers</h2>
+    <p className="eg-muted">Every text request (chat, vision, structured plans) goes straight to the providers below: first the models the route names for a provider, then each provider's default model, in this order, until one answers. Images, speech and video use their own specialist providers. Keys are write-only: they are stored privately on the server and never shown again.</p>
     {error && <p role="alert" className="ai-alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
     {state.stt && <section className="ai-direct-card">
@@ -68,7 +68,7 @@ export default function DirectFallbacks() {
 
     <label className="ai-direct-master">
       <input type="checkbox" checked={state.enabled} onChange={event => { setDirty(true); setState({ ...state, enabled: event.target.checked }); }}/>
-      <span><b>Use direct provider fallbacks</b><small>{state.enabled ? "On: used only after LM API fails." : "Off: LM API errors are returned as they are."}</small></span>
+      <span><b>Use direct providers</b><small>{state.enabled ? "On: text routes are answered by these providers." : "Off: text routes are unavailable and return an error."}</small></span>
     </label>
 
     <ol className="ai-direct-list">

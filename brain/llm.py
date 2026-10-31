@@ -1,4 +1,4 @@
-"""Existing editor intelligence contract, centrally routed through Rafiei LM API.
+"""Existing editor intelligence contract, centrally routed through the direct-provider router (brain/lm_gateway.py).
 
 Chosen by env vars:
   LLM_PROVIDER   (arvan|anthropic|openai|openai_compatible) – default: arvan
@@ -6,7 +6,7 @@ Chosen by env vars:
   VISION_PROVIDER (arvan|anthropic|openai|openai_compatible) – default: same as LLM_PROVIDER
   VISION_MODEL   – image-capable model (content gen/editing/hints) – default: gpt-5-5-image
 
-When LM API is configured, database routes take precedence over legacy model
+When a direct provider (Jarvis/Sarovi) has a key, database routes take precedence over legacy model
 environment settings. Arvan remains the compatibility/specialist transport and uses
 ``Authorization: apikey ...`` scheme.
 

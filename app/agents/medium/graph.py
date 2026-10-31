@@ -108,8 +108,8 @@ def _execute(cid, user, record):
         from brain.lm_gateway import GatewayError
         if isinstance(exc, (nodes.InvalidEditingPlan, tools.PreflightUnavailable)):
             message = str(exc)
-        elif isinstance(exc, GatewayError) and "capability-verified model" in str(exc):
-            message = "اتصال مدل برای این مسیر در Gateway لوکال آماده نیست؛ فهرست مدل‌ها را همگام‌سازی و قابلیت متن مدل انتخاب‌شده را آزمایش کنید. اجرا متوقف شد و موتور Medium تغییر نکرد."
+        elif isinstance(exc, GatewayError) and "No direct AI provider is configured" in str(exc):
+            message = "برای این مسیر هیچ ارائه‌دهندهٔ مستقیمی (Jarvis یا Sarovi) کلید فعال ندارد؛ در AI Models & Logs → Direct providers کلید را ذخیره و آزمایش کنید. اجرا متوقف شد و موتور Medium تغییر نکرد."
         elif isinstance(exc, httpx.TransportError) or (isinstance(exc, GatewayError) and (exc.status == 504 or "RemoteProtocolError" in str(exc))):
             message = "سرویس مدل در Gateway پاسخ را کامل نداد یا اتصال را قطع کرد. مراحل ذخیره شده‌اند؛ از همین اجرا دوباره تلاش کنید. موتور Medium و مدل انتخاب‌شده خودکار تغییر نکردند."
         run(store.update(rid, user, status="cancelled" if stopped else "failed", patch={"error": message}))

@@ -2,7 +2,7 @@
 
 Every message goes through the same stages; only the tools of the last stage differ (`app/studio_orchestrator.py: process_message`).
 
-1. **Opening reply** (`_stream_response`): two short sentences, streamed at once (LM API when its route streams, otherwise the direct providers with a hedged start).
+1. **Opening reply** (`_stream_response`): two short sentences, streamed at once from the direct providers with a hedged start.
    A question is answered here. It never writes the deliverable and never says it cannot read links.
 2. **Understanding** (`_resolved_intent`): the model chooses the route from the meaning of the message and the conversation. Routes: `chat`, `modify`,
    `localize`, `talking`, `discover`, `motion` (ads from pages/images), `motion_graphic` (+ `_revision`, `_answer`), `question_*`.

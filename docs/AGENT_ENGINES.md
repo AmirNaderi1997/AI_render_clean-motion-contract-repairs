@@ -53,11 +53,10 @@ includes safe validation feedback. Neither correction nor fallback executes tool
 or changes agent engines. Unknown/future project IDs remain rejected; a plan
 creating a project must stop before dependent operations and replan from real IDs.
 
-Direct fallback requires credentials for each direct endpoint on this installation.
-A scoped Jarvis model on LMAPI is not a direct Jarvis connection. Provider switches
-without keys do not make a usable backup; keys configured only on the upstream
-Gateway cannot be assumed available to the local application. Configure secrets
-through the existing admin Direct fallbacks controls, not conversation messages.
+The router requires credentials for each direct endpoint on this installation.
+Provider switches without keys do not make a usable provider. Configure secrets
+through the admin Direct providers controls or `DIRECT_<PROVIDER>_API_KEY`, not
+conversation messages.
 
 Protocol disconnects are transport failures eligible for the existing configured
 fallback. If both streaming transports fail **before any content is emitted**, the

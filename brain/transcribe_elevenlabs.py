@@ -201,23 +201,3 @@ def transcribe_elevenlabs(
 
     finally:
         wav.unlink(missing_ok=True)
-
-
-def transcribe_gateway(video, out_dir, *, provider, language, file_digest):
-    """One provider-pinned gateway STT attempt; no guessed model IDs."""
-    from brain import lm_gateway
-    from types import SimpleNamespace
-    wav=_extract_audio(video,out_dir)
-    try:
-        data=lm_gateway.transcription(wav,language,provider=provider)
-        entries=[SimpleNamespace(type='word',text=w.get('text',w.get('word','')),
-            start=w['start'],end=w['end'],logprob=None) for w in data.get('words',[]) if 'start' in w and 'end' in w]
-        if not entries:raise RuntimeError('STT returned no word timestamps')
-        duration=float(data.get('duration') or entries[-1].end)
-        key=_cache_key(file_digest,language,str(data.get('model','')))
-        transcript=_map_response(SimpleNamespace(words=entries,language_code=data.get('language',language)),file_digest,key,language,duration)
-        transcript.update(engine='elevenlabs_'+provider,model_id=data.get('model',''))
-        archive=out_dir/'transcripts'/f'{key}.json';archive.parent.mkdir(exist_ok=True)
-        archive.write_text(json.dumps(transcript,ensure_ascii=False))
-        return transcript,None
-    finally:wav.unlink(missing_ok=True)

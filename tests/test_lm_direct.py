@@ -1,4 +1,4 @@
-"""Direct provider fallbacks: policy, secrecy, wire formats and the gateway hook."""
+"""Direct providers: policy, secrecy, wire formats and the router behind lm_gateway."""
 import json
 import os
 import stat
@@ -123,7 +123,7 @@ def test_fallback_walks_providers_in_order_and_skips_failures(monkeypatch):
     monkeypatch.setattr(direct, "_post", fake_post)
     direct.set_secret("sarovi", "s-key-00000000"); direct.set_secret("jarvis", "j-key-00000000")
     attempts = []
-    found = direct.try_fallback([{"role": "user", "content": "x"}], candidates=[], tokens=100, temperature=None, timeout=30, extra=None, attempts=attempts)
+    found = direct.complete_routed([{"role": "user", "content": "x"}], candidates=[], tokens=100, temperature=None, timeout=30, extra=None, attempts=attempts)
     assert found and found[1] == "sarovi" and len(calls) == 2          # Jarvis is asked first, then Sarovi
     assert [a["http_status"] for a in attempts] == [503, 200] and attempts[0]["model"].startswith("direct:jarvis")
 
@@ -133,19 +133,20 @@ def test_gemini_models_ask_google_first(monkeypatch):
     monkeypatch.setattr(direct, "_post", lambda url, headers, body, timeout: (calls.append(url), httpx.Response(200, json=ok("g")))[1])
     for name in ("jarvis", "gemini"):
         direct.set_secret(name, name + "-key-0000000")
-    found = direct.try_fallback([{"role": "user", "content": "x"}], candidates=["google:gemini-3.5-flash"], tokens=10, temperature=None, timeout=30, extra=None, attempts=[])
+    direct.save_config(True, [{"id": pid, "enabled": pid in {"jarvis", "gemini"}} for pid in direct.PROVIDERS])   # Gemini is opt-in
+    found = direct.complete_routed([{"role": "user", "content": "x"}], candidates=["google:gemini-3.5-flash"], tokens=10, temperature=None, timeout=30, extra=None, attempts=[])
     assert found[1] == "gemini" and "ai-gateway" in calls[0]
     calls.clear()
-    found = direct.try_fallback([{"role": "user", "content": "x"}], candidates=["custom:CLAUDE_OPUS_5_5#jarvis-all-models"], tokens=10, temperature=None, timeout=30, extra=None, attempts=[])
+    found = direct.complete_routed([{"role": "user", "content": "x"}], candidates=["custom:CLAUDE_OPUS_5_5#jarvis-all-models"], tokens=10, temperature=None, timeout=30, extra=None, attempts=[])
     assert found[1] == "jarvis"
 
 
 def test_master_switch_and_missing_keys_disable_fallback(monkeypatch):
     monkeypatch.setattr(direct, "_post", lambda *a, **k: pytest.fail("must not be called"))
-    assert direct.try_fallback([], candidates=[], tokens=1, temperature=None, timeout=1, extra=None, attempts=[]) is None   # no keys
+    assert direct.complete_routed([], candidates=[], tokens=1, temperature=None, timeout=1, extra=None, attempts=[]) is None   # no keys
     direct.set_secret("jarvis", "j-key-00000000")
     direct.save_config(False, [{"id": "jarvis", "base_url": "https://api.jarvis.you/v1", "model": "X"}])
-    assert direct.try_fallback([], candidates=[], tokens=1, temperature=None, timeout=1, extra=None, attempts=[]) is None   # master off
+    assert direct.complete_routed([], candidates=[], tokens=1, temperature=None, timeout=1, extra=None, attempts=[]) is None   # master off
 
 
 def test_error_text_never_contains_the_key(monkeypatch):
@@ -156,8 +157,8 @@ def test_error_text_never_contains_the_key(monkeypatch):
     assert "j-key-00000000" not in str(err.value) and "[REDACTED]" in str(err.value)
 
 
-def test_gateway_uses_direct_fallback_only_after_lm_api_fails(monkeypatch):
-    """complete(): LM API 503 → direct provider answers, and the audit record says so."""
+def test_gateway_answers_from_the_direct_provider_and_audits_it(monkeypatch):
+    """complete(): there is no LM API; the route's provider answers and the audit record says so."""
     cfg = {"enabled": True, "endpoint": "chat", "models": ["custom:CLAUDE_SONNET_5_5#jarvis-all-models"], "automatic_fallback": True,
            "max_retries": 0, "timeout": 30, "temperature": None, "max_tokens": 1000, "streaming": False}
     monkeypatch.setattr(gateway, "defaults", lambda: {"editing_agent": cfg})
@@ -168,19 +169,14 @@ def test_gateway_uses_direct_fallback_only_after_lm_api_fails(monkeypatch):
     audits = []
     monkeypatch.setattr(gateway, "_audit", audits.append)
 
-    def lm_down(*args, **kwargs):
-        raise GatewayError("LM API HTTP 503: exhausted", 503, True)
-
-    monkeypatch.setattr(gateway, "_wire", lm_down)
-    monkeypatch.setattr(gateway.time, "sleep", lambda s: None)
     monkeypatch.setattr(direct, "_post", lambda *a, **k: httpx.Response(200, json=ok("direct answer")))
     direct.set_secret("jarvis", "j-key-00000000")
     response, record = gateway.complete("editing_agent", [{"role": "user", "content": "hi"}])
     assert response["choices"][0]["message"]["content"] == "direct answer"
-    assert record["routed_via"] == "direct:jarvis" and record["provider"] == "jarvis" and record["actual_model"] == "CLAUDE_SONNET_5_5"
+    assert record["routed_via"] == "direct:jarvis" and record["provider"] == "jarvis" and record["actual_model"] == "m"
     assert record["status"] == "success" and audits and any(a["model"].startswith("direct:") for a in record["fallback_history"])
 
-    # master switch off → the original LM API error is raised, nothing is sent to providers
+    # master switch off → nothing is sent to providers and the route reports it
     direct.save_config(False, [{"id": "jarvis", "base_url": "https://api.jarvis.you/v1", "model": "X"}])
     with pytest.raises(GatewayError):
         gateway.complete("editing_agent", [{"role": "user", "content": "hi"}])
@@ -199,7 +195,7 @@ def test_structured_callers_use_direct_providers_but_only_valid_answers_count(mo
     monkeypatch.setattr(direct, "_post", fake_post)
     direct.set_secret("jarvis", "j-key-00000000"); direct.set_secret("sarovi", "s-key-00000000")
     attempts = []
-    found = direct.try_fallback([{"role": "user", "content": "x"}], candidates=[], tokens=50, temperature=None, timeout=30, extra=None, attempts=attempts, validate=json.loads)
+    found = direct.complete_routed([{"role": "user", "content": "x"}], candidates=[], tokens=50, temperature=None, timeout=30, extra=None, attempts=attempts, validate=json.loads)
     assert found and found[1] == "sarovi" and len(calls) == 2
     assert [a.get("error") for a in attempts] == ["invalid structured output", None]
 
@@ -267,7 +263,7 @@ def test_a_failed_provider_is_skipped_before_any_text_but_never_mixed_into_an_an
 
 def test_without_any_direct_provider_the_original_reason_is_reported(monkeypatch):
     _stream_route(monkeypatch, streaming=False, models=["x"])
-    with pytest.raises(GatewayError, match="Streaming disabled"):
+    with pytest.raises(GatewayError, match="no direct provider"):
         list(gateway.stream_chat("conversation_response", [{"role": "user", "content": "x"}]))
 
 
@@ -281,9 +277,9 @@ def test_a_provider_that_rejected_its_key_is_left_alone_for_a_while(monkeypatch)
     monkeypatch.setattr(direct, "_post", post)
     direct.set_secret("jarvis", "j-key-00000000"); direct.set_secret("sarovi", "s-key-00000000")
     args = dict(candidates=[], tokens=10, temperature=None, timeout=5, extra=None)
-    assert direct.try_fallback([{"role": "user", "content": "x"}], attempts=[], **args)[1] == "sarovi"
+    assert direct.complete_routed([{"role": "user", "content": "x"}], attempts=[], **args)[1] == "sarovi"
     calls.clear()
-    assert direct.try_fallback([{"role": "user", "content": "x"}], attempts=[], **args)[1] == "sarovi"
+    assert direct.complete_routed([{"role": "user", "content": "x"}], attempts=[], **args)[1] == "sarovi"
     assert all("jarvis" not in c for c in calls)
 
 
@@ -317,7 +313,8 @@ def test_every_attempt_failing_raises_the_last_reason(monkeypatch):
 
 def test_route_models_are_attempted_in_the_routes_own_order(monkeypatch):
     direct.set_secret("arvan", "a-key-00000000"); direct.set_secret("sarovi", "s-key-00000000")
-    pairs = direct._stream_attempts(["custom:DeepSeek-V4-Flash#arvancloud-all-models", "custom:GLM-5.3-Flash#arvancloud-all-models"])
+    direct.save_config(True, [{"id": pid, "enabled": pid in {"arvan", "sarovi"}} for pid in direct.PROVIDERS])     # Arvan is opt-in
+    pairs = direct.route_pairs(["custom:DeepSeek-V4-Flash#arvancloud-all-models", "custom:GLM-5.3-Flash#arvancloud-all-models"])
     assert [(p["id"], m) for p, m in pairs][:2] == [("arvan", "DeepSeek-V4-Flash"), ("arvan", "GLM-5.3-Flash")]
     assert ("sarovi", direct.PROVIDERS["sarovi"]["model"]) in [(p["id"], m) for p, m in pairs]        # then each provider's default
 def test_google_relay_uses_relay_auth_and_exact_endpoint(monkeypatch):
@@ -344,9 +341,9 @@ def test_structured_callers_get_json_mode_from_openai_direct(monkeypatch):
         seen["extra"] = extra
         return {"choices": [{"message": {"content": "{\"ok\": true}"}}]}
     monkeypatch.setattr(d, "call", fake_call)
-    out = d.try_fallback([{"role": "user", "content": "json please"}], candidates=[], tokens=50, temperature=0, timeout=30, extra=None, attempts=[], validate=lambda text: __import__("json").loads(text))
+    out = d.complete_routed([{"role": "user", "content": "json please"}], candidates=[], tokens=50, temperature=0, timeout=30, extra=None, attempts=[], validate=lambda text: __import__("json").loads(text))
     assert out and seen["extra"] == {"response_format": {"type": "json_object"}}
-    d.try_fallback([{"role": "user", "content": "plain"}], candidates=[], tokens=50, temperature=0, timeout=30, extra=None, attempts=[], validate=None)
+    d.complete_routed([{"role": "user", "content": "plain"}], candidates=[], tokens=50, temperature=0, timeout=30, extra=None, attempts=[], validate=None)
     assert seen["extra"] is None
 
 

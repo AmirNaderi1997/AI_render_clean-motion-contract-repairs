@@ -66,7 +66,7 @@ def test_all_narration_uses_localize_voice(monkeypatch, tmp_path):
 
 def test_saved_media_provider_routes_to_arvan():
     assert media_provider("retired_image").name == "arvan_image"
-    assert {item["name"] for item in list_providers()} == {"arvan_image", "local_fixture", "lm_gateway"}
+    assert {item["name"] for item in list_providers()} == {"arvan_image", "local_fixture"}
 
 
 def test_arvan_image_contract(monkeypatch, tmp_path):

@@ -34,32 +34,28 @@ def test_good_or_empty_transcript_does_not_call_ai(monkeypatch,tmp_path):
         raw={'words':words};assert transcribe.improve_local_transcript(raw,tmp_path)==raw
 
 
-def test_stt_priority_own_jarvis_sarovi_and_no_paid_repeat(monkeypatch,tmp_path):
+def test_stt_priority_own_then_whisper_and_no_paid_repeat(monkeypatch,tmp_path):
     import brain.transcribe_elevenlabs as providers
     monkeypatch.setattr(lm_direct.settings,'JOBS_DIR',str(tmp_path))
     video=tmp_path/'input.mp4';video.write_bytes(b'fixture')
     calls=[]
-    def own(*a,**kw):calls.append('own_vercel');raise RuntimeError('unavailable')
-    def gateway(*a,provider,**kw):
-        calls.append(provider)
-        if provider=='jarvis':raise RuntimeError('unavailable')
-        return {'engine':'elevenlabs_sarovi','file_hash':transcribe.file_hash(video),'requested_language':'fa','cache_key':'chain',
+    def own(*a,**kw):
+        calls.append('own_vercel')
+        return {'engine':'elevenlabs','file_hash':transcribe.file_hash(video),'requested_language':'fa','cache_key':'own',
                 'words':[{'w':'سلام','start':0,'end':1,'prob':.99}],
-                'sentences':[{'text':'سلام','start':0,'end':1}]},None
+                'sentences':[{'text':'سلام','start':0,'end':1}]},0.0
     monkeypatch.setattr(providers,'transcribe_elevenlabs',own)
-    monkeypatch.setattr(providers,'transcribe_gateway',gateway)
     root=tmp_path/'job'
-    assert transcribe.transcribe(video,root,language='fa',engine='elevenlabs')['engine']=='elevenlabs_sarovi'
+    assert transcribe.transcribe(video,root,language='fa',engine='elevenlabs')['engine']=='elevenlabs'
     transcribe.transcribe(video,root,language='fa',engine='elevenlabs')
-    assert calls==['own_vercel','jarvis','sarovi']
+    assert calls==['own_vercel']
 
 
-def test_local_whisper_runs_only_after_all_remote_slots(monkeypatch,tmp_path):
+def test_local_whisper_runs_only_after_the_own_elevenlabs_slot(monkeypatch,tmp_path):
     import brain.transcribe_elevenlabs as providers
     monkeypatch.setattr(lm_direct.settings,'JOBS_DIR',str(tmp_path))
     video=tmp_path/'input.mp4';video.write_bytes(b'fixture');calls=[]
     def own(*a,**k):calls.append('own');raise RuntimeError('unavailable')
-    def remote(*a,provider,**k):calls.append(provider);raise RuntimeError('unavailable')
     def local(video,root,digest,model,*args):
         calls.append('whisper')
         assert model=='small'
@@ -68,8 +64,7 @@ def test_local_whisper_runs_only_after_all_remote_slots(monkeypatch,tmp_path):
                'sentences':[{'text':'سلام','start':0,'end':1}]}
         (root/'transcript.json').write_text(json.dumps(value));return value
     monkeypatch.setattr(providers,'transcribe_elevenlabs',own)
-    monkeypatch.setattr(providers,'transcribe_gateway',remote)
     monkeypatch.setattr(transcribe,'_transcribe_whisper',local)
     monkeypatch.setenv('WHISPER_ENABLED','true')
     result=transcribe.transcribe(video,tmp_path/'job',language='fa',engine='elevenlabs')
-    assert result['engine']=='whisper' and calls==['own','jarvis','sarovi','whisper']
+    assert result['engine']=='whisper' and calls==['own','whisper']

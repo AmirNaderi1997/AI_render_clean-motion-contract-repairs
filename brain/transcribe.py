@@ -76,9 +76,7 @@ def choose_engine(language: Optional[str] = None, explicit: Optional[str] = None
     env = os.environ.get("ASR_ENGINE", "").lower()
     if env in ("elevenlabs", "whisper"):
         return env
-    from brain.lm_gateway import configured
-    if configured():return 'elevenlabs'
-    if (language or "").lower() == "fa" and os.environ.get("ELEVENLABS_API_KEY"):
+    if os.environ.get("ELEVENLABS_API_KEY"):
         return "elevenlabs"
     return "whisper"
 
@@ -501,24 +499,11 @@ def transcribe(
 
             return effective_transcript(out_dir)
         except Exception as exc:
-            log.warning("Own ElevenLabs STT failed (%s); trying the configured provider chain", type(exc).__name__)
+            log.warning("Own ElevenLabs STT failed (%s); falling back to local Whisper", type(exc).__name__)
             elevenlabs_error = exc
-        # Explicit user policy: own ElevenLabs relay, Jarvis ElevenLabs,
-        # Sarovi ElevenLabs, then local Whisper. Never replay a provider.
-        from brain.transcribe_elevenlabs import transcribe_gateway
-        history=[{'provider':'elevenlabs_own_vercel','status':'failed','error_type':type(elevenlabs_error).__name__}]
-        for provider in ('jarvis','sarovi'):
-            try:
-                transcript,cost=transcribe_gateway(video,out_dir,provider=provider,language=language,file_digest=fhash)
-                _archive_current(out_dir)
-                transcript_path.write_text(json.dumps(transcript,ensure_ascii=False))
-                history.append({'provider':provider,'status':'completed'})
-                (out_dir/'asr_attempts.json').write_text(json.dumps(history))
-                (out_dir/'asr_cost.json').write_text(json.dumps({'engine':transcript['engine'],'audio_seconds':transcript.get('duration',0),'cost_usd':cost}))
-                return effective_transcript(out_dir)
-            except Exception as exc:
-                history.append({'provider':provider,'status':'unavailable_or_failed','error_type':type(exc).__name__})
-        (out_dir/'asr_attempts.json').write_text(json.dumps(history))
+        # Explicit user policy: own ElevenLabs relay, then local Whisper. Never replay a provider.
+        (out_dir/'asr_attempts.json').write_text(json.dumps(
+            [{'provider':'elevenlabs_own_vercel','status':'failed','error_type':type(elevenlabs_error).__name__}]))
     from brain.lm_direct import config as direct_config
     local_stt = direct_config()['stt']
     if elevenlabs_error is not None and not local_stt['enabled']:

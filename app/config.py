@@ -11,9 +11,6 @@ class Settings(BaseSettings):
     JWT_ACCESS_HOURS: int = 24
     JWT_REFRESH_DAYS: int = 30
     AI_PROVIDER: str = "arvan"
-    LMAPI_BASE_URL: str = "https://lmapi.rafiei.co/v1"
-    LMAPI_API_KEY: str = ""
-    LMAPI_API_KEY_FILE: str = ".lmapi_key"
     MOTION_API_KEY_FILE: str = ".motion_key"
     MOTION_ENABLED: bool = False
     MOTION_PROXY_URL: str = "https://editorgpt-motion-relay.vercel.app/api/motion"

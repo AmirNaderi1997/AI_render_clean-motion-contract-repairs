@@ -1,3 +1,4 @@
+import pytest
 import base64
 import io
 from PIL import Image
@@ -5,21 +6,10 @@ from brain import lm_gateway as gateway, lm_adapters
 from brain.media_provider import get_provider
 
 
-def test_configured_image_generation_uses_database_gateway_route(monkeypatch,tmp_path):
+def test_image_generation_stays_on_arvan_even_with_a_text_provider(monkeypatch):
     monkeypatch.setattr(gateway,'configured',lambda:True)
-    monkeypatch.setattr(gateway,'defaults',lambda:{'photorealistic_image':{'enabled':True}})
-    image=io.BytesIO();Image.new('RGB',(32,32),'blue').save(image,format='PNG')
-    calls=[]
-    def complete(route,prompt,**kwargs):
-        calls.append((route,prompt,kwargs))
-        return {'model':'tested-image','data':[{'b64_json':base64.b64encode(image.getvalue()).decode()}]},{'requested_model':'tested-image','cost':None}
-    monkeypatch.setattr(gateway,'complete',complete)
-    provider=get_provider('arvan_image')
-    assert provider.name=='lm_gateway'
-    result=provider.generate_image('A landscape','9:16',tmp_path)
-    assert Image.open(result.file_path).size==(32,32)
-    assert calls[0][0]=='photorealistic_image'
-    assert calls[0][2]['endpoint']=='image'
+    monkeypatch.setattr(gateway,'complete',lambda *a,**k:pytest.fail('images are not routed through the text router'))
+    assert get_provider('arvan_image').name=='arvan_image'
 
 
 def test_media_payload_and_redaction():
@@ -28,17 +18,12 @@ def test_media_payload_and_redaction():
     assert 'ABCDEF' not in gateway.safe({'b64_json':'ABCDEF'})
 
 
-def test_tts_uses_gateway_instead_of_direct_transport(monkeypatch,tmp_path):
+def test_tts_uses_the_elevenlabs_transport_even_with_a_text_provider(monkeypatch,tmp_path):
     from brain.tts import _generate_elevenlabs
     monkeypatch.setattr(gateway,'configured',lambda:True)
-    calls=[]
-    def speech(route,text,voice):
-        calls.append((route,text,voice));return b'tested-audio'
-    monkeypatch.setattr(gateway,'speech',speech)
-    output=tmp_path/'sample.mp3'
-    _generate_elevenlabs('سلام',str(output),voice_id='existing-voice')
-    assert output.read_bytes()==b'tested-audio'
-    assert calls==[('narration','سلام','existing-voice')]
+    monkeypatch.delenv('ELEVENLABS_API_KEY',raising=False)
+    with pytest.raises(RuntimeError,match='ElevenLabs is not configured'):
+        _generate_elevenlabs('hello',str(tmp_path/'sample.mp3'),voice_id='existing-voice')
 
 
 def test_resume_reuses_owned_job_and_rejects_other_users(monkeypatch,tmp_path):

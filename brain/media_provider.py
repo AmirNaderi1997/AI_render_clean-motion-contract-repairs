@@ -339,8 +339,7 @@ def register_provider(name: str, adapter: ProviderAdapter) -> None:
 
 def get_provider(name: str) -> ProviderAdapter:
     if name != "local_fixture":
-        from .lm_gateway import configured
-        name = 'lm_gateway' if configured() else 'arvan_image'
+        name = 'arvan_image'
     if name not in _registry:
         raise KeyError(f"unknown provider: {name!r}. registered: {list(_registry.keys())}")
     return _registry[name]
@@ -354,45 +353,5 @@ def list_providers() -> list[dict]:
     ]
 
 
-class GatewayImageProvider(ProviderAdapter):
-    name='lm_gateway'
-
-    @property
-    def has_key(self):
-        from .lm_gateway import configured, defaults
-        return configured() and bool(defaults().get('photorealistic_image',{}).get('enabled'))
-
-    @property
-    def capabilities(self):
-        return ['image','motion_video_from_image']
-
-    def generate_image(self,prompt,aspect,output_dir):
-        from .lm_gateway import complete
-        import base64
-        response,record=complete('photorealistic_image',prompt,endpoint='image',required={'image'},extra={'n':1,'size':'1024x1024'})
-        item=(response.get('data') or [{}])[0]
-        encoded=item.get('b64_json','')
-        if not encoded or len(encoded)>40*1024*1024:
-            raise RuntimeError('Gateway did not return a bounded inline image; no duplicate generation was submitted')
-        raw=base64.b64decode(encoded,validate=True)
-        from PIL import Image
-        image=Image.open(io.BytesIO(raw))
-        if max(image.size)>8192 or image.width*image.height>32_000_000:
-            raise ValueError('Generated image dimensions exceed safety limits')
-        image.load()
-        output_dir.mkdir(parents=True,exist_ok=True)
-        path=output_dir/f'gateway_{uuid.uuid4().hex[:12]}.png'
-        image.convert('RGB').save(path)
-        return MediaResult(file_path=str(path),source='lm_gateway_image',cost_usd=record.get('cost'),
-                           width=image.width,height=image.height,generation_id=path.stem,
-                           metadata={'model':response.get('model'),'requested_model':record.get('requested_model'),'aspect':aspect})
-
-    def generate_video(self,prompt,duration,aspect,output_dir):
-        still=self.generate_image(prompt,aspect,output_dir)
-        return still_to_motion_video(still.file_path,output_dir,duration,aspect,generation_id=still.generation_id,
-                                     cost_usd=still.cost_usd,source='lm_gateway_image_motion',metadata=still.metadata)
-
-
-register_provider('lm_gateway',GatewayImageProvider())
 register_provider("local_fixture", LocalFixtureProvider())
 register_provider("arvan_image", ArvanImageProvider())

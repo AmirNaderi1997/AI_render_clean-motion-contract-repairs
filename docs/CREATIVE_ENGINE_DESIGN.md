@@ -36,7 +36,7 @@ receives `CreativeUnavailable` and continues with the standard pipeline, saying 
 | Decision-call resilience (retry on 429/5xx/timeouts, cooldown-aware) | `brain/llm.py:gateway_json_resilient` | Done |
 | Image generation: bounded retry and the model's own reply surfaced | `brain/media_provider.py` | Done |
 | HyperFrames: GSAP no longer loaded from a CDN at render time; integrity-checked cache; failure cause shown first | `engine/hyperframes/{assets,builder,renderer}.py` | Done |
-| Direct provider fallbacks (Sarovi, Jarvis, Arvan, OpenAI, Gemini via Vercel proxy) when LM API fails; admin tab with write-only keys, order, per-provider and master switch, test button | `brain/lm_direct.py`, `app/routers/lm_admin.py`, `web/src/AIDirectFallbacks.tsx` | Done; tested incl. the real Jarvis endpoint reached with a fake key |
+| Direct providers (Jarvis, Sarovi; Arvan, OpenAI, Gemini via Vercel proxy opt-in) serve every text route, no LM API; admin tab with write-only keys, order, per-provider and master switch, test button | `brain/lm_direct.py`, `app/routers/lm_admin.py`, `web/src/AIDirectFallbacks.tsx` | Done; tested incl. the real Jarvis endpoint reached with a fake key |
 | **Motion Designer**: per-beat HTML/CSS/GSAP scenes in a job-wide design system, validated statically and by `hyperframes check`, templates as fallback | `creative/motion.py`, `engine/hyperframes/{scenes,builder}.py` | **Done; real talking_2 render verified end-to-end** (5 authored scenes, 45 s, 1080×1920) |
 | Scene cache per job (re-render never re-authors) | `creative/motion.py:compose(cache=…)` | Done |
 | Synthesised sound design (whoosh / hit on scenes), no third-party audio | `engine/sfx.py` | Done |

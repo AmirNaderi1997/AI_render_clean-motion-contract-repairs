@@ -55,7 +55,7 @@ export function friendlyFailure(message: string | undefined): string {
   const text = (message || "").trim();
   if (!text) return "این مرحله نیاز به بررسی دارد.";
   if (/timeout|timed out|ReadTimeout/i.test(text)) return "این مرحله در مهلت تعیین‌شده کامل نشد. جزئیات خطا را بررسی کنید؛ تلاش دوباره خودکار انجام نمی‌شود.";
-  if (/LM API|gateway|HTTP 5\d\d/i.test(text)) return "سرویس هوش مصنوعی پاسخ قابل‌استفاده نداد؛ جزئیات خطا ثبت شده است.";
+  if (/direct provider|gateway|HTTP 5\d\d/i.test(text)) return "سرویس هوش مصنوعی پاسخ قابل‌استفاده نداد؛ جزئیات خطا ثبت شده است.";
   return text;
 }
 
