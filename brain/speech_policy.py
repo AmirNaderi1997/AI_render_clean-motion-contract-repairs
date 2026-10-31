@@ -71,6 +71,8 @@ def eleven_voices() -> list[dict]:
     native = [v for v in configured if v.get("provider") == "elevenlabs"]
     if native:
         return native
+    if not os.environ.get("ELEVENLABS_PROXY_URL", "").strip():
+        return []  # Resellers do not expose the account's ElevenLabs catalog.
     with _lock:
         import httpx
         from .elevenlabs_transport import url
@@ -99,7 +101,10 @@ def eleven_cast(text: str, voice: str = "", model: str = "", *, language: str = 
     # newer models must be verified before being added to this allow-list.
     model = "eleven_v3"
     preferred = os.environ.get("PERSIAN_ELEVENLABS_VOICE_ID", "").strip() or voice
-    return choose_voice(eleven_voices(), context, preferred), model
+    voices = eleven_voices()
+    if not voices and not os.environ.get("ELEVENLABS_PROXY_URL", "").strip() and preferred:
+        return preferred, model
+    return choose_voice(voices, context, preferred), model
 
 
 def identity(text: str, voice: str, model: str, *, language: str = "", context: str = "") -> str:

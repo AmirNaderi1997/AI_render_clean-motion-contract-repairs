@@ -35,6 +35,7 @@ def test_good_or_empty_transcript_does_not_call_ai(monkeypatch,tmp_path):
 
 
 def test_stt_priority_own_then_whisper_and_no_paid_repeat(monkeypatch,tmp_path):
+    monkeypatch.setenv('ELEVENLABS_PROXY_URL', 'https://relay.example')
     import brain.transcribe_elevenlabs as providers
     monkeypatch.setattr(lm_direct.settings,'JOBS_DIR',str(tmp_path))
     video=tmp_path/'input.mp4';video.write_bytes(b'fixture')
@@ -52,6 +53,8 @@ def test_stt_priority_own_then_whisper_and_no_paid_repeat(monkeypatch,tmp_path):
 
 
 def test_local_whisper_runs_only_after_the_own_elevenlabs_slot(monkeypatch,tmp_path):
+    monkeypatch.setenv('ELEVENLABS_PROXY_URL', 'https://relay.example')
+    monkeypatch.setenv('SAROVI_STT_ENABLED', 'false')
     import brain.transcribe_elevenlabs as providers
     monkeypatch.setattr(lm_direct.settings,'JOBS_DIR',str(tmp_path))
     video=tmp_path/'input.mp4';video.write_bytes(b'fixture');calls=[]

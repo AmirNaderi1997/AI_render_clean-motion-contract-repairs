@@ -76,7 +76,8 @@ def choose_engine(language: Optional[str] = None, explicit: Optional[str] = None
     env = os.environ.get("ASR_ENGINE", "").lower()
     if env in ("elevenlabs", "whisper"):
         return env
-    if os.environ.get("ELEVENLABS_API_KEY"):
+    if (os.environ.get("ELEVENLABS_PROXY_URL", "").strip() or
+            os.environ.get("SAROVI_STT_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}):
         return "elevenlabs"
     return "whisper"
 
@@ -472,38 +473,48 @@ def transcribe(
     if transcript_path.exists() and selected_engine=='elevenlabs':
         cached=json.loads(transcript_path.read_text())
         if (cached.get('file_hash')==fhash and cached.get('requested_language')==language
-                and cached.get('words') and cached.get('engine') in {'elevenlabs','elevenlabs_jarvis','elevenlabs_sarovi','whisper'}):
-            return effective_transcript(out_dir)
+                and cached.get('words') and cached.get('engine') in {'elevenlabs','elevenlabs_jarvis','elevenlabs_sarovi','sarovi_whisper','whisper'}):
+            from brain.lm_direct import timed_words, DirectError
+            try:
+                timed_words(cached)
+                if cached.get('engine') != 'sarovi_whisper' or cached.get('model_id') == os.environ.get('SAROVI_STT_MODEL', 'openai/whisper-large-v3').strip():
+                    return effective_transcript(out_dir)
+            except DirectError:
+                pass
     elevenlabs_error: Optional[Exception] = None
 
+    attempts = []
     if selected_engine == "elevenlabs":
-        from brain.transcribe_elevenlabs import transcribe_elevenlabs
-        try:
-            log.info("transcribing %s (elevenlabs scribe) …", video.name)
-            transcript, asr_cost = transcribe_elevenlabs(
-                video, out_dir,
-                language=language,
-                file_digest=fhash,
-                keyterms=keyterms or hotwords,
-            )
-            _archive_current(out_dir)
-            encoded = json.dumps(transcript, indent=2, ensure_ascii=False)
-            transcript_path.write_text(encoded)
-
-            cost_path = out_dir / "asr_cost.json"
-            cost_path.write_text(json.dumps({
-                "engine": transcript.get('engine','elevenlabs'),
-                "audio_seconds": transcript.get("duration", 0),
-                "cost_usd": asr_cost,
-            }, indent=2))
-
-            return effective_transcript(out_dir)
-        except Exception as exc:
-            log.warning("Own ElevenLabs STT failed (%s); falling back to local Whisper", type(exc).__name__)
-            elevenlabs_error = exc
-        # Explicit user policy: own ElevenLabs relay, then local Whisper. Never replay a provider.
-        (out_dir/'asr_attempts.json').write_text(json.dumps(
-            [{'provider':'elevenlabs_own_vercel','status':'failed','error_type':type(elevenlabs_error).__name__}]))
+        from brain.transcribe_elevenlabs import transcribe_elevenlabs, transcribe_sarovi
+        from brain.lm_direct import timed_words
+        providers = []
+        if os.environ.get("ELEVENLABS_PROXY_URL", "").strip():
+            providers.append(("elevenlabs_own_vercel", transcribe_elevenlabs))
+        if os.environ.get("SAROVI_STT_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}:
+            providers.append(("sarovi_whisper", transcribe_sarovi))
+        for name, run in providers:
+            try:
+                extra = {"keyterms": keyterms or hotwords} if name == "elevenlabs_own_vercel" else {}
+                transcript, asr_cost = run(video, out_dir, language=language, file_digest=fhash, **extra)
+                timed_words(transcript)
+                attempts.append({"provider": name, "status": "success"})
+                (out_dir / "asr_attempts.json").write_text(json.dumps(attempts))
+                _archive_current(out_dir)
+                transcript_path.write_text(json.dumps(transcript, indent=2, ensure_ascii=False))
+                (out_dir / "asr_cost.json").write_text(json.dumps({
+                    "engine": transcript.get("engine", name), "audio_seconds": transcript.get("duration", 0),
+                    "cost_usd": asr_cost,
+                }, indent=2))
+                return effective_transcript(out_dir)
+            except Exception as exc:
+                log.warning("Transcription %s failed (%s); trying next engine", name, type(exc).__name__)
+                # Provider exception bodies may contain secrets or audio. Only
+                # retain the type in transcript and attempts artifacts.
+                elevenlabs_error = RuntimeError(f"{name}: {type(exc).__name__}")
+                attempts.append({"provider": name, "status": "failed", "error_type": type(exc).__name__})
+        if elevenlabs_error is None:
+            elevenlabs_error = RuntimeError("Hosted transcription is not configured")
+        (out_dir / "asr_attempts.json").write_text(json.dumps(attempts))
     from brain.lm_direct import config as direct_config
     local_stt = direct_config()['stt']
     if elevenlabs_error is not None and not local_stt['enabled']:
@@ -537,11 +548,13 @@ def transcribe(
                 device, compute_type, initial_prompt, hotwords,
             )
         except Exception as whisper_error:
+            attempts.append({"provider": "whisper", "status": "failed", "error_type": type(whisper_error).__name__})
+            (out_dir / "asr_attempts.json").write_text(json.dumps(attempts))
             if elevenlabs_error is not None:
                 chain = []
                 if elevenlabs_error is not None:
                     chain.append(f"ElevenLabs failed ({type(elevenlabs_error).__name__}: {elevenlabs_error})")
-                chain.append(f"Whisper fallback also failed ({type(whisper_error).__name__}: {whisper_error})")
+                chain.append(f"Whisper fallback also failed ({type(whisper_error).__name__})")
                 raise RuntimeError("; ".join(chain)) from whisper_error
             raise
 
@@ -562,6 +575,9 @@ def transcribe(
         }
         transcript_path.write_text(json.dumps(result, indent=2, ensure_ascii=False))
 
+    if selected_engine == "whisper":
+        attempts.append({"provider": "whisper", "status": "success" if result.get("words") else "empty"})
+        (out_dir / "asr_attempts.json").write_text(json.dumps(attempts))
     cost_path = out_dir / "asr_cost.json"
     cost_path.write_text(json.dumps({
         "engine": result.get("engine", "whisper"),

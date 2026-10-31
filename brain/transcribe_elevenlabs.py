@@ -170,7 +170,10 @@ def transcribe_elevenlabs(
         t0 = time.monotonic()
         with open(wav, "rb") as f:
             try:
-                resp = client.speech_to_text.convert(file=f, request_options={'max_retries':0}, **kwargs)
+                from .lm_gateway import audio_attempt
+                with audio_attempt("transcription", "elevenlabs_own_vercel", SCRIBE_MODEL, "v1/speech-to-text") as audit:
+                    resp = client.speech_to_text.convert(file=f, request_options={'max_retries':0}, **kwargs)
+                    audit["http_status"] = 200
             except Exception as first_err:
                 # Quota/auth failures are permanent for this request; retrying
                 # only burns another request cycle before the inevitable
@@ -179,9 +182,9 @@ def transcribe_elevenlabs(
                 # minutes on a request that can never succeed.
                 if _is_permanent_error(first_err):
                     raise RuntimeError(
-                        f"ElevenLabs API unavailable: {first_err}"
-                    ) from first_err
-                raise RuntimeError('ElevenLabs STT failed; no paid retry, use local Whisper') from first_err
+                        f"ElevenLabs API unavailable ({type(first_err).__name__})"
+                    ) from None
+                raise RuntimeError('ElevenLabs STT failed; no paid retry, use local Whisper') from None
         elapsed = time.monotonic() - t0
 
         duration = resp.audio_duration_secs if hasattr(resp, "audio_duration_secs") and resp.audio_duration_secs else 0.0
@@ -201,3 +204,36 @@ def transcribe_elevenlabs(
 
     finally:
         wav.unlink(missing_ok=True)
+
+
+def transcribe_sarovi(video: Path, out_dir: Path, *, language: Optional[str], file_digest: str) -> tuple[dict, None]:
+    """Map the direct Whisper response to the established transcript contract."""
+    from types import SimpleNamespace
+    from . import lm_direct
+    model = os.environ.get("SAROVI_STT_MODEL", "openai/whisper-large-v3").strip()
+    provider = next((p for p in lm_direct.usable() if p["id"] == "sarovi"), None)
+    if provider is None:
+        raise RuntimeError("Sarovi transcription is not configured or enabled")
+    # Include provider/model in the archive key; never reuse a Scribe result.
+    key = _cache_key(file_digest, language, f"sarovi:{model}")
+    archive = out_dir / "transcripts" / f"{key}.json"
+    if archive.exists():
+        cached = json.loads(archive.read_text())
+        lm_direct.timed_words(cached)
+        return cached, None
+    audio = _extract_audio(video, out_dir)
+    try:
+        data = lm_direct.transcription(provider, audio, model=model, language=language)
+        entries = [SimpleNamespace(type="word", text=w["word"], start=w["start"], end=w["end"], logprob=None)
+                   for w in data["words"]]
+        duration = float(data.get("duration") or entries[-1].end)
+        if not math.isfinite(duration) or duration < entries[-1].end:
+            raise RuntimeError("STT returned invalid duration")
+        transcript = _map_response(SimpleNamespace(words=entries, language_code=data.get("language") or language),
+                                   file_digest, key, language, duration)
+        transcript.update(engine="sarovi_whisper", model_id=model)
+        archive.parent.mkdir(exist_ok=True)
+        archive.write_text(json.dumps(transcript, ensure_ascii=False))
+        return transcript, None  # Reseller pricing is not the Scribe price.
+    finally:
+        audio.unlink(missing_ok=True)

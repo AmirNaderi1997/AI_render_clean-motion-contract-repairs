@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -130,9 +131,15 @@ def resolve(audio: Path, text: str, duration: float, job_dir: Path) -> tuple[lis
     if archive.is_file():
         data = json.loads(archive.read_text())
     else:
-        from brain.transcribe_elevenlabs import transcribe_elevenlabs
-        transcript, _ = transcribe_elevenlabs(audio, directory, language='fa', file_digest=digest)
-        data = {'version': VERSION, 'audio_sha256': digest, 'source': 'elevenlabs_stt', 'words': transcript['words']}
+        if os.environ.get('ELEVENLABS_PROXY_URL', '').strip():
+            from brain.transcribe_elevenlabs import transcribe_elevenlabs
+            transcript, _ = transcribe_elevenlabs(audio, directory, language='fa', file_digest=digest)
+            source = 'elevenlabs_stt'
+        else:
+            from brain.transcribe import transcribe
+            transcript = transcribe(audio, directory, language='fa', engine='elevenlabs')
+            source = transcript['engine'] + '_stt'
+        data = {'version': VERSION, 'audio_sha256': digest, 'source': source, 'words': transcript['words']}
         _validate(data['words'], math.inf)
         archive.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
     return map_script(text, data['words'], duration), data['source']

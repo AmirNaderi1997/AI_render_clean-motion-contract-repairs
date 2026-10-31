@@ -17,6 +17,12 @@ WORDS = [{'w': 'اين', 'start': .4, 'end': .6}, {'w': 'محصول', 'start': .
 TEXT = 'این محصول ۱۲ انتخاب شماست'
 
 
+@pytest.fixture(autouse=True)
+def configured_relay(monkeypatch):
+    # These existing fixtures exercise the preserved relay alignment contract.
+    monkeypatch.setenv('ELEVENLABS_PROXY_URL', 'https://relay.example')
+
+
 @pytest.fixture
 def reel(tmp_path):
     (tmp_path/'image.png').write_bytes(b'image')

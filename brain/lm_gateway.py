@@ -2,10 +2,11 @@
 
 There is no remote LM API: routes, their model order, the audit log and the admin panel stay here, and every
 request goes straight to a direct provider (brain/lm_direct.py; Jarvis, then Sarovi by default). Chat, vision
-and structured JSON are served. Speech, transcription and images keep their own specialist providers.
+and structured JSON are served. Direct audio also shares this audit store; images keep their specialist provider.
 """
 from __future__ import annotations
 import contextvars
+from contextlib import contextmanager
 import functools
 import json
 import logging
@@ -129,6 +130,35 @@ def model_allowed(mid):
 def _audit(record):
     try: store.log(record)
     except Exception: log.exception("AI audit persistence failed request=%s", record["id"])
+
+
+@contextmanager
+def audio_attempt(route, provider, model, endpoint):
+    """One billable media attempt, audited even with text routing disabled.
+
+    Never capture prompts, transcripts, response bodies, filenames or audio.
+    Only allowlisted metadata reaches the existing audit store.
+    """
+    started = time.monotonic()
+    metadata = {"http_status": None}
+    error = None
+    try:
+        yield metadata
+    except Exception as exc:
+        error = type(exc).__name__
+        metadata["http_status"] = metadata["http_status"] or getattr(exc, "status", None) or getattr(exc, "status_code", None)
+        raise
+    finally:
+        _audit({"id": str(uuid.uuid4()), "timestamp": datetime.now(timezone.utc).isoformat(),
+                "user_id": user_context.get(), "job_id": job_context.get(),
+                "conversation_id": conversation_context.get(), "route": route, "task_id": route,
+                "endpoint": endpoint, "requested_model": safe(model, 200), "actual_model": safe(model, 200),
+                "provider": provider, "transport": "direct-audio" if provider != "elevenlabs_own_vercel" else "relay",
+                "status": "failed" if error or (metadata["http_status"] or 0) >= 400 else "success", "latency_ms": round((time.monotonic() - started) * 1000),
+                "http_status": metadata["http_status"], "error": error, "retry_count": 0,
+                "fallback_history": [], "media": [], "request_message": None, "response_message": None,
+                "input_tokens": None, "output_tokens": None, "cost": None,
+                "correlation_id": __import__("request_context").current_request_id()})
 
 
 def _record(route, endpoint, requested, started, attempts, response=None, error=None, request=None):

@@ -1,29 +1,14 @@
 # Provider routing policy
 
-All hosted text, planning, translation, correction, vision and image-generation requests use the configured Arvan endpoint and its `Authorization: apikey` scheme. No external model fallback is enabled **except the admin-controlled direct fallbacks below**.
+Text, planning, translation, correction and vision use the in-app direct router (`brain/lm_gateway.py` → `brain/lm_direct.py`). Jarvis and Sarovi are enabled by default; ArvanCloud, OpenAI and Gemini are opt-in through the existing admin controls. Keys use `DIRECT_<P>_API_KEY` / `<P>_API_KEY` or the write-only admin store. Arvan images keep their specialist adapter.
 
-- Text: `ARVAN_AI_MODEL` (current installation: GPT-5.6-Sol).
-- Vision: `ARVAN_VISION_MODEL` (Gemini-3-Flash-Preview, served by Arvan).
-- Images: `ARVAN_IMAGE_MODEL` (Gemini-3.1-Flash-Image-Preview, served by Arvan), chat completions with image/text modalities and validated inline image responses.
-- Speech: ElevenLabs only, with Localize's voice/model settings and the mandatory `ELEVENLABS_PROXY_URL` HTTPS relay. Missing relay configuration fails closed; no direct API bypass.
-- Transcription: existing ElevenLabs Scribe or local Whisper; no retired hosted transcription fallback.
-- Music: existing library and uploaded files. AI music generation is unavailable until a supported Arvan audio-generation contract is configured; the compatibility endpoint returns an actionable error.
+- **Narration:** when `ELEVENLABS_PROXY_URL` is empty, `NARRATION_TTS_ORDER=jarvis:TTS_ELEVEN_V3,sarovi:elevenlabs/eleven-v4`. One attempt per provider, no hedging/resubmission after timeout or 5xx. Jarvis uses OpenAI speech with the existing ElevenLabs voice ID; Sarovi uses its documented Studio audio endpoint and `SAROVI_ELEVENLABS_VOICE` (default `george`). An explicitly configured relay preserves the previous synthesis and timestamp fallback behavior.
+- **Persian:** only verified Jarvis Eleven v3 and Sarovi Eleven v4 are eligible. Never multilingual/flash/turbo v2.x. Native Persian catalog casting is retained; without the relay/catalog, use the configured Persian/ElevenLabs voice ID rather than contacting a nonexistent relay. The default does not read the older `SAROVI_TTS_MODEL`, `SAROVI_TTS_VOICE` or `SAROVI_TTS_INSTRUCTIONS`; an explicit Google model choice can use the latter two for non-Persian narration.
+- **Transcription:** configured own ElevenLabs relay → Sarovi `SAROVI_STT_MODEL=openai/whisper-large-v3` when `SAROVI_STT_ENABLED=true` → local Whisper. No Arvan transcription. Hosted results require word timestamps; text-only or segment-only results cannot masquerade as aligned transcripts. Current Sarovi docs use JSON/Base64 (`SAROVI_STT_FORMAT=json`); `multipart` is available for compatible deployments, never retried automatically. `sarovi_whisper` is cached and identified in the ASR artifacts.
+- **Audit:** every outgoing speech/STT attempt uses the existing gateway audit with route `narration`/`transcription`, actual provider/model, latency and status. No audio, keys, transcript text or raw error bodies. Prices unknown to the app remain unknown (`null`).
+- **Music:** existing library and uploads. Rendering keeps the existing engines and review gates.
 
-Old saved provider names are normalized at execution time, while historical messages and existing rendered files are preserved. Restart the API and workers after deploying; already-running old processes retain their imported code.
-
-Verified against the installation's live model list: text completion, image analysis, inline generated image and a short playable ElevenLabs voice clip through the relay. Unit tests additionally guard against retired provider names in runtime source and silent provider substitution.
-
-
-## Direct providers (text only)
-
-There is no remote LM API. `brain/lm_gateway.py` answers every **chat** request (chat, vision, structured JSON,
-streaming) from a directly configured provider: Jarvis and Sarovi are on by default; ArvanCloud (`api.arvancloudai.ir`,
-`Authorization: apikey`), OpenAI and Gemini through a Vercel proxy are opt-in. The transport is `brain/lm_direct.py`.
-Keys are entered in *AI Models & Logs → Direct providers* (write-only, stored 0600) or via `DIRECT_<PROVIDER>_API_KEY`;
-Arvan/OpenAI/Gemini keys already in `.env` are reused once that provider is switched on. A master switch and
-per-provider switches live in the same tab. Media routes (images, speech, video, transcription) keep their own
-providers: Arvan images, ElevenLabs speech through the Vercel relay, ElevenLabs Scribe then local Whisper.
-
+Plain narration uses cached STT alignment when character timestamps are unavailable; captions retain script words and unresolved timing stays review-only. Restart the API, Hermes and workers on deployment. See [AI router operations](ai-router-operations.md#narration-and-transcription) for the wire-contract differences, voices, environment settings and fallback policy.
 
 ## Priority and per-feature routes
 

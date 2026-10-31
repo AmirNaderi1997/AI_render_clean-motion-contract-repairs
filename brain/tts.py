@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 log = logging.getLogger(__name__)
-from .lm_gateway import observe_specialized
 
 
 @dataclass
@@ -58,8 +57,25 @@ def _configured_provider(provider: str | None = None) -> str:
     return "disabled" if provider == "disabled" else "elevenlabs"
 
 
-@observe_specialized("audio", "elevenlabs-vercel-relay")
 def _generate_elevenlabs(
+    text: str, output_path: str, voice_id: str = "", model_id: str = "",
+    *, language: str = "", context: str = "", with_timestamps: bool = False,
+) -> None:
+    from .speech_policy import eleven_cast
+    if not os.environ.get("ELEVENLABS_PROXY_URL", "").strip():
+        from .lm_direct import narration
+        voice = voice_id.strip() or os.environ.get("ELEVENLABS_VOICE_ID", "").strip()
+        voice, _ = eleven_cast(text, voice, model_id, language=language, context=context)
+        audio, _, _, _ = narration(text, voice=voice, language=language)
+        # Resellers have no TTS timestamps. The existing cached STT alignment
+        # path handles plain MP3s; do not invent or request a second synthesis.
+        Path(output_path).write_bytes(audio)
+        return
+    _generate_elevenlabs_relay(text, output_path, voice_id, model_id, language=language,
+                              context=context, with_timestamps=with_timestamps)
+
+
+def _generate_elevenlabs_relay(
     text: str, output_path: str, voice_id: str = "", model_id: str = "",
     *, language: str = "", context: str = "", with_timestamps: bool = False,
 ) -> None:
@@ -76,18 +92,22 @@ def _generate_elevenlabs(
     try:
         import httpx
         from brain.elevenlabs_transport import url as elevenlabs_url
+        from .lm_gateway import audio_attempt
 
         def request(timed: bool):
-            return httpx.post(
-                elevenlabs_url(f"v1/text-to-speech/{voice_id}" + ("/with-timestamps" if timed else "")),
-                headers={"xi-api-key": api_key, "accept": "application/json" if timed else "audio/mpeg"},
-                json={"text": text, "model_id": model_id, **({"language_code": "fa"} if persian(text, language) else {})},
-                # Short connect timeout; synthesis may take the whole read window.
-                timeout=httpx.Timeout(
-                    max(_ELEVENLABS_TIMEOUT_SECONDS, float(os.environ.get("ELEVENLABS_READ_TIMEOUT", "200")), 60 + len(text)/6),
-                    connect=float(os.environ.get("ELEVENLABS_CONNECT_TIMEOUT", "20")),
-                ),
-            )
+            with audio_attempt("narration", "elevenlabs_own_vercel", model_id, "v1/text-to-speech" + ("/with-timestamps" if timed else "")) as audit:
+                response = httpx.post(
+                    elevenlabs_url(f"v1/text-to-speech/{voice_id}" + ("/with-timestamps" if timed else "")),
+                    headers={"xi-api-key": api_key, "accept": "application/json" if timed else "audio/mpeg"},
+                    json={"text": text, "model_id": model_id, **({"language_code": "fa"} if persian(text, language) else {})},
+                    # Short connect timeout; synthesis may take the whole read window.
+                    timeout=httpx.Timeout(
+                        max(_ELEVENLABS_TIMEOUT_SECONDS, float(os.environ.get("ELEVENLABS_READ_TIMEOUT", "200")), 60 + len(text)/6),
+                        connect=float(os.environ.get("ELEVENLABS_CONNECT_TIMEOUT", "20")),
+                    ),
+                )
+                audit["http_status"] = getattr(response, "status_code", None)
+                return response
         response = request(with_timestamps)
         timed = with_timestamps
         if timed and _timestamps_unsupported(response):

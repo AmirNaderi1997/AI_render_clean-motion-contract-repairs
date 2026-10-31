@@ -20,6 +20,7 @@ def test_media_payload_and_redaction():
 
 def test_tts_uses_the_elevenlabs_transport_even_with_a_text_provider(monkeypatch,tmp_path):
     from brain.tts import _generate_elevenlabs
+    monkeypatch.setenv('ELEVENLABS_PROXY_URL', 'https://relay.example')
     monkeypatch.setattr(gateway,'configured',lambda:True)
     monkeypatch.delenv('ELEVENLABS_API_KEY',raising=False)
     with pytest.raises(RuntimeError,match='ElevenLabs is not configured'):

@@ -2,8 +2,9 @@
 
 `lm_gateway.complete()` calls `complete_routed`, which turns a route's models into (provider, model) pairs
 (`custom:<model>#jarvis-all-models` → Jarvis `<model>`, and so on), tries them in order, then each enabled
-provider's default model, and returns the first answer. Text (chat, vision, structured JSON) only: media
-routes keep their own provider paths. Jarvis and Sarovi are enabled by default; the others are opt-in.
+provider's default model, and returns the first answer. Text, vision and structured JSON use that
+route policy; audio uses the single-attempt transport below. Images and video keep their specialist
+paths. Jarvis and Sarovi are enabled by default; the others are opt-in.
 
 Security and operations:
 * API keys are write-only through the admin API: stored in `direct_keys.json` (mode 0600) next to the gateway
@@ -557,3 +558,173 @@ def probe(provider_id: str) -> dict:
         return {"ok": True, "model": model, "latency_ms": round((time.monotonic() - started) * 1000), "reply": reply[:40]}
     except DirectError as exc:
         return {"ok": False, "model": model, "latency_ms": round((time.monotonic() - started) * 1000), "error": str(exc)[:240]}
+# ── single-attempt audio transport ──────────────────────────────────────────
+
+DEFAULT_NARRATION_TTS_ORDER = "jarvis:TTS_ELEVEN_V3,sarovi:elevenlabs/eleven-v4"
+# Sarovi's model page documents Persian input for v4; no v2 family supports fa.
+PERSIAN_SPEECH_MODELS = {"jarvis": {"TTS_ELEVEN_V3"}, "sarovi": {"elevenlabs/eleven-v4"}}
+SAROVI_ELEVEN_VOICES = frozenset("george sarah adam alice bella bill brian callum charlie chris daniel eric harry jessica laura liam lily matilda river roger will".split())
+
+
+def narration_pairs(text: str, language: str = "") -> list[tuple[dict, str]]:
+    from .speech_policy import persian
+    providers = {p["id"]: p for p in usable()}
+    pairs, seen = [], set()
+    for entry in os.environ.get("NARRATION_TTS_ORDER", DEFAULT_NARRATION_TTS_ORDER).split(","):
+        pid, sep, model = entry.strip().partition(":")
+        pid, model = pid.strip().lower(), model.strip()
+        # Reserve a provider's slot even if its first model is invalid. Never
+        # retry it under a second alias after an ambiguous billed request.
+        if pid in seen:
+            continue
+        seen.add(pid)
+        if not sep or pid not in {"jarvis", "sarovi"} or not model or pid not in providers:
+            continue
+        if persian(text, language) and model not in PERSIAN_SPEECH_MODELS.get(pid, set()):
+            continue
+        pairs.append((providers[pid], model))
+    return pairs
+
+
+def _audio_post(provider: dict, path: str, *, body=None, data=None, file: Path | None = None, timeout: float = 200):
+    """Exactly one POST; no SDK retries, redirects, hedging or alternate endpoint."""
+    from .http_ssl import ssl_context
+    key = key_for(provider["id"])
+    if not key:
+        raise DirectError("No API key configured")
+    base = validate_base_url(provider["base_url"])
+    headers = {"Authorization": f"{PROVIDERS[provider['id']].get('auth', 'Bearer')} {key}"}
+    name = provider.get("extra_header_name")
+    if name and header_value_for(provider["id"]):
+        headers[name] = header_value_for(provider["id"])
+    try:
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(timeout, 10)), verify=ssl_context(), follow_redirects=False) as client:
+            if file is None:
+                response = client.post(f"{base}/{path}", headers=headers, json=body)
+            else:
+                import mimetypes
+                with file.open("rb") as stream:
+                    response = client.post(f"{base}/{path}", headers=headers, data=data,
+                                           files={"file": (file.name, stream, mimetypes.guess_type(file.name)[0] or "application/octet-stream")})
+    except httpx.TimeoutException as exc:
+        raise DirectError(type(exc).__name__, 504) from None
+    except httpx.HTTPError as exc:
+        raise DirectError(type(exc).__name__, 502) from None
+    if not response.is_success:
+        # HTTP bodies may contain credentials, reflected input or audio. Keep
+        # them entirely out of public exceptions and application logs.
+        raise DirectError(f"Audio provider returned HTTP {response.status_code}", response.status_code)
+    return response
+
+
+def speech(provider: dict, *, model: str, text: str, voice: str, language: str = "", timeout: float = 200) -> tuple[bytes, str]:
+    """One synthesis. Return validated audio bytes and the real media type."""
+    import base64
+    from .lm_gateway import audio_attempt
+    from .speech_policy import persian
+    pid = provider["id"]
+    if persian(text, language) and model not in PERSIAN_SPEECH_MODELS.get(pid, set()):
+        raise DirectError("Speech model is not verified for Persian")
+    native = pid == "sarovi"
+    endpoint = "studio/audio" if native else "audio/speech"
+    # Sarovi's actual published API uses named voices + JSON/Base64 audio,
+    # not the OpenAI speech endpoint. Do not spend a failed create probing it.
+    if native and model.startswith("elevenlabs/"):
+        voice = os.environ.get("SAROVI_ELEVENLABS_VOICE", "george").strip().lower()
+        if voice not in SAROVI_ELEVEN_VOICES:
+            raise DirectError("Invalid SAROVI_ELEVENLABS_VOICE")
+    if not voice:
+        raise DirectError("Narration voice is not configured")
+    body = {"model": model, "text" if native else "input": text, "voice": voice,
+            "format" if native else "response_format": "mp3"}
+    if not native and language:
+        body["language_code"] = "fa" if persian(text, language) else language
+    if native and model.startswith("google/"):
+        # Explicit opt-in only, never inherited by the default ElevenLabs route.
+        body["voice"] = os.environ.get("SAROVI_TTS_VOICE", "Sulafat")
+        body["instructions"] = os.environ.get("SAROVI_TTS_INSTRUCTIONS", "")
+    with audio_attempt("narration", pid, model, endpoint) as audit:
+        response = _audio_post(provider, endpoint, body=body, timeout=timeout)
+        audit["http_status"] = response.status_code
+        try:
+            if native:
+                output = response.json()["output"]
+                mime = output["mediaType"].split(";", 1)[0].strip().lower()
+                audio = base64.b64decode(output["data"], validate=True)
+            else:
+                mime = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                audio = response.content
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise DirectError("Provider returned invalid audio response", 502) from None
+        if not mime.startswith("audio/") or not 1024 <= len(audio) <= 50 * 1024 * 1024:
+            raise DirectError("Provider returned invalid audio type or size", 502)
+        return audio, mime
+
+
+def narration(text: str, *, voice: str, language: str = "") -> tuple[bytes, str, str, str]:
+    """First provider to answer, one attempt per provider including 5xx/timeouts."""
+    for provider, model in narration_pairs(text, language):
+        try:
+            audio, mime = speech(provider, model=model, text=text, voice=voice, language=language)
+            return audio, mime, provider["id"], model
+        except DirectError as exc:
+            _note_failure(provider, exc)
+            log.warning("Narration %s failed (%s)", provider["id"], type(exc).__name__)
+    raise DirectError("No configured narration provider returned valid audio")
+
+
+def timed_words(data: dict) -> list[dict]:
+    """Require genuine finite word timings; never fabricate segment timings."""
+    import math
+    if not isinstance(data, dict):
+        raise DirectError("STT returned invalid JSON shape", 502)
+    raw = data.get("words")
+    if raw is None:
+        segments = data.get("segments") or []
+        raw = [w for segment in segments if isinstance(segment, dict) for w in segment.get("words", [])]
+    if not isinstance(raw, list) or not raw:
+        raise DirectError("STT returned no word timestamps", 502)
+    words = []
+    previous = 0.0
+    for row in raw:
+        try:
+            text = str(row.get("word", row.get("text", row.get("w", "")))).strip()
+            start, end = float(row["start"]), float(row["end"])
+            if not text or not (math.isfinite(start) and math.isfinite(end) and start >= previous and end > start):
+                raise ValueError
+        except (TypeError, KeyError, ValueError, AttributeError):
+            raise DirectError("STT returned invalid word timestamps", 502) from None
+        words.append({"word": text, "start": start, "end": end})
+        previous = start
+    return words
+
+
+def transcription(provider: dict, audio: Path, *, model: str, language: str | None = None, timeout: float = 200) -> dict:
+    """One hosted STT attempt, accepted only with word-level timestamps.
+
+    OpenAI-compatible multipart is supported; Sarovi's deployed API documents
+    JSON/Base64 instead, so its mapping is selected before the single POST.
+    """
+    import base64
+    import mimetypes
+    from .lm_gateway import audio_attempt
+    if provider["id"] != "sarovi":
+        raise DirectError("Only Sarovi is enabled for hosted direct transcription")
+    fields = {"model": model, "response_format": "verbose_json", "timestamp_granularities[]": "word"}
+    if language:
+        from .speech_policy import persian
+        fields["language"] = "fa" if persian(language=language) else language
+    with audio_attempt("transcription", provider["id"], model, "audio/transcriptions") as audit:
+        if os.environ.get("SAROVI_STT_FORMAT", "json").lower() == "multipart":
+            response = _audio_post(provider, "audio/transcriptions", data=fields, file=Path(audio), timeout=timeout)
+        else:
+            fields.update(audioBase64=base64.b64encode(Path(audio).read_bytes()).decode(),
+                          mediaType=mimetypes.guess_type(str(audio))[0] or "audio/mpeg")
+            response = _audio_post(provider, "audio/transcriptions", body=fields, timeout=timeout)
+        audit["http_status"] = response.status_code
+        try:
+            data = response.json()
+        except ValueError:
+            raise DirectError("STT returned invalid JSON", 502) from None
+        words = timed_words(data)
+        return {**data, "model": model, "words": words}
